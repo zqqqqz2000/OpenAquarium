@@ -1,0 +1,760 @@
+import type {
+  ChatAuthor,
+  ChatMessage,
+  CompleteTaskInput,
+  CreateProjectInput,
+  MemberId,
+  MemberTask,
+  MessageId,
+  PostMemberMessageInput,
+  PostMemberDraftInput,
+  PostUserMessageInput,
+  Room,
+  SkillDefinition,
+  TeamMember,
+  TeamMemberBlueprint,
+  TeamTemplate,
+  UpsertWatcherInput,
+  UpdateMemberConfigInput,
+  WatchSubscription,
+  WorkspaceSnapshot,
+} from "./model";
+import type { MutationContext } from "./identity";
+
+function cloneSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
+  return {
+    ...snapshot,
+    projects: { ...snapshot.projects },
+    projectOrder: [...snapshot.projectOrder],
+    rooms: { ...snapshot.rooms },
+    roomOrderByProject: Object.fromEntries(
+      Object.entries(snapshot.roomOrderByProject).map(([projectId, roomIds]) => [projectId, [...roomIds]]),
+    ),
+    templates: { ...snapshot.templates },
+    templateOrder: [...snapshot.templateOrder],
+    members: { ...snapshot.members },
+    messages: { ...snapshot.messages },
+    messageOrderByRoom: Object.fromEntries(
+      Object.entries(snapshot.messageOrderByRoom).map(([roomId, messageIds]) => [roomId, [...messageIds]]),
+    ),
+    tasks: { ...snapshot.tasks },
+    watchers: { ...snapshot.watchers },
+    selection: { ...snapshot.selection },
+  };
+}
+
+function buildUserAuthor(userName: string): ChatAuthor {
+  return {
+    kind: "user",
+    id: "user",
+    label: userName,
+  };
+}
+
+function buildSystemAuthor(label: string): ChatAuthor {
+  return {
+    kind: "system",
+    id: "system",
+    label,
+  };
+}
+
+function buildMemberAuthor(member: TeamMember): ChatAuthor {
+  return {
+    kind: "member",
+    id: member.id,
+    label: member.name,
+  };
+}
+
+function insertMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): void {
+  snapshot.messages[message.id] = message;
+  snapshot.messageOrderByRoom[message.roomId] ??= [];
+  snapshot.messageOrderByRoom[message.roomId].push(message.id);
+}
+
+function updateMember(snapshot: WorkspaceSnapshot, member: TeamMember): void {
+  snapshot.members[member.id] = member;
+}
+
+function updateTask(snapshot: WorkspaceSnapshot, task: MemberTask): void {
+  snapshot.tasks[task.id] = task;
+}
+
+function findBlueprint(template: TeamTemplate, predicate: (member: TeamMemberBlueprint) => boolean): TeamMemberBlueprint {
+  const match = template.members.find(predicate);
+
+  if (!match) {
+    throw new Error(`Template "${template.id}" is missing a required member blueprint`);
+  }
+
+  return match;
+}
+
+function deriveRoomName(firstPrompt: string): string {
+  const trimmed = firstPrompt.trim();
+
+  if (trimmed.length === 0) {
+    return "Untitled Thread";
+  }
+
+  if (/[\u4e00-\u9fff]/u.test(trimmed) && !trimmed.includes(" ")) {
+    return trimmed.slice(0, 12);
+  }
+
+  const sanitized = trimmed.replace(/[^\p{L}\p{N}\s-]/gu, " ").replace(/\s+/g, " ").trim();
+  const words = sanitized.split(" ").slice(0, 4);
+
+  return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
+}
+
+function buildTaskTitle(message: ChatMessage): string {
+  if (message.transport === "watch-digest") {
+    return "Review watcher digest";
+  }
+
+  if (message.transport === "direct") {
+    return "Respond to direct message";
+  }
+
+  if (message.author.kind === "user") {
+    return "Respond to user";
+  }
+
+  return "Handle teammate mention";
+}
+
+function markTaskInterrupted(snapshot: WorkspaceSnapshot, member: TeamMember, interruptingMessageId: MessageId, now: string): void {
+  if (!member.activeTaskId) {
+    return;
+  }
+
+  const existingTask = snapshot.tasks[member.activeTaskId];
+
+  if (!existingTask || existingTask.status !== "running") {
+    return;
+  }
+
+  const interruptedTask: MemberTask = {
+    ...existingTask,
+    status: "interrupted",
+    updatedAt: now,
+    interruptedByMessageId: interruptingMessageId,
+  };
+
+  updateTask(snapshot, interruptedTask);
+
+  if (existingTask.draftMessageId) {
+    const draft = snapshot.messages[existingTask.draftMessageId];
+    if (draft) {
+      snapshot.messages[existingTask.draftMessageId] = {
+        ...draft,
+        status: "interrupted",
+      };
+    }
+  }
+}
+
+function startTaskForMember(
+  snapshot: WorkspaceSnapshot,
+  room: Room,
+  member: TeamMember,
+  sourceMessageId: MessageId,
+  now: string,
+  createId: MutationContext["createId"],
+): void {
+  markTaskInterrupted(snapshot, member, sourceMessageId, now);
+
+  const taskId = createId("task");
+  const sourceMessage = snapshot.messages[sourceMessageId];
+  const nextTask: MemberTask = {
+    id: taskId,
+    roomId: room.id,
+    memberId: member.id,
+    sourceMessageId,
+    title: buildTaskTitle(sourceMessage),
+    status: "running",
+    startedAt: now,
+    updatedAt: now,
+  };
+
+  const nextMember: TeamMember = {
+    ...member,
+    status: snapshot.members[member.id].activeTaskId ? "interrupted" : "running",
+    activeTaskId: taskId,
+  };
+
+  updateTask(snapshot, nextTask);
+  updateMember(snapshot, { ...nextMember, status: "running" });
+}
+
+function resolveRecipients(snapshot: WorkspaceSnapshot, message: ChatMessage): MemberId[] {
+  const room = snapshot.rooms[message.roomId];
+
+  if (!room) {
+    return [];
+  }
+
+  if (message.transport === "direct" || message.transport === "watch-digest") {
+    return [...new Set(message.recipientMemberIds)].filter((memberId) => {
+      if (message.transport === "watch-digest") {
+        return room.memberIds.includes(memberId);
+      }
+
+      return snapshot.members[memberId]?.acceptsDirectMessages !== false;
+    });
+  }
+
+  const mentioned = message.mentionedMemberIds.filter((memberId) => room.memberIds.includes(memberId));
+  return mentioned.length > 0 ? [...new Set(mentioned)] : message.author.kind === "user" ? [room.entryMemberId] : [];
+}
+
+function routeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage, now: string, createId: MutationContext["createId"]): void {
+  const room = snapshot.rooms[message.roomId];
+
+  if (!room) {
+    return;
+  }
+
+  const recipients = resolveRecipients(snapshot, message);
+  recipients.forEach((memberId) => {
+    const member = snapshot.members[memberId];
+    if (!member) {
+      return;
+    }
+    startTaskForMember(snapshot, room, member, message.id, now, createId);
+  });
+}
+
+function instantiateMember(
+  roomId: string,
+  blueprint: TeamMemberBlueprint,
+  createId: MutationContext["createId"],
+): TeamMember {
+  return {
+    id: createId("member"),
+    roomId,
+    blueprintId: blueprint.id,
+    name: blueprint.name,
+    handle: blueprint.handle,
+    summary: blueprint.summary,
+    prompt: blueprint.prompt,
+    accentTone: blueprint.accentTone,
+    skills: blueprint.skills,
+    provider: blueprint.provider,
+    observeAllRoomMessages: blueprint.observeAllRoomMessages ?? false,
+    acceptsDirectMessages: blueprint.acceptsDirectMessages ?? true,
+    isEntryMember: blueprint.isEntryMember ?? false,
+    status: "idle",
+  };
+}
+
+function instantiateWatcher(
+  roomId: string,
+  memberId: string,
+  blueprint: TeamMemberBlueprint,
+  createId: MutationContext["createId"],
+): WatchSubscription | undefined {
+  if (!blueprint.watch) {
+    return undefined;
+  }
+
+  return {
+    id: createId("watcher"),
+    roomId,
+    memberId,
+    intervalMinutes: blueprint.watch.intervalMinutes,
+    enabled: blueprint.watch.enabledByDefault,
+  };
+}
+
+export function createWorkspaceSnapshot(templates: TeamTemplate[], currentUserName = "You"): WorkspaceSnapshot {
+  return {
+    projects: {},
+    projectOrder: [],
+    rooms: {},
+    roomOrderByProject: {},
+    templates: Object.fromEntries(templates.map((template) => [template.id, template])),
+    templateOrder: templates.map((template) => template.id),
+    members: {},
+    messages: {},
+    messageOrderByRoom: {},
+    tasks: {},
+    watchers: {},
+    selection: {},
+    currentUserName,
+  };
+}
+
+export function createProjectWithRoom(
+  current: WorkspaceSnapshot,
+  input: CreateProjectInput,
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const template = snapshot.templates[input.templateId];
+
+  if (!template) {
+    throw new Error(`Unknown template "${input.templateId}"`);
+  }
+
+  const now = context.now();
+  const projectId = context.createId("project");
+  const roomId = context.createId("room");
+  const roomMembers = template.members.map((blueprint) => instantiateMember(roomId, blueprint, context.createId));
+  const memberIdByBlueprint = Object.fromEntries(roomMembers.map((member) => [member.blueprintId, member.id]));
+  const entryBlueprint = findBlueprint(template, (member) => member.isEntryMember === true);
+  const watcherIds = template.members
+    .map((blueprint) => instantiateWatcher(roomId, memberIdByBlueprint[blueprint.id], blueprint, context.createId))
+    .filter((watcher): watcher is WatchSubscription => watcher !== undefined);
+
+  snapshot.projects[projectId] = {
+    id: projectId,
+    name: input.projectName.trim(),
+    createdAt: now,
+  };
+  snapshot.projectOrder.push(projectId);
+  snapshot.roomOrderByProject[projectId] = [roomId];
+  snapshot.rooms[roomId] = {
+    id: roomId,
+    projectId,
+    name: deriveRoomName(input.firstPrompt),
+    topic: input.firstPrompt.trim(),
+    templateId: template.id,
+    memberIds: roomMembers.map((member) => member.id),
+    watcherIds: watcherIds.map((watcher) => watcher.id),
+    entryMemberId: memberIdByBlueprint[entryBlueprint.id],
+    createdAt: now,
+  };
+  snapshot.messageOrderByRoom[roomId] = [];
+  roomMembers.forEach((member) => {
+    snapshot.members[member.id] = member;
+  });
+  watcherIds.forEach((watcher) => {
+    snapshot.watchers[watcher.id] = watcher;
+  });
+  snapshot.selection = {
+    projectId,
+    roomId,
+    memberId: memberIdByBlueprint[entryBlueprint.id],
+  };
+
+  return postUserMessage(
+    snapshot,
+    {
+      roomId,
+      content: input.firstPrompt,
+    },
+    context,
+  );
+}
+
+export function postUserMessage(
+  current: WorkspaceSnapshot,
+  input: PostUserMessageInput,
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const room = snapshot.rooms[input.roomId];
+
+  if (!room) {
+    throw new Error(`Unknown room "${input.roomId}"`);
+  }
+
+  const now = context.now();
+  const message: ChatMessage = {
+    id: context.createId("message"),
+    roomId: input.roomId,
+    author: buildUserAuthor(snapshot.currentUserName),
+    content: input.content.trim(),
+    createdAt: now,
+    transport: input.directMemberId ? "direct" : "group",
+    status: "sent",
+    mentionedMemberIds: input.mentionedMemberIds ?? [],
+    recipientMemberIds: input.directMemberId ? [input.directMemberId] : [],
+  };
+
+  insertMessage(snapshot, message);
+  routeMessage(snapshot, message, now, context.createId);
+  snapshot.selection.roomId = room.id;
+  snapshot.selection.projectId = room.projectId;
+  snapshot.selection.memberId = resolveRecipients(snapshot, message)[0] ?? snapshot.selection.memberId;
+
+  return snapshot;
+}
+
+export function postMemberMessage(
+  current: WorkspaceSnapshot,
+  input: PostMemberMessageInput,
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const member = snapshot.members[input.memberId];
+
+  if (!member) {
+    throw new Error(`Unknown member "${input.memberId}"`);
+  }
+
+  const now = context.now();
+  const message: ChatMessage = {
+    id: context.createId("message"),
+    roomId: input.roomId,
+    author: buildMemberAuthor(member),
+    content: input.content.trim(),
+    createdAt: now,
+    transport: input.directMemberId ? "direct" : "group",
+    status: "completed",
+    mentionedMemberIds: input.mentionedMemberIds ?? extractMentionMemberIds(snapshot, input.roomId, input.content),
+    recipientMemberIds: input.directMemberId ? [input.directMemberId] : [],
+    taskId: input.taskId,
+  };
+
+  insertMessage(snapshot, message);
+  routeMessage(snapshot, message, now, context.createId);
+
+  return snapshot;
+}
+
+export function postMemberDraft(
+  current: WorkspaceSnapshot,
+  input: PostMemberDraftInput,
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const task = snapshot.tasks[input.taskId];
+
+  if (!task) {
+    throw new Error(`Unknown task "${input.taskId}"`);
+  }
+
+  const member = snapshot.members[task.memberId];
+  const now = context.now();
+  const draftMessageId = task.draftMessageId ?? context.createId("message");
+  const draftMessage: ChatMessage = {
+    id: draftMessageId,
+    roomId: task.roomId,
+    author: buildMemberAuthor(member),
+    content: input.content.trim(),
+    createdAt: snapshot.messages[draftMessageId]?.createdAt ?? now,
+    transport: "group",
+    status: "streaming",
+    mentionedMemberIds: [],
+    recipientMemberIds: [],
+    taskId: task.id,
+  };
+
+  if (!task.draftMessageId) {
+    insertMessage(snapshot, draftMessage);
+  } else {
+    snapshot.messages[draftMessageId] = draftMessage;
+  }
+
+  updateTask(snapshot, {
+    ...task,
+    draftMessageId,
+    updatedAt: now,
+  });
+  updateMember(snapshot, {
+    ...member,
+    status: "running",
+    activeTaskId: task.id,
+  });
+
+  return snapshot;
+}
+
+export function completeMemberTask(
+  current: WorkspaceSnapshot,
+  input: CompleteTaskInput,
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const task = snapshot.tasks[input.taskId];
+
+  if (!task) {
+    throw new Error(`Unknown task "${input.taskId}"`);
+  }
+
+  const member = snapshot.members[task.memberId];
+  const now = context.now();
+
+  if (task.draftMessageId) {
+    const existingDraft = snapshot.messages[task.draftMessageId];
+    snapshot.messages[task.draftMessageId] = {
+      ...existingDraft,
+      content: input.finalContent?.trim() || existingDraft.content,
+      mentionedMemberIds: extractMentionMemberIds(
+        snapshot,
+        task.roomId,
+        input.finalContent?.trim() || existingDraft.content,
+      ),
+      status: "completed",
+    };
+    routeMessage(snapshot, snapshot.messages[task.draftMessageId], now, context.createId);
+  } else if (input.finalContent) {
+    const messageId = context.createId("message");
+    const completedMessage: ChatMessage = {
+      id: messageId,
+      roomId: task.roomId,
+      author: buildMemberAuthor(member),
+      content: input.finalContent.trim(),
+      createdAt: now,
+      transport: "group",
+      status: "completed",
+      mentionedMemberIds: extractMentionMemberIds(snapshot, task.roomId, input.finalContent),
+      recipientMemberIds: [],
+      taskId: task.id,
+    };
+    insertMessage(snapshot, completedMessage);
+    routeMessage(snapshot, completedMessage, now, context.createId);
+    task.draftMessageId = messageId;
+  }
+
+  updateTask(snapshot, {
+    ...task,
+    draftMessageId: task.draftMessageId,
+    status: "completed",
+    updatedAt: now,
+  });
+  updateMember(snapshot, {
+    ...member,
+    status: "idle",
+    activeTaskId: member.activeTaskId === task.id ? undefined : member.activeTaskId,
+  });
+
+  return snapshot;
+}
+
+export function toggleMemberMonitor(current: WorkspaceSnapshot, memberId: MemberId): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const member = snapshot.members[memberId];
+
+  if (!member) {
+    throw new Error(`Unknown member "${memberId}"`);
+  }
+
+  snapshot.members[memberId] = {
+    ...member,
+    observeAllRoomMessages: !member.observeAllRoomMessages,
+  };
+
+  return snapshot;
+}
+
+export function updateMemberPrompt(current: WorkspaceSnapshot, memberId: MemberId, prompt: string): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const member = snapshot.members[memberId];
+
+  if (!member) {
+    throw new Error(`Unknown member "${memberId}"`);
+  }
+
+  snapshot.members[memberId] = {
+    ...member,
+    prompt,
+  };
+
+  return snapshot;
+}
+
+function validateProviderCapabilities(capabilities: string[]): string[] {
+  return [...new Set(capabilities.map((capability) => capability.trim()).filter(Boolean))];
+}
+
+function validateSkills(skills: SkillDefinition[]): SkillDefinition[] {
+  return skills.map((skill) => {
+    if (!skill.name.trim() || !skill.command.trim()) {
+      throw new Error("Each skill requires a name and command");
+    }
+
+    return {
+      ...skill,
+      id: skill.id.trim(),
+      name: skill.name.trim(),
+      description: skill.description.trim(),
+      command: skill.command.trim(),
+    };
+  });
+}
+
+export function updateMemberConfig(current: WorkspaceSnapshot, input: UpdateMemberConfigInput): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const member = snapshot.members[input.memberId];
+
+  if (!member) {
+    throw new Error(`Unknown member "${input.memberId}"`);
+  }
+
+  if (!input.provider.label.trim() || !input.provider.command.trim()) {
+    throw new Error("Provider label and command are required");
+  }
+
+  snapshot.members[input.memberId] = {
+    ...member,
+    summary: input.summary.trim(),
+    prompt: input.prompt.trim(),
+    acceptsDirectMessages: input.acceptsDirectMessages,
+    skills: validateSkills(input.skills),
+    provider: {
+      ...input.provider,
+      label: input.provider.label.trim(),
+      command: input.provider.command.trim(),
+      args: input.provider.args.map((arg) => arg.trim()).filter(Boolean),
+      capabilities: validateProviderCapabilities(input.provider.capabilities),
+    },
+  };
+
+  return snapshot;
+}
+
+export function setEntryMember(current: WorkspaceSnapshot, memberId: MemberId): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const member = snapshot.members[memberId];
+
+  if (!member) {
+    throw new Error(`Unknown member "${memberId}"`);
+  }
+
+  const room = snapshot.rooms[member.roomId];
+  room.memberIds.forEach((roomMemberId) => {
+    snapshot.members[roomMemberId] = {
+      ...snapshot.members[roomMemberId],
+      isEntryMember: roomMemberId === memberId,
+    };
+  });
+  snapshot.rooms[room.id] = {
+    ...room,
+    entryMemberId: memberId,
+  };
+
+  return snapshot;
+}
+
+export function upsertMemberWatcher(
+  current: WorkspaceSnapshot,
+  input: UpsertWatcherInput,
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const member = snapshot.members[input.memberId];
+
+  if (!member) {
+    throw new Error(`Unknown member "${input.memberId}"`);
+  }
+
+  if (!Number.isFinite(input.intervalMinutes) || input.intervalMinutes <= 0) {
+    throw new Error("Watcher interval must be a positive number");
+  }
+
+  const room = snapshot.rooms[member.roomId];
+  const existingWatcherId = room.watcherIds.find((watcherId) => snapshot.watchers[watcherId]?.memberId === member.id);
+
+  if (existingWatcherId) {
+    snapshot.watchers[existingWatcherId] = {
+      ...snapshot.watchers[existingWatcherId],
+      enabled: input.enabled,
+      intervalMinutes: Math.round(input.intervalMinutes),
+    };
+    return snapshot;
+  }
+
+  const watcherId = context.createId("watcher");
+  snapshot.watchers[watcherId] = {
+    id: watcherId,
+    roomId: room.id,
+    memberId: member.id,
+    enabled: input.enabled,
+    intervalMinutes: Math.round(input.intervalMinutes),
+  };
+  snapshot.rooms[room.id] = {
+    ...room,
+    watcherIds: [...room.watcherIds, watcherId],
+  };
+
+  return snapshot;
+}
+
+export function toggleWatcher(current: WorkspaceSnapshot, watcherId: string): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const watcher = snapshot.watchers[watcherId];
+
+  if (!watcher) {
+    throw new Error(`Unknown watcher "${watcherId}"`);
+  }
+
+  snapshot.watchers[watcherId] = {
+    ...watcher,
+    enabled: !watcher.enabled,
+  };
+
+  return snapshot;
+}
+
+function formatDigestLine(snapshot: WorkspaceSnapshot, messageId: MessageId): string {
+  const message = snapshot.messages[messageId];
+  const stamp = message.createdAt.slice(11, 16);
+  const mentionSuffix =
+    message.mentionedMemberIds.length > 0
+      ? ` @${message.mentionedMemberIds.map((memberId) => snapshot.members[memberId]?.handle ?? memberId).join(", @")}`
+      : "";
+
+  return `[${stamp}] ${message.author.label}: ${message.content}${mentionSuffix}`;
+}
+
+export function runWatcher(current: WorkspaceSnapshot, watcherId: string, context: MutationContext): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const watcher = snapshot.watchers[watcherId];
+
+  if (!watcher || !watcher.enabled) {
+    return snapshot;
+  }
+
+  const roomMessageIds = snapshot.messageOrderByRoom[watcher.roomId] ?? [];
+  const startIndex = watcher.lastConsumedMessageId ? roomMessageIds.indexOf(watcher.lastConsumedMessageId) + 1 : 0;
+  const newMessageIds = roomMessageIds.slice(Math.max(startIndex, 0)).filter((messageId) => {
+    const message = snapshot.messages[messageId];
+    return message.transport !== "watch-digest";
+  });
+
+  if (newMessageIds.length === 0) {
+    return snapshot;
+  }
+
+  const now = context.now();
+  const digestMessage: ChatMessage = {
+    id: context.createId("message"),
+    roomId: watcher.roomId,
+    author: buildSystemAuthor("Watcher"),
+    content: `New room activity since last poll:\n${newMessageIds.map((messageId) => `- ${formatDigestLine(snapshot, messageId)}`).join("\n")}`,
+    createdAt: now,
+    transport: "watch-digest",
+    status: "sent",
+    mentionedMemberIds: [],
+    recipientMemberIds: [watcher.memberId],
+  };
+
+  insertMessage(snapshot, digestMessage);
+  snapshot.watchers[watcherId] = {
+    ...watcher,
+    lastConsumedMessageId: newMessageIds[newMessageIds.length - 1],
+  };
+  routeMessage(snapshot, digestMessage, now, context.createId);
+
+  return snapshot;
+}
+
+export function extractMentionMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {
+  const room = snapshot.rooms[roomId];
+
+  if (!room) {
+    return [];
+  }
+
+  const handles = [...content.matchAll(/@([\p{L}\p{N}_-]+)/gu)].map((match) => match[1].toLowerCase());
+
+  if (handles.length === 0) {
+    return [];
+  }
+
+  return room.memberIds.filter((memberId) => handles.includes(snapshot.members[memberId]?.handle.toLowerCase()));
+}

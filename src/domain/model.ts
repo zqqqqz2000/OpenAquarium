@@ -1,0 +1,205 @@
+export type ProjectId = string;
+export type RoomId = string;
+export type TemplateId = string;
+export type MemberId = string;
+export type MessageId = string;
+export type TaskId = string;
+export type WatcherId = string;
+
+export type ProviderKind = "codex-acp" | "generic-acp";
+export type MemberStatus = "idle" | "running" | "interrupted";
+export type TaskStatus = "running" | "interrupted" | "completed";
+export type MessageTransport = "group" | "direct" | "watch-digest" | "status";
+export type MessageStatus = "sent" | "streaming" | "completed" | "interrupted";
+export type AccentTone = "paper" | "postit" | "blueprint" | "correction";
+
+export interface SkillDefinition {
+  id: string;
+  name: string;
+  description: string;
+  command: string;
+}
+
+export interface ProviderBinding {
+  kind: ProviderKind;
+  label: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  workingDirectory?: string;
+  capabilities: string[];
+}
+
+export interface WatchBlueprint {
+  intervalMinutes: number;
+  enabledByDefault: boolean;
+}
+
+export interface TeamMemberBlueprint {
+  id: string;
+  name: string;
+  handle: string;
+  summary: string;
+  prompt: string;
+  accentTone: AccentTone;
+  skills: SkillDefinition[];
+  provider: ProviderBinding;
+  isEntryMember?: boolean;
+  observeAllRoomMessages?: boolean;
+  acceptsDirectMessages?: boolean;
+  watch?: WatchBlueprint;
+}
+
+export interface TeamTemplate {
+  id: TemplateId;
+  name: string;
+  description: string;
+  accentTone: AccentTone;
+  members: TeamMemberBlueprint[];
+}
+
+export interface Project {
+  id: ProjectId;
+  name: string;
+  createdAt: string;
+}
+
+export interface Room {
+  id: RoomId;
+  projectId: ProjectId;
+  name: string;
+  topic: string;
+  templateId: TemplateId;
+  memberIds: MemberId[];
+  watcherIds: WatcherId[];
+  entryMemberId: MemberId;
+  createdAt: string;
+}
+
+export interface TeamMember {
+  id: MemberId;
+  roomId: RoomId;
+  blueprintId: string;
+  name: string;
+  handle: string;
+  summary: string;
+  prompt: string;
+  accentTone: AccentTone;
+  skills: SkillDefinition[];
+  provider: ProviderBinding;
+  observeAllRoomMessages: boolean;
+  acceptsDirectMessages: boolean;
+  isEntryMember: boolean;
+  status: MemberStatus;
+  activeTaskId?: TaskId;
+}
+
+export interface WatchSubscription {
+  id: WatcherId;
+  roomId: RoomId;
+  memberId: MemberId;
+  intervalMinutes: number;
+  enabled: boolean;
+  lastConsumedMessageId?: MessageId;
+}
+
+export interface ChatAuthor {
+  kind: "user" | "member" | "system";
+  id: string;
+  label: string;
+}
+
+export interface ChatMessage {
+  id: MessageId;
+  roomId: RoomId;
+  author: ChatAuthor;
+  content: string;
+  createdAt: string;
+  transport: MessageTransport;
+  status: MessageStatus;
+  mentionedMemberIds: MemberId[];
+  recipientMemberIds: MemberId[];
+  taskId?: TaskId;
+}
+
+export interface MemberTask {
+  id: TaskId;
+  roomId: RoomId;
+  memberId: MemberId;
+  sourceMessageId: MessageId;
+  title: string;
+  status: TaskStatus;
+  startedAt: string;
+  updatedAt: string;
+  interruptedByMessageId?: MessageId;
+  draftMessageId?: MessageId;
+}
+
+export interface WorkspaceSelection {
+  projectId?: ProjectId;
+  roomId?: RoomId;
+  memberId?: MemberId;
+}
+
+export interface WorkspaceSnapshot {
+  projects: Record<ProjectId, Project>;
+  projectOrder: ProjectId[];
+  rooms: Record<RoomId, Room>;
+  roomOrderByProject: Record<ProjectId, RoomId[]>;
+  templates: Record<TemplateId, TeamTemplate>;
+  templateOrder: TemplateId[];
+  members: Record<MemberId, TeamMember>;
+  messages: Record<MessageId, ChatMessage>;
+  messageOrderByRoom: Record<RoomId, MessageId[]>;
+  tasks: Record<TaskId, MemberTask>;
+  watchers: Record<WatcherId, WatchSubscription>;
+  selection: WorkspaceSelection;
+  currentUserName: string;
+}
+
+export interface CreateProjectInput {
+  projectName: string;
+  firstPrompt: string;
+  templateId: TemplateId;
+}
+
+export interface PostUserMessageInput {
+  roomId: RoomId;
+  content: string;
+  mentionedMemberIds?: MemberId[];
+  directMemberId?: MemberId;
+}
+
+export interface PostMemberMessageInput {
+  roomId: RoomId;
+  memberId: MemberId;
+  content: string;
+  mentionedMemberIds?: MemberId[];
+  directMemberId?: MemberId;
+  taskId?: TaskId;
+}
+
+export interface PostMemberDraftInput {
+  taskId: TaskId;
+  content: string;
+}
+
+export interface CompleteTaskInput {
+  taskId: TaskId;
+  finalContent?: string;
+}
+
+export interface UpdateMemberConfigInput {
+  memberId: MemberId;
+  summary: string;
+  prompt: string;
+  acceptsDirectMessages: boolean;
+  skills: SkillDefinition[];
+  provider: ProviderBinding;
+}
+
+export interface UpsertWatcherInput {
+  memberId: MemberId;
+  enabled: boolean;
+  intervalMinutes: number;
+}

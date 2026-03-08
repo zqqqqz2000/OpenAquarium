@@ -1,0 +1,236 @@
+// @vitest-environment node
+
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
+import { WorkspacePersistence } from "@/server/persistence";
+import { startWorkspaceHttpServer } from "@/server/http-server";
+import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
+import type { ExecutorCallbacks, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
+
+class EchoExecutor implements MemberExecutor {
+  async execute(request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
+    await callbacks.onComplete(`${request.member.handle} handled`, "end_turn");
+  }
+
+  cancel(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  dispose(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+describe("workspace http server", () => {
+  const resources: Array<{ runtime: WorkspaceRuntime; close(): Promise<void> }> = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      resources.map(async (resource) => {
+        await resource.close();
+        await resource.runtime.dispose();
+      }),
+    );
+    resources.length = 0;
+  });
+
+  it("serves state and accepts member/message configuration mutations", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-"));
+    const executorFactory: MemberExecutorFactory = () => new EchoExecutor();
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory,
+      templateGenerator: (brief) => Promise.resolve({
+        id: "template-http-generated",
+        name: "HTTP Generated Template",
+        description: brief,
+        accentTone: "paper",
+        members: [
+          {
+            id: "entry",
+            name: "Lead Koi",
+            handle: "lead",
+            summary: "入口成员",
+            prompt: "组织团队",
+            accentTone: "postit",
+            provider: {
+              kind: "codex-acp",
+              label: "Codex ACP",
+              command: CODEX_ACP_NPX_COMMAND,
+              args: CODEX_ACP_NPX_ARGS,
+              env: {},
+              capabilities: ["prompt", "cancel", "loadSession"],
+            },
+            isEntryMember: true,
+            observeAllRoomMessages: true,
+            skills: [
+              {
+                id: "send",
+                name: "发送消息",
+                description: "发群消息",
+                command: "./bin/oa-room-send --scope group",
+              },
+            ],
+          },
+          {
+            id: "builder",
+            name: "Forge Crab",
+            handle: "builder",
+            summary: "实现成员",
+            prompt: "负责实现",
+            accentTone: "paper",
+            provider: {
+              kind: "generic-acp",
+              label: "Builder ACP",
+              command: "claude-code",
+              args: ["--stdio"],
+              env: {},
+              capabilities: ["prompt", "cancel"],
+            },
+            skills: [
+              {
+                id: "inspect",
+                name: "查看状态",
+                description: "检查 room 状态",
+                command: "./bin/oa-room-state --room \"$ROOM\"",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    await runtime.createProject({
+      projectName: "HTTP Check",
+      firstPrompt: "验证 API",
+      templateId: "template-product-pod",
+    });
+
+    const server = await startWorkspaceHttpServer({
+      runtime,
+      port: 0,
+    });
+    resources.push({ runtime, close: server.close });
+
+    const stateResponse = await fetch(`http://127.0.0.1:${server.port}/api/state`);
+    const statePayload = (await stateResponse.json()) as { snapshot: { selection: { roomId?: string }; rooms: Record<string, { memberIds: string[] }> } };
+    const roomId = statePayload.snapshot.selection.roomId;
+    expect(roomId).toBeDefined();
+    if (!roomId) {
+      throw new Error("Expected room id");
+    }
+    const room = statePayload.snapshot.rooms[roomId];
+    expect(room).toBeDefined();
+    if (!room) {
+      throw new Error("Expected room");
+    }
+    const memberId = room.memberIds[0];
+    expect(memberId).toBeDefined();
+    const builderId = room.memberIds[2];
+    expect(builderId).toBeDefined();
+    if (!builderId) {
+      throw new Error("Expected builder id");
+    }
+
+    const memberMessageResponse = await fetch(`http://127.0.0.1:${server.port}/api/internal/member-message`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        roomId,
+        memberId,
+        content: "@builder 请看这里",
+      }),
+    });
+    const payload = (await memberMessageResponse.json()) as { snapshot: { messageOrderByRoom: Record<string, string[]>; messages: Record<string, { content: string }> } };
+    const contents = (payload.snapshot.messageOrderByRoom[roomId] ?? []).map(
+      (messageId) => payload.snapshot.messages[messageId]?.content ?? "",
+    );
+
+    const configResponse = await fetch(`http://127.0.0.1:${server.port}/api/members/${builderId}/config`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        summary: "Builder v2",
+        prompt: "新的 builder prompt",
+        acceptsDirectMessages: false,
+        skills: [
+          {
+            id: "ship",
+            name: "Ship",
+            description: "发送群消息",
+            command: "./bin/oa-room-send --scope group",
+          },
+        ],
+        provider: {
+          kind: "codex-acp",
+          label: "Claude Code",
+          command: "claude-code",
+          args: ["--stdio"],
+          env: {
+            ANTHROPIC_API_KEY: "demo",
+          },
+          capabilities: ["prompt", "cancel"],
+        },
+      }),
+    });
+    const configPayload = (await configResponse.json()) as { snapshot: { members: Record<string, { provider: { command: string }; summary: string }> } };
+
+    const entryResponse = await fetch(`http://127.0.0.1:${server.port}/api/members/${builderId}/entry`, {
+      method: "POST",
+    });
+    const entryPayload = (await entryResponse.json()) as { snapshot: { rooms: Record<string, { entryMemberId: string }> } };
+
+    const watcherResponse = await fetch(`http://127.0.0.1:${server.port}/api/members/${builderId}/watcher`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        enabled: true,
+        intervalMinutes: 6,
+      }),
+    });
+    const watcherPayload = (await watcherResponse.json()) as {
+      snapshot: {
+        rooms: Record<string, { watcherIds: string[] }>;
+        watchers: Record<string, { memberId: string; intervalMinutes: number }>;
+      };
+    };
+    const templateResponse = await fetch(`http://127.0.0.1:${server.port}/api/templates/generate`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        brief: "生成一个新的协作模板",
+      }),
+    });
+    const templatePayload = (await templateResponse.json()) as {
+      template: { id: string; name: string };
+      snapshot: { templates: Record<string, { description: string }> };
+    };
+
+    expect(contents.some((content) => content.includes("@builder"))).toBe(true);
+    expect(configPayload.snapshot.members[builderId]?.provider.command).toBe("claude-code");
+    expect(configPayload.snapshot.members[builderId]?.summary).toBe("Builder v2");
+    expect(entryPayload.snapshot.rooms[roomId].entryMemberId).toBe(builderId);
+    expect(
+      watcherPayload.snapshot.rooms[roomId].watcherIds.some(
+        (watcherId) => watcherPayload.snapshot.watchers[watcherId]?.memberId === builderId
+          && watcherPayload.snapshot.watchers[watcherId]?.intervalMinutes === 6,
+      ),
+    ).toBe(true);
+    expect(templatePayload.template.id).toBe("template-http-generated");
+    expect(templatePayload.snapshot.templates["template-http-generated"]?.description).toBe("生成一个新的协作模板");
+  });
+});
