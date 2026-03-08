@@ -27,9 +27,9 @@ export function ChatPane(props: {
   if (!room) {
     return (
       <main className="flex min-h-screen items-center justify-center px-6 py-10">
-        <Card className="max-w-2xl p-8" tone="postit" tack>
-          <p className="scribble-underline mt-0 text-4xl">OpenAquarium</p>
-          <p className="mb-6 text-2xl">
+        <Card className="max-w-2xl p-8" tone="paper">
+          <p className="mt-0 text-3xl font-semibold tracking-tight">OpenAquarium</p>
+          <p className="mb-6 text-lg text-[var(--muted-foreground)]">
             左边先建一个 project。每个 project 会以首条问题命名 room，并固定一套 team template。
           </p>
           <div className="flex flex-wrap gap-3">
@@ -45,12 +45,12 @@ export function ChatPane(props: {
   const messages = (snapshot.messageOrderByRoom[room.id] ?? []).map((messageId) => snapshot.messages[messageId]);
 
   return (
-    <main className="flex min-h-screen flex-col gap-5 border-x-[3px] border-dashed border-[var(--ink)] px-4 py-5 md:px-6">
-      <Card className="flex flex-col gap-4 p-5" tone={template?.accentTone ?? "paper"} tack>
+    <main className="flex min-h-screen flex-col gap-5 border-x border-[var(--border)] bg-white/40 px-4 py-5 md:px-6">
+      <Card className="flex flex-col gap-4 p-5" tone={template?.accentTone ?? "paper"}>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="scribble-underline mt-0 text-4xl">{room.name}</p>
-            <p className="m-0 max-w-3xl text-xl opacity-80">{room.topic}</p>
+            <p className="mt-0 text-3xl font-semibold tracking-tight">{room.name}</p>
+            <p className="m-0 max-w-3xl text-base text-[var(--muted-foreground)]">{room.topic}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge tone="postit">{template?.name ?? "Template"}</Badge>
@@ -69,14 +69,14 @@ export function ChatPane(props: {
                 watcher={getWatcherForMember(room, snapshot, member.id)}
               >
                 <button
-                  className="paper-card surface-interactive flex min-w-[210px] flex-1 items-center gap-3 px-3 py-2 text-left"
-                  style={{
-                    ...wobbly.listItem,
-                    ...(member.id === selectedMemberId ? tilt.active : tilt.positive),
-                    background: member.id === selectedMemberId ? "var(--postit)" : "var(--white)",
-                  }}
-                  type="button"
-                  onClick={() => onOpenMember(member.id)}
+                    className="paper-card surface-interactive flex min-w-[210px] flex-1 items-center gap-3 px-3 py-2 text-left"
+                    style={{
+                      ...wobbly.listItem,
+                      ...(member.id === selectedMemberId ? tilt.active : tilt.positive),
+                      background: member.id === selectedMemberId ? "var(--secondary)" : "var(--white)",
+                    }}
+                    type="button"
+                    onClick={() => onOpenMember(member.id)}
                 >
                   <MemberAvatar member={member} />
                   <div className="min-w-0 flex-1">
@@ -103,9 +103,9 @@ export function ChatPane(props: {
 
       <section className="flex min-h-0 flex-1 flex-col gap-4">
         <div className="flex items-center justify-between">
-          <p className="m-0 text-2xl">Room transcript</p>
+          <p className="m-0 text-2xl font-semibold tracking-tight">Room transcript</p>
           <div className="flex items-center gap-3">
-            <p className="m-0 text-base opacity-60">中途 draft 会保留在消息流里，不会被打断后抹掉。</p>
+            <p className="m-0 text-sm text-[var(--muted-foreground)]">中途 draft 会保留在消息流里，不会被打断后抹掉。</p>
             <RoomInfoPopover room={room} template={template} members={members} />
           </div>
         </div>
@@ -151,7 +151,7 @@ function RoomInfoPopover(props: {
       <Popover.Trigger asChild>
         <button
           className="rough-button inline-flex min-h-11 items-center gap-2 px-3 py-2 text-base"
-          style={wobbly.pill}
+          style={wobbly.sm}
           type="button"
         >
           <Info size={16} />
@@ -160,10 +160,10 @@ function RoomInfoPopover(props: {
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content className="z-50 w-[min(88vw,360px)]" side="bottom" sideOffset={12}>
-          <Card className="flex flex-col gap-3 p-4 text-lg" tone="postit" tack>
+          <Card className="flex flex-col gap-3 p-4 text-sm" tone="paper">
             <div className="flex items-center gap-2">
               <Sparkles size={18} />
-              <p className="m-0 text-2xl">Room note</p>
+              <p className="m-0 text-lg font-semibold">Room note</p>
             </div>
             <p className="m-0">当前 template 固定为 {template?.name ?? "Template"}。</p>
             <p className="m-0">首条问题会把 room 主题初始化为：{summarizePrompt(room.topic, 80)}。</p>

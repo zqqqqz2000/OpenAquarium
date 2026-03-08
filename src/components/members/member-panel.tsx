@@ -38,8 +38,8 @@ export function MemberPanel(props: {
     return (
       <aside className="member-panel-shell min-h-screen px-5 py-5">
         <Card className="p-6" tone="paper">
-          <p className="m-0 text-3xl">Pick A Room</p>
-          <p className="m-0 text-xl opacity-70">选中左侧 room 之后，这里只保留成员概览。深配置会进独立的 member studio。</p>
+          <p className="m-0 text-2xl font-semibold tracking-tight">Pick A Room</p>
+          <p className="m-0 text-sm text-[var(--muted-foreground)]">选中左侧 room 之后，这里只保留成员概览。深配置会进独立的 member studio。</p>
         </Card>
       </aside>
     );
@@ -56,13 +56,13 @@ export function MemberPanel(props: {
           onRunWatcher={onRunWatcher}
         />
       ) : (
-        <Card className="flex flex-col gap-3 p-5" tone="paper" tack>
-          <p className="m-0 text-3xl">Member desk</p>
-          <p className="m-0 text-xl opacity-72">先点一个成员。主页面只看概览，更多配置点进 studio。</p>
+        <Card className="flex flex-col gap-3 p-5" tone="paper">
+          <p className="m-0 text-2xl font-semibold tracking-tight">Member desk</p>
+          <p className="m-0 text-sm text-[var(--muted-foreground)]">先点一个成员。主页面只看概览，更多配置点进 studio。</p>
         </Card>
       )}
 
-      <Card className="flex flex-col gap-3 p-4" tone="postit">
+      <Card className="flex flex-col gap-3 p-4" tone="paper">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="m-0 text-2xl">Team roster</p>
@@ -82,7 +82,7 @@ export function MemberPanel(props: {
                   style={{
                     ...wobbly.listItem,
                     ...(isSelected ? tilt.active : index % 2 === 0 ? tilt.positive : tilt.negative),
-                    background: isSelected ? "var(--postit)" : "var(--white)",
+                    background: isSelected ? "var(--secondary)" : "var(--white)",
                   }}
                   type="button"
                   onClick={() => onSelectMember(member.id)}
@@ -116,9 +116,9 @@ function SelectedMemberSummary(props: {
 
   return (
     <>
-      <Card className="flex flex-col gap-4 p-5" tone={member.accentTone} tack>
+      <Card className="flex flex-col gap-4 p-5" tone={member.accentTone}>
         <MemberAvatar member={member} active />
-        <p className="m-0 text-lg leading-6">{member.summary}</p>
+        <p className="m-0 text-sm leading-6 text-[var(--muted-foreground)]">{member.summary}</p>
         <div className="flex flex-wrap gap-2">
           <Badge tone="paper">{member.provider.label}</Badge>
           {member.isEntryMember ? <Badge tone="postit">Entry member</Badge> : null}
@@ -146,16 +146,16 @@ function SelectedMemberSummary(props: {
 
       {activeTask ? (
         <Card className="flex flex-col gap-2 p-4" tone="paper">
-          <p className="m-0 text-2xl">Live task</p>
-          <p className="m-0 text-xl">{activeTask.title}</p>
-          <p className="m-0 text-lg opacity-70">status: {activeTask.status}</p>
-          <p className="m-0 text-base uppercase tracking-[0.16em] opacity-60">source message</p>
-          <p className="m-0 text-lg">{snapshot.messages[activeTask.sourceMessageId]?.content}</p>
+          <p className="m-0 text-lg font-semibold tracking-tight">Live task</p>
+          <p className="m-0 text-base">{activeTask.title}</p>
+          <p className="m-0 text-sm text-[var(--muted-foreground)]">status: {activeTask.status}</p>
+          <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-[var(--muted-foreground)]">source message</p>
+          <p className="m-0 text-sm">{snapshot.messages[activeTask.sourceMessageId]?.content}</p>
         </Card>
       ) : (
         <Card className="flex items-center gap-3 p-4" tone="paper">
           <Bot size={24} />
-          <p className="m-0 text-lg">Prompt、skills、ACP provider、watcher 细节都已经收进 studio，不在右栏常驻展开。</p>
+          <p className="m-0 text-sm text-[var(--muted-foreground)]">Prompt、skills、ACP provider、watcher 细节都已经收进 studio，不在右栏常驻展开。</p>
         </Card>
       )}
     </>

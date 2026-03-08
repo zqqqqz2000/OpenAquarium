@@ -22,7 +22,7 @@ export function ChatComposer(props: {
   );
 
   return (
-    <Card className="thumbtack flex flex-col gap-4 p-4 md:p-5" tone="paper">
+    <Card className="flex flex-col gap-4 p-4 md:p-5" tone="paper">
       <div className="flex flex-wrap items-center gap-3">
         <Badge tone={directMember ? "correction" : "blueprint"}>{directMember ? `DM @${directMember.handle}` : "Group message"}</Badge>
         {directMember ? (
@@ -50,7 +50,7 @@ export function ChatComposer(props: {
         onChange={(event) => setText(event.currentTarget.value)}
       />
       <div className="flex items-center justify-between gap-3">
-        <p className="m-0 text-base opacity-65">群聊里直接 `@member`，或先点头像切到私聊目标。</p>
+        <p className="m-0 text-sm text-[var(--muted-foreground)]">群聊里直接 `@member`，或先点头像切到私聊目标。</p>
         <Button
           onClick={() => {
             void onSend(text, directMemberId);

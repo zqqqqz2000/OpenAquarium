@@ -110,11 +110,11 @@ export function MemberStudioDialog(props: {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px]" />
         <Dialog.Content className="fixed inset-x-3 top-4 z-50 mx-auto w-[min(96vw,1160px)] max-w-[1160px] outline-none md:inset-x-6">
-          <Card className="max-h-[92vh] overflow-hidden p-4 md:p-5" tone="paper" tack>
+          <Card className="max-h-[92vh] overflow-hidden p-4 md:p-5" tone="paper">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
-                <Dialog.Title className="m-0 text-4xl">Member Studio</Dialog.Title>
-                <Dialog.Description className="m-0 text-xl opacity-72">
+                <Dialog.Title className="m-0 text-2xl font-semibold tracking-tight">Member Studio</Dialog.Title>
+                <Dialog.Description className="m-0 text-sm text-[var(--muted-foreground)]">
                   深配置收进这里。主聊天页只保留概览和入口动作。
                 </Dialog.Description>
               </div>
@@ -129,7 +129,7 @@ export function MemberStudioDialog(props: {
               <div className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1">
                 <Card className="flex flex-col gap-4 p-4" tone={member.accentTone}>
                   <MemberAvatar member={member} active />
-                  <p className="m-0 text-lg leading-6">{member.summary}</p>
+                  <p className="m-0 text-sm leading-6 text-[var(--muted-foreground)]">{member.summary}</p>
                   <div className="flex flex-wrap gap-2">
                     <Badge tone="paper">{member.provider.label}</Badge>
                     <Badge tone="blueprint">{member.skills.length} skills</Badge>
@@ -139,9 +139,9 @@ export function MemberStudioDialog(props: {
                   </div>
                 </Card>
 
-                <Card className="flex flex-col gap-3 p-4" tone="postit">
-                  <p className="m-0 text-2xl">At a glance</p>
-                  <div className="grid grid-cols-2 gap-2 text-lg">
+                <Card className="flex flex-col gap-3 p-4" tone="paper">
+                  <p className="m-0 text-lg font-semibold tracking-tight">At a glance</p>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
                     <div className="rough-dashed-frame bg-white px-3 py-2" style={wobbly.note}>
                       <p className="m-0 text-sm uppercase tracking-[0.18em] opacity-55">Status</p>
                       <p className="m-0">{member.status}</p>
@@ -168,11 +168,11 @@ export function MemberStudioDialog(props: {
 
                 {activeTask ? (
                   <Card className="flex flex-col gap-2 p-4" tone="correction">
-                    <p className="m-0 text-2xl">Current task</p>
-                    <p className="m-0 text-xl">{activeTask.title}</p>
-                    <p className="m-0 text-lg opacity-70">status: {activeTask.status}</p>
-                    <p className="m-0 text-base uppercase tracking-[0.16em] opacity-60">source message</p>
-                    <p className="m-0 text-lg">{snapshot.messages[activeTask.sourceMessageId]?.content}</p>
+                    <p className="m-0 text-lg font-semibold tracking-tight">Current task</p>
+                    <p className="m-0 text-base">{activeTask.title}</p>
+                    <p className="m-0 text-sm text-[var(--muted-foreground)]">status: {activeTask.status}</p>
+                    <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-[var(--muted-foreground)]">source message</p>
+                    <p className="m-0 text-sm">{snapshot.messages[activeTask.sourceMessageId]?.content}</p>
                   </Card>
                 ) : null}
               </div>
@@ -190,8 +190,8 @@ export function MemberStudioDialog(props: {
                     <Tabs.Trigger
                       key={value}
                       value={value}
-                      className="rough-button min-h-11 px-4 py-2 text-lg data-[state=active]:bg-[var(--accent)] data-[state=active]:text-white"
-                      style={wobbly.pill}
+                      className="rough-button min-h-10 px-4 py-2 text-sm data-[state=active]:bg-[var(--accent)] data-[state=active]:text-white"
+                      style={wobbly.sm}
                     >
                       {label}
                     </Tabs.Trigger>
@@ -202,8 +202,8 @@ export function MemberStudioDialog(props: {
                   <Tabs.Content value="history" className="m-0">
                     <Card className="flex flex-col gap-4 p-4" tone="paper">
                       <div>
-                        <p className="m-0 text-2xl">Processing history</p>
-                        <p className="m-0 text-lg opacity-70">这里不是全量群聊，而是当前成员真正接收、处理、回复过的消息链。</p>
+                        <p className="m-0 text-lg font-semibold tracking-tight">Processing history</p>
+                        <p className="m-0 text-sm text-[var(--muted-foreground)]">这里不是全量群聊，而是当前成员真正接收、处理、回复过的消息链。</p>
                       </div>
                       <div className="flex flex-col gap-4">
                         {memberHistory.map((entry) => {
@@ -223,8 +223,8 @@ export function MemberStudioDialog(props: {
                           );
                         })}
                         {memberHistory.length === 0 ? (
-                          <Card className="p-5" tone="postit">
-                            <p className="m-0 text-xl">这个成员还没有接到过消息，也没有留下处理痕迹。</p>
+                          <Card className="p-5" tone="paper">
+                            <p className="m-0 text-sm text-[var(--muted-foreground)]">这个成员还没有接到过消息，也没有留下处理痕迹。</p>
                           </Card>
                         ) : null}
                       </div>
@@ -234,8 +234,8 @@ export function MemberStudioDialog(props: {
                   <Tabs.Content value="behavior" className="m-0">
                     <Card className="flex flex-col gap-4 p-4" tone="paper">
                       <div>
-                        <p className="m-0 text-2xl">Behavior</p>
-                        <p className="m-0 text-lg opacity-70">职责由 prompt、skills 和 provider 组合出来，不写死在系统里。</p>
+                        <p className="m-0 text-lg font-semibold tracking-tight">Behavior</p>
+                        <p className="m-0 text-sm text-[var(--muted-foreground)]">职责由 prompt、skills 和 provider 组合出来，不写死在系统里。</p>
                       </div>
                       <label className="flex flex-col gap-2">
                         <span className="text-xl">Summary</span>
@@ -278,7 +278,7 @@ export function MemberStudioDialog(props: {
                     <Card className="flex flex-col gap-3 p-4" tone="blueprint">
                       <div className="flex items-center gap-2">
                         <ScanSearch size={18} />
-                        <p className="m-0 text-2xl">ACP provider</p>
+                        <p className="m-0 text-lg font-semibold tracking-tight">ACP provider</p>
                       </div>
                       <label className="flex flex-col gap-2">
                         <span className="text-lg">Label</span>
@@ -324,10 +324,10 @@ export function MemberStudioDialog(props: {
                   </Tabs.Content>
 
                   <Tabs.Content value="skills" className="m-0">
-                    <Card className="flex flex-col gap-3 p-4" tone="postit">
+                    <Card className="flex flex-col gap-3 p-4" tone="paper">
                       <div className="flex items-center gap-2">
                         <Hammer size={18} />
-                        <p className="m-0 text-2xl">Skill commands</p>
+                        <p className="m-0 text-lg font-semibold tracking-tight">Skill commands</p>
                       </div>
                       {configDraft.skills.map((skill, index) => (
                         <div
@@ -402,7 +402,7 @@ export function MemberStudioDialog(props: {
                     <Card className="flex flex-col gap-3 p-4" tone="paper">
                       <div className="flex items-center gap-2">
                         <Clock3 size={18} />
-                        <p className="m-0 text-2xl">Watcher</p>
+                        <p className="m-0 text-lg font-semibold tracking-tight">Watcher</p>
                       </div>
                       <label className="flex items-center justify-between gap-4">
                         <span className="text-xl">Enable scheduled watcher</span>
@@ -435,7 +435,7 @@ export function MemberStudioDialog(props: {
 
                   <Tabs.Content value="cli" className="m-0">
                     <Card className="flex flex-col gap-3 p-4" tone="blueprint">
-                      <p className="m-0 text-2xl">CLI preview</p>
+                      <p className="m-0 text-lg font-semibold tracking-tight">CLI preview</p>
                       {cliCommands.map((command) => (
                         <div
                           key={command.id}
@@ -450,8 +450,8 @@ export function MemberStudioDialog(props: {
                   </Tabs.Content>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t-[3px] border-dashed border-[var(--ink)] pt-4">
-                  {error ? <p className="m-0 text-lg text-[var(--accent)]">{error}</p> : <span className="text-lg opacity-65">修改只在这里集中保存，不再挤在主页面右栏。</span>}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] pt-4">
+                  {error ? <p className="m-0 text-sm text-[var(--destructive)]">{error}</p> : <span className="text-sm text-[var(--muted-foreground)]">修改只在这里集中保存，不再挤在主页面右栏。</span>}
                   <Button onClick={saveConfig}>Save member config</Button>
                 </div>
               </Tabs.Root>

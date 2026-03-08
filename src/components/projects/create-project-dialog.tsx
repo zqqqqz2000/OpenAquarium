@@ -35,14 +35,14 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[] }) {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/25 backdrop-blur-[1px]" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,720px)] -translate-x-1/2 -translate-y-1/2">
-          <Card className="flex flex-col gap-4 p-5 md:p-6" tone="postit" tack>
+          <Card className="flex flex-col gap-4 p-5 md:p-6" tone="paper">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <Dialog.Title className="m-0 text-4xl">Start A New Room</Dialog.Title>
-                <Dialog.Description className="m-0 text-xl opacity-75">room 名会按首条问题自动生成，template 第一次固定。</Dialog.Description>
+                <Dialog.Title className="m-0 text-2xl font-semibold tracking-tight">Create project</Dialog.Title>
+                <Dialog.Description className="m-0 text-sm text-[var(--muted-foreground)]">room 名会按首条问题自动生成，template 第一次固定。</Dialog.Description>
               </div>
               <Dialog.Close asChild>
-                <button className="rounded-none" type="button">
+                <button className="rounded-md" type="button">
                   <X size={22} />
                 </button>
               </Dialog.Close>
@@ -58,8 +58,8 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[] }) {
             <label className="flex flex-col gap-2">
               <span className="text-xl">Team template</span>
               <select
-                className="rough-input h-12 px-4 text-lg"
-                style={wobbly.pill}
+                className="rough-input h-10 px-3 text-sm"
+                style={wobbly.sm}
                 value={templateId}
                 onChange={(event) => setTemplateId(event.currentTarget.value)}
               >
@@ -77,17 +77,17 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[] }) {
                 disabled={isGenerating}
                 onClick={() => {
                   void (async () => {
-                  setIsGenerating(true);
-                  const template = await generateTemplate(firstPrompt);
-                  setTemplateId(template.id);
-                  setIsGenerating(false);
+                    setIsGenerating(true);
+                    const template = await generateTemplate(firstPrompt);
+                    setTemplateId(template.id);
+                    setIsGenerating(false);
                   })();
                 }}
               >
                 {isGenerating ? "Generating…" : "Generate template"}
               </Button>
             </div>
-            <p className="m-0 text-lg opacity-70">生成会调用 ACP agent，并参考内置 templates、CLI 命令范式和成员配置约束。</p>
+            <p className="m-0 text-sm text-[var(--muted-foreground)]">生成会调用 ACP agent，并参考内置 templates、CLI 命令范式和成员配置约束。</p>
             <div className="flex flex-wrap gap-2">
               {templates
                 .find((template) => template.id === templateId)

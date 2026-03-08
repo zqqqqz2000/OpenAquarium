@@ -31,9 +31,9 @@ export function MessageBubble(props: {
   const transportIcon =
     message.transport === "direct" ? <Lock size={14} /> : message.transport === "watch-digest" ? <PencilLine size={14} /> : <Megaphone size={14} />;
   const cardToneClass = isUser
-    ? "bg-[var(--postit)] ml-auto"
+    ? "ml-auto bg-[color-mix(in_srgb,var(--accent)_6%,white)]"
     : isSystem
-      ? "bg-[color-mix(in_srgb,var(--blue)_12%,white)]"
+      ? "bg-[color-mix(in_srgb,var(--blue)_10%,white)]"
       : "bg-white";
   const statusBadgeTone = message.status === "interrupted" ? "correction" : "blueprint";
 
@@ -55,7 +55,7 @@ export function MessageBubble(props: {
             </div>
           )}
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 text-lg">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
               <span className="truncate">{message.author.label}</span>
               <Badge tone={message.transport === "watch-digest" ? "correction" : "paper"} className="gap-1 px-2 py-0.5 text-[10px]">
                 {transportIcon}
@@ -72,17 +72,17 @@ export function MessageBubble(props: {
                 </Badge>
               ) : null}
             </div>
-            <p className="m-0 text-sm uppercase tracking-[0.18em] opacity-50">{formatTime(message.createdAt)}</p>
+            <p className="m-0 text-xs uppercase tracking-[0.18em] text-[var(--muted-foreground)]">{formatTime(message.createdAt)}</p>
           </div>
         </div>
       </header>
-      <p className="m-0 whitespace-pre-wrap text-[1.15rem] leading-7">{message.content}</p>
+      <p className="m-0 whitespace-pre-wrap text-sm leading-6">{message.content}</p>
 
       {(recipientHandles.length > 0 || handlerSummaries.length > 0 || mentionedHandles.length > 0) ? (
         <div className="flex flex-col gap-2">
           {recipientHandles.length > 0 ? (
             <footer className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-[0.85rem] uppercase tracking-[0.16em] opacity-55">To</span>
+              <span className="text-[0.7rem] font-medium uppercase tracking-[0.16em] text-[var(--muted-foreground)]">To</span>
               {recipientHandles.map((handle) => (
                 <Badge key={`recipient-${handle}`} tone="paper" className="px-2 py-0.5 text-[10px]">
                   @{handle}
@@ -93,7 +93,7 @@ export function MessageBubble(props: {
 
           {handlerSummaries.length > 0 ? (
             <footer className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-[0.85rem] uppercase tracking-[0.16em] opacity-55">Handled by</span>
+              <span className="text-[0.7rem] font-medium uppercase tracking-[0.16em] text-[var(--muted-foreground)]">Handled by</span>
               {handlerSummaries.map((handler) => (
                 <Badge
                   key={handler.taskId}
@@ -120,7 +120,7 @@ export function MessageBubble(props: {
           ) : null}
         </div>
       ) : null}
-      {isSystem ? <div className="pointer-events-none absolute -right-2 -top-2 h-5 w-5 rounded-full border-[3px] border-[var(--ink)] bg-[var(--accent)]" /> : null}
+      {isSystem ? <div className="pointer-events-none absolute -right-2 -top-2 h-3 w-3 rounded-full bg-[var(--accent)]" /> : null}
     </article>
   );
 }

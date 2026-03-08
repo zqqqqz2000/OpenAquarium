@@ -1,5 +1,3 @@
-import "@fontsource/kalam/700.css";
-import "@fontsource/patrick-hand";
 import "@/styles/globals.css";
 
 import { StrictMode } from "react";
@@ -23,4 +21,3 @@ createRoot(rootElement).render(
     </QueryClientProvider>
   </StrictMode>,
 );
-

@@ -40,21 +40,21 @@ export function MemberAvatar(props: {
         className={cn(
           "member-avatar-frame relative flex shrink-0 items-center justify-center",
           compact ? "h-12 w-12" : "h-14 w-14",
-          active && "-rotate-2",
+          active && "ring-2 ring-[var(--accent)]/20 ring-offset-2 ring-offset-white",
           toneClasses[member.accentTone],
         )}
         style={wobbly.sm}
       >
-        <AvatarPrimitive.Fallback className="text-xl font-bold">{initials || <Bot size={20} strokeWidth={2.8} />}</AvatarPrimitive.Fallback>
+        <AvatarPrimitive.Fallback className="text-sm font-semibold">{initials || <Bot size={20} strokeWidth={2.2} />}</AvatarPrimitive.Fallback>
       </AvatarPrimitive.Root>
       {!compact ? (
         <span className="min-w-0">
-          <span className="flex items-center gap-2 text-xl">
+          <span className="flex items-center gap-2 text-base font-semibold">
             {member.name}
             {member.status === "running" ? <Radio size={16} className="text-[var(--accent)]" /> : null}
             {member.observeAllRoomMessages ? <Eye size={16} className="text-[var(--blue)]" /> : null}
           </span>
-          <span className="block text-base opacity-70">@{member.handle}</span>
+          <span className="block text-sm text-[var(--muted-foreground)]">@{member.handle}</span>
         </span>
       ) : null}
     </Root>
