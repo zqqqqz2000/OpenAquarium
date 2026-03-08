@@ -1,10 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, type CSSProperties } from "react";
 
 import { useNavigate } from "@tanstack/react-router";
 
 import type { Room } from "@/domain/model";
 import { ChatPane } from "@/components/chat/chat-pane";
+import { getRoomGridColumns } from "@/lib/shell-panels";
 import { Sidebar } from "@/components/layout/sidebar";
+import { useShellPanels } from "@/components/layout/use-shell-panels";
 import { MemberPanel } from "@/components/members/member-panel";
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
@@ -23,6 +25,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const updateMemberConfig = useWorkspaceStore((state) => state.updateMemberConfig);
   const setEntryMember = useWorkspaceStore((state) => state.setEntryMember);
   const upsertWatcher = useWorkspaceStore((state) => state.upsertWatcher);
+  const { leftCollapsed, rightCollapsed, toggleLeftCollapsed, toggleRightCollapsed } = useShellPanels();
 
   useEffect(() => {
     if (projectId && roomId) {
@@ -81,10 +84,20 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     });
   };
 
+  const gridColumns = getRoomGridColumns({
+    leftCollapsed,
+    rightCollapsed,
+  });
+  const gridStyle = {
+    "--oa-left-panel": gridColumns.leftPanel,
+    "--oa-right-panel": gridColumns.rightPanel,
+  } as CSSProperties;
+
   return (
     <>
-      <div className="room-grid">
+      <div className="room-grid" style={gridStyle}>
         <Sidebar
+          collapsed={leftCollapsed}
           projects={projects}
           roomsByProject={roomsByProject}
           activeProjectId={selectedProjectId}
@@ -92,8 +105,11 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
           connected={connected}
           loading={loading}
+          onToggleCollapsed={toggleLeftCollapsed}
         />
         <ChatPane
+          leftSidebarCollapsed={leftCollapsed}
+          rightSidebarCollapsed={rightCollapsed}
           snapshot={snapshot}
           room={room}
           template={template}
@@ -101,8 +117,11 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           selectedMemberId={selectedMember?.id}
           onOpenMember={openMemberStudio}
           onSend={(content, directMemberId) => sendUserMessage(content, directMemberId)}
+          onToggleLeftSidebar={toggleLeftCollapsed}
+          onToggleRightSidebar={toggleRightCollapsed}
         />
         <MemberPanel
+          collapsed={rightCollapsed}
           snapshot={snapshot}
           room={room}
           members={members}
@@ -110,6 +129,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           onSelectMember={selectMember}
           onOpenStudio={openMemberStudio}
           onRunWatcher={(watcherId) => void runWatcher(watcherId)}
+          onToggleCollapsed={toggleRightCollapsed}
         />
       </div>
       <MemberStudioDialog

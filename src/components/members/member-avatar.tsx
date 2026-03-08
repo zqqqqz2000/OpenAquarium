@@ -1,15 +1,9 @@
-import * as AvatarPrimitive from "@radix-ui/react-avatar";
 import { Bot, Eye, Radio } from "lucide-react";
 
 import type { TeamMember } from "@/domain/model";
-import { cn, wobbly } from "@/lib/utils";
-
-const toneClasses: Record<TeamMember["accentTone"], string> = {
-  paper: "bg-white",
-  postit: "bg-[var(--postit)]",
-  blueprint: "bg-[color-mix(in_srgb,var(--blue)_16%,white)]",
-  correction: "bg-[color-mix(in_srgb,var(--accent)_14%,white)]",
-};
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { cn } from "@/lib/utils";
+import { surfaceToneClass } from "@/lib/ui-tone";
 
 export function MemberAvatar(props: {
   member: TeamMember;
@@ -36,25 +30,26 @@ export function MemberAvatar(props: {
       onClick={onClick}
       {...(onClick ? { type: "button" as const } : {})}
     >
-      <AvatarPrimitive.Root
+      <Avatar
         className={cn(
-          "member-avatar-frame relative flex shrink-0 items-center justify-center",
-          compact ? "h-12 w-12" : "h-14 w-14",
-          active && "ring-2 ring-[var(--accent)]/20 ring-offset-2 ring-offset-white",
-          toneClasses[member.accentTone],
+          "shrink-0 ring-1 ring-border",
+          compact ? "size-12" : "size-14",
+          surfaceToneClass(member.accentTone),
+          active && "ring-2 ring-ring/50 ring-offset-2 ring-offset-background",
         )}
-        style={wobbly.sm}
       >
-        <AvatarPrimitive.Fallback className="text-sm font-semibold">{initials || <Bot size={20} strokeWidth={2.2} />}</AvatarPrimitive.Fallback>
-      </AvatarPrimitive.Root>
+        <AvatarFallback className="bg-transparent text-sm font-semibold text-foreground">
+          {initials || <Bot size={20} strokeWidth={2.2} />}
+        </AvatarFallback>
+      </Avatar>
       {!compact ? (
         <span className="min-w-0">
           <span className="flex items-center gap-2 text-base font-semibold">
             {member.name}
-            {member.status === "running" ? <Radio size={16} className="text-[var(--accent)]" /> : null}
-            {member.observeAllRoomMessages ? <Eye size={16} className="text-[var(--blue)]" /> : null}
+            {member.status === "running" ? <Radio size={16} className="text-[color:var(--tone-blueprint-foreground)]" /> : null}
+            {member.observeAllRoomMessages ? <Eye size={16} className="text-[color:var(--tone-blueprint-foreground)]" /> : null}
           </span>
-          <span className="block text-sm text-[var(--muted-foreground)]">@{member.handle}</span>
+          <span className="block text-sm text-muted-foreground">@{member.handle}</span>
         </span>
       ) : null}
     </Root>

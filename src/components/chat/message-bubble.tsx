@@ -2,9 +2,11 @@ import { AtSign, Cpu, Lock, Megaphone, PencilLine, UserRound } from "lucide-reac
 
 import type { ChatMessage, TeamMember } from "@/domain/model";
 import type { ContextBadge, MessageHandlerSummary } from "@/lib/message-feed";
-import { Badge } from "@/components/ui/badge";
 import { MemberAvatar } from "@/components/members/member-avatar";
-import { cn, formatTime, wobbly } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { badgeToneProps, messageStatusBadgeProps, surfaceToneClass } from "@/lib/ui-tone";
+import { cn, formatTime } from "@/lib/utils";
 
 export function MessageBubble(props: {
   message: ChatMessage;
@@ -30,97 +32,114 @@ export function MessageBubble(props: {
     message.transport === "direct" ? "Direct" : message.transport === "watch-digest" ? "Watcher" : "Room";
   const transportIcon =
     message.transport === "direct" ? <Lock size={14} /> : message.transport === "watch-digest" ? <PencilLine size={14} /> : <Megaphone size={14} />;
-  const cardToneClass = isUser
-    ? "ml-auto bg-[color-mix(in_srgb,var(--accent)_6%,white)]"
-    : isSystem
-      ? "bg-[color-mix(in_srgb,var(--blue)_10%,white)]"
-      : "bg-white";
-  const statusBadgeTone = message.status === "interrupted" ? "correction" : "blueprint";
+  const transportBadge =
+    message.transport === "watch-digest"
+      ? badgeToneProps("correction")
+      : badgeToneProps("paper");
+  const statusBadge = messageStatusBadgeProps(message.status);
 
   return (
-    <article
-      className={cn("paper-card relative flex max-w-[min(100%,58rem)] flex-col gap-3 p-4", cardToneClass)}
-      style={wobbly.bubble}
+    <Card
+      className={cn(
+        "relative max-w-[min(100%,58rem)] border border-border shadow-sm",
+        isUser && cn("ml-auto", surfaceToneClass("blueprint")),
+        isSystem && cn(surfaceToneClass("paper"), "border-l-4 border-l-[color:var(--tone-blueprint-border)]"),
+      )}
     >
-      <header className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          {authorMember ? (
-            <MemberAvatar member={authorMember} compact onClick={onAuthorClick} />
-          ) : (
-            <div
-              className="rough-frame flex h-12 w-12 shrink-0 items-center justify-center bg-white"
-              style={wobbly.sm}
-            >
-              {isUser ? <UserRound size={18} /> : <Cpu size={18} />}
-            </div>
-          )}
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-              <span className="truncate">{message.author.label}</span>
-              <Badge tone={message.transport === "watch-digest" ? "correction" : "paper"} className="gap-1 px-2 py-0.5 text-[10px]">
-                {transportIcon}
-                {transportLabel}
-              </Badge>
-              {contextBadges.map((badge) => (
-                <Badge key={badge.id} tone={badge.tone} className="px-2 py-0.5 text-[10px]">
-                  {badge.label}
+      <CardContent className="flex flex-col gap-3 p-4">
+        <header className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            {authorMember ? (
+              <MemberAvatar member={authorMember} compact onClick={onAuthorClick} />
+            ) : (
+              <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-border bg-card">
+                {isUser ? <UserRound size={18} /> : <Cpu size={18} />}
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                <span className="truncate">{message.author.label}</span>
+                <Badge variant={transportBadge.variant} className={cn("gap-1 px-2 py-0.5 text-[10px]", transportBadge.className)}>
+                  {transportIcon}
+                  {transportLabel}
                 </Badge>
-              ))}
-              {message.status !== "sent" ? (
-                <Badge tone={statusBadgeTone} className="px-2 py-0.5 text-[10px]">
-                  {message.status}
-                </Badge>
-              ) : null}
+                {contextBadges.map((badge) => {
+                  const toneBadge = badgeToneProps(badge.tone);
+
+                  return (
+                    <Badge key={badge.id} variant={toneBadge.variant} className={cn("px-2 py-0.5 text-[10px]", toneBadge.className)}>
+                      {badge.label}
+                    </Badge>
+                  );
+                })}
+                {message.status !== "sent" ? (
+                  <Badge variant={statusBadge.variant} className={cn("px-2 py-0.5 text-[10px]", statusBadge.className)}>
+                    {message.status}
+                  </Badge>
+                ) : null}
+              </div>
+              <p className="m-0 text-xs uppercase tracking-[0.18em] text-muted-foreground">{formatTime(message.createdAt)}</p>
             </div>
-            <p className="m-0 text-xs uppercase tracking-[0.18em] text-[var(--muted-foreground)]">{formatTime(message.createdAt)}</p>
           </div>
-        </div>
-      </header>
-      <p className="m-0 whitespace-pre-wrap text-sm leading-6">{message.content}</p>
+        </header>
+        <p className="m-0 whitespace-pre-wrap text-sm leading-6">{message.content}</p>
 
-      {(recipientHandles.length > 0 || handlerSummaries.length > 0 || mentionedHandles.length > 0) ? (
-        <div className="flex flex-col gap-2">
-          {recipientHandles.length > 0 ? (
-            <footer className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-[0.7rem] font-medium uppercase tracking-[0.16em] text-[var(--muted-foreground)]">To</span>
-              {recipientHandles.map((handle) => (
-                <Badge key={`recipient-${handle}`} tone="paper" className="px-2 py-0.5 text-[10px]">
-                  @{handle}
-                </Badge>
-              ))}
-            </footer>
-          ) : null}
+        {recipientHandles.length > 0 || handlerSummaries.length > 0 || mentionedHandles.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {recipientHandles.length > 0 ? (
+              <footer className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-[0.7rem] font-medium uppercase tracking-[0.16em] text-muted-foreground">To</span>
+                {recipientHandles.map((handle) => (
+                  <Badge key={`recipient-${handle}`} variant="secondary" className="px-2 py-0.5 text-[10px]">
+                    @{handle}
+                  </Badge>
+                ))}
+              </footer>
+            ) : null}
 
-          {handlerSummaries.length > 0 ? (
-            <footer className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-[0.7rem] font-medium uppercase tracking-[0.16em] text-[var(--muted-foreground)]">Handled by</span>
-              {handlerSummaries.map((handler) => (
-                <Badge
-                  key={handler.taskId}
-                  tone={handler.status === "completed" ? "blueprint" : handler.status === "interrupted" ? "correction" : "postit"}
-                  className="gap-1 px-2 py-0.5 text-[10px]"
-                  title={handler.title}
-                >
-                  @{handler.handle}
-                  <span className="opacity-70">{handler.status}</span>
-                </Badge>
-              ))}
-            </footer>
-          ) : null}
+            {handlerSummaries.length > 0 ? (
+              <footer className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-[0.7rem] font-medium uppercase tracking-[0.16em] text-muted-foreground">Handled by</span>
+                {handlerSummaries.map((handler) => {
+                  const handlerBadge =
+                    handler.status === "completed"
+                      ? badgeToneProps("blueprint")
+                      : handler.status === "interrupted"
+                        ? badgeToneProps("correction")
+                        : badgeToneProps("postit");
 
-          {mentionedHandles.length > 0 ? (
-            <footer className="flex flex-wrap items-center gap-2 text-sm">
-              <AtSign size={14} />
-              {mentionedHandles.map((handle) => (
-                <Badge key={`mention-${handle}`} tone="postit" className="px-2 py-0.5 text-[10px]">
-                  @{handle}
-                </Badge>
-              ))}
-            </footer>
-          ) : null}
-        </div>
-      ) : null}
-      {isSystem ? <div className="pointer-events-none absolute -right-2 -top-2 h-3 w-3 rounded-full bg-[var(--accent)]" /> : null}
-    </article>
+                  return (
+                    <Badge
+                      key={handler.taskId}
+                      variant={handlerBadge.variant}
+                      className={cn("gap-1 px-2 py-0.5 text-[10px]", handlerBadge.className)}
+                      title={handler.title}
+                    >
+                      @{handler.handle}
+                      <span className="opacity-70">{handler.status}</span>
+                    </Badge>
+                  );
+                })}
+              </footer>
+            ) : null}
+
+            {mentionedHandles.length > 0 ? (
+              <footer className="flex flex-wrap items-center gap-2 text-sm">
+                <AtSign size={14} />
+                {mentionedHandles.map((handle) => (
+                  <Badge
+                    key={`mention-${handle}`}
+                    variant="outline"
+                    className="border-[color:var(--tone-postit-border)] bg-[var(--tone-postit-badge)] px-2 py-0.5 text-[10px] text-[var(--tone-postit-foreground)]"
+                  >
+                    @{handle}
+                  </Badge>
+                ))}
+              </footer>
+            ) : null}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }

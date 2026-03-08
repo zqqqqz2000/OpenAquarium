@@ -1,20 +1,34 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import { startTransition, useState } from "react";
 
-import { Plus, X } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
 import type { TeamTemplate } from "@/domain/model";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { wobbly } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { badgeToneProps } from "@/lib/ui-tone";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
 
-export function CreateProjectDialog(props: { templates: TeamTemplate[] }) {
-  const { templates } = props;
+export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerClassName?: string }) {
+  const { templates, triggerClassName } = props;
   const navigate = useNavigate();
   const createProject = useWorkspaceStore((state) => state.createProject);
   const generateTemplate = useWorkspaceStore((state) => state.generateTemplate);
@@ -23,52 +37,49 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[] }) {
   const [firstPrompt, setFirstPrompt] = useState("先定义一个支持 ACP 和多 member 配置的 agent-team 产品。");
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [isGenerating, setIsGenerating] = useState(false);
+  const selectedTemplate = templates.find((template) => template.id === templateId);
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>
-        <Button>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button className={triggerClassName}>
           <Plus size={18} />
           New project
         </Button>
-      </Dialog.Trigger>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/25 backdrop-blur-[1px]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,720px)] -translate-x-1/2 -translate-y-1/2">
-          <Card className="flex flex-col gap-4 p-5 md:p-6" tone="paper">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <Dialog.Title className="m-0 text-2xl font-semibold tracking-tight">Create project</Dialog.Title>
-                <Dialog.Description className="m-0 text-sm text-[var(--muted-foreground)]">room 名会按首条问题自动生成，template 第一次固定。</Dialog.Description>
-              </div>
-              <Dialog.Close asChild>
-                <button className="rounded-md" type="button">
-                  <X size={22} />
-                </button>
-              </Dialog.Close>
-            </div>
+      </DialogTrigger>
+      <DialogContent className="w-[min(92vw,720px)] max-w-[720px] sm:max-w-[720px]">
+        <DialogHeader>
+          <DialogTitle className="text-2xl font-semibold tracking-tight">Create project</DialogTitle>
+          <DialogDescription>room 名会按首条问题自动生成，template 第一次固定。</DialogDescription>
+        </DialogHeader>
+        <Card className="border border-transparent shadow-none">
+          <CardContent className="flex flex-col gap-4 p-0">
             <label className="flex flex-col gap-2">
-              <span className="text-xl">Project name</span>
+              <span className="text-sm font-medium">Project name</span>
               <Input value={projectName} onChange={(event) => setProjectName(event.currentTarget.value)} />
             </label>
             <label className="flex flex-col gap-2">
-              <span className="text-xl">First user prompt</span>
-              <Textarea value={firstPrompt} onChange={(event) => setFirstPrompt(event.currentTarget.value)} minRows={5} />
+              <span className="text-sm font-medium">First user prompt</span>
+              <Textarea
+                className="min-h-28"
+                value={firstPrompt}
+                onChange={(event) => setFirstPrompt(event.currentTarget.value)}
+              />
             </label>
             <label className="flex flex-col gap-2">
-              <span className="text-xl">Team template</span>
-              <select
-                className="rough-input h-10 px-3 text-sm"
-                style={wobbly.sm}
-                value={templateId}
-                onChange={(event) => setTemplateId(event.currentTarget.value)}
-              >
-                {templates.map((template) => (
-                  <option key={template.id} value={template.id}>
-                    {template.name}
-                  </option>
-                ))}
-              </select>
+              <span className="text-sm font-medium">Team template</span>
+              <Select value={templateId} onValueChange={setTemplateId}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select a team template" />
+                </SelectTrigger>
+                <SelectContent>
+                  {templates.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      {template.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
             <div className="flex justify-end">
               <Button
@@ -87,15 +98,19 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[] }) {
                 {isGenerating ? "Generating…" : "Generate template"}
               </Button>
             </div>
-            <p className="m-0 text-sm text-[var(--muted-foreground)]">生成会调用 ACP agent，并参考内置 templates、CLI 命令范式和成员配置约束。</p>
+            <p className="m-0 text-sm text-muted-foreground">
+              生成会调用 ACP agent，并参考内置 templates、CLI 命令范式和成员配置约束。
+            </p>
             <div className="flex flex-wrap gap-2">
-              {templates
-                .find((template) => template.id === templateId)
-                ?.members.map((member) => (
-                  <Badge key={member.id} tone={member.accentTone}>
+              {selectedTemplate?.members.map((member) => {
+                const toneBadge = badgeToneProps(member.accentTone);
+
+                return (
+                  <Badge key={member.id} variant={toneBadge.variant} className={toneBadge.className}>
                     @{member.handle}
                   </Badge>
-                ))}
+                );
+              })}
             </div>
             <div className="flex justify-end">
               <Button
@@ -122,9 +137,9 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[] }) {
                 Create room
               </Button>
             </div>
-          </Card>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+          </CardContent>
+        </Card>
+      </DialogContent>
+    </Dialog>
   );
 }

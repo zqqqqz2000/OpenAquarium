@@ -37,4 +37,10 @@ export default [
       "@typescript-eslint/unbound-method": "off",
     },
   },
+  {
+    files: ["src/components/ui/**/*.tsx"],
+    rules: {
+      "react-refresh/only-export-components": "off",
+    },
+  },
 ];
