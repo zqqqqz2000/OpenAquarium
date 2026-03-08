@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+
 import { Bot, Info, Sparkles } from "lucide-react";
 
 import type { Room, TeamMember, TeamTemplate, WorkspaceSnapshot } from "@/domain/model";
@@ -24,30 +26,52 @@ import { getMessageHandlers, getMessageMentionHandles, getMessageRecipientHandle
 
 export function ChatPane(props: {
   leftSidebarCollapsed: boolean;
-  rightSidebarCollapsed: boolean;
   snapshot: WorkspaceSnapshot;
   room?: Room;
   template?: TeamTemplate;
   members: TeamMember[];
   selectedMemberId?: string;
+  connected: boolean;
+  error?: string;
   onOpenMember: (memberId: string) => void;
   onSend: (content: string, directMemberId?: string) => void | Promise<void>;
   onToggleLeftSidebar: () => void;
-  onToggleRightSidebar: () => void;
 }) {
   const {
     leftSidebarCollapsed,
-    rightSidebarCollapsed,
     snapshot,
     room,
     template,
     members,
     selectedMemberId,
+    connected,
+    error,
     onOpenMember,
     onSend,
     onToggleLeftSidebar,
-    onToggleRightSidebar,
   } = props;
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const previousRoomIdRef = useRef<string | undefined>(undefined);
+  const roomId = room?.id;
+  const latestMessageId = roomId ? (snapshot.messageOrderByRoom[roomId] ?? []).at(-1) : undefined;
+
+  useEffect(() => {
+    if (!roomId) {
+      return;
+    }
+
+    const container = transcriptRef.current;
+    if (!container) {
+      return;
+    }
+
+    const roomChanged = previousRoomIdRef.current !== roomId;
+    previousRoomIdRef.current = roomId;
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: roomChanged ? "auto" : "smooth",
+    });
+  }, [latestMessageId, roomId]);
 
   if (!room) {
     const readyBadge = badgeToneProps("paper");
@@ -56,12 +80,7 @@ export function ChatPane(props: {
 
     return (
       <main className="flex min-h-screen min-w-0 flex-col gap-4 px-6 py-10">
-        <ShellToolbar
-          leftSidebarCollapsed={leftSidebarCollapsed}
-          rightSidebarCollapsed={rightSidebarCollapsed}
-          onToggleLeftSidebar={onToggleLeftSidebar}
-          onToggleRightSidebar={onToggleRightSidebar}
-        />
+        <ShellToolbar leftSidebarCollapsed={leftSidebarCollapsed} onToggleLeftSidebar={onToggleLeftSidebar} />
         <Card className="w-full max-w-2xl border border-border shadow-sm">
           <CardContent className="flex flex-col gap-4 p-8">
             <div className="space-y-2">
@@ -94,12 +113,20 @@ export function ChatPane(props: {
 
   return (
     <main className="flex min-h-screen min-w-0 flex-col gap-5 border-x border-border/70 bg-background/70 px-4 py-5 md:px-6">
-      <ShellToolbar
-        leftSidebarCollapsed={leftSidebarCollapsed}
-        rightSidebarCollapsed={rightSidebarCollapsed}
-        onToggleLeftSidebar={onToggleLeftSidebar}
-        onToggleRightSidebar={onToggleRightSidebar}
-      />
+      <ShellToolbar leftSidebarCollapsed={leftSidebarCollapsed} onToggleLeftSidebar={onToggleLeftSidebar} />
+      {!connected || error ? (
+        <Card className="border border-destructive/30 bg-destructive/5 shadow-sm">
+          <CardContent className="flex flex-col gap-2 p-4">
+            <p className="m-0 text-sm font-medium">Runtime offline</p>
+            <p className="m-0 text-sm text-muted-foreground">
+              当前聊天依赖本地 runtime 服务；如果它没启动，发消息、建 room、改成员配置都不会生效。
+            </p>
+            <p className="m-0 text-xs text-muted-foreground">现在页面里展示的是本地 seed workspace，不是已经连上 runtime 的真实状态。</p>
+            <p className="m-0 font-mono text-xs text-muted-foreground">bun run server</p>
+            {error ? <p className="m-0 text-xs text-destructive">{error}</p> : null}
+          </CardContent>
+        </Card>
+      ) : null}
       <Card className="border border-border shadow-sm">
         <CardContent className="flex flex-col gap-4 p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -178,7 +205,7 @@ export function ChatPane(props: {
             <RoomInfoPopover room={room} template={template} members={members} />
           </div>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+        <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
           {messages.map((message) => {
             const authorMember = members.find((member) => member.id === message.author.id);
 
@@ -205,25 +232,20 @@ export function ChatPane(props: {
         </div>
       </section>
 
-      <ChatComposer members={members} onSend={onSend} />
+      <ChatComposer connected={connected} error={error} members={members} onSend={onSend} />
     </main>
   );
 }
 
 function ShellToolbar(props: {
   leftSidebarCollapsed: boolean;
-  rightSidebarCollapsed: boolean;
   onToggleLeftSidebar: () => void;
-  onToggleRightSidebar: () => void;
 }) {
-  const { leftSidebarCollapsed, rightSidebarCollapsed, onToggleLeftSidebar, onToggleRightSidebar } = props;
+  const { leftSidebarCollapsed, onToggleLeftSidebar } = props;
 
   return (
-    <div className="flex items-center justify-end gap-2">
+    <div className="flex items-center justify-start gap-2">
       <PanelToggleButton collapsed={leftSidebarCollapsed} side="left" onToggle={onToggleLeftSidebar} />
-      <div className="hidden xl:block">
-        <PanelToggleButton collapsed={rightSidebarCollapsed} side="right" onToggle={onToggleRightSidebar} />
-      </div>
     </div>
   );
 }

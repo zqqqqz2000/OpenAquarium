@@ -181,16 +181,12 @@
   display: grid;
   min-height: 100vh;
   width: 100%;
-  grid-template-columns: var(--oa-left-panel, minmax(17rem, 19rem)) minmax(0, 1fr) var(--oa-right-panel, minmax(19rem, 21rem));
+  grid-template-columns: var(--oa-left-panel, minmax(17rem, 19rem)) minmax(0, 1fr);
 }
 
 @media (max-width: 1200px) {
   .room-grid {
     grid-template-columns: var(--oa-left-panel, minmax(15rem, 17rem)) minmax(0, 1fr);
-  }
-
-  .member-panel-shell {
-    display: none;
   }
 }
 

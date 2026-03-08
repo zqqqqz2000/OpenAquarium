@@ -42,6 +42,22 @@ export class WorkspaceRuntimeClient {
     );
   }
 
+  async createRoom(input: { projectId: string; firstPrompt: string; templateId: string }): Promise<{
+    snapshot: WorkspaceSnapshot;
+    roomId: string;
+  }> {
+    return parseJson(
+      await fetch(`${this.baseUrl}/api/projects/${input.projectId}/rooms`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          firstPrompt: input.firstPrompt,
+          templateId: input.templateId,
+        }),
+      }),
+    );
+  }
+
   async sendUserMessage(input: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot> {
     const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
       await fetch(`${this.baseUrl}/api/rooms/${input.roomId}/messages`, {
@@ -142,18 +158,37 @@ export class WorkspaceRuntimeClient {
   }
 
   connect(onSnapshot: (snapshot: WorkspaceSnapshot) => void, onConnectionChange: (connected: boolean) => void): () => void {
-    const socket = new WebSocket(resolveWebSocketUrl(this.baseUrl));
-    socket.addEventListener("open", () => onConnectionChange(true));
-    socket.addEventListener("close", () => onConnectionChange(false));
-    socket.addEventListener("message", (event) => {
-      const payload = JSON.parse(event.data as string) as { type: "snapshot"; snapshot: WorkspaceSnapshot };
-      if (payload.type === "snapshot") {
-        onSnapshot(payload.snapshot);
+    let socket: WebSocket | undefined;
+    let disposed = false;
+    const timer = window.setTimeout(() => {
+      if (disposed) {
+        return;
       }
-    });
+
+      socket = new WebSocket(resolveWebSocketUrl(this.baseUrl));
+      socket.addEventListener("open", () => onConnectionChange(true));
+      socket.addEventListener("close", () => {
+        if (!disposed) {
+          onConnectionChange(false);
+        }
+      });
+      socket.addEventListener("error", () => {
+        if (!disposed) {
+          onConnectionChange(false);
+        }
+      });
+      socket.addEventListener("message", (event) => {
+        const payload = JSON.parse(event.data as string) as { type: "snapshot"; snapshot: WorkspaceSnapshot };
+        if (payload.type === "snapshot") {
+          onSnapshot(payload.snapshot);
+        }
+      });
+    }, 0);
 
     return () => {
-      socket.close();
+      disposed = true;
+      window.clearTimeout(timer);
+      socket?.close();
     };
   }
 }

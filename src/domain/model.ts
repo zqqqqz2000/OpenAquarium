@@ -163,6 +163,12 @@ export interface CreateProjectInput {
   templateId: TemplateId;
 }
 
+export interface CreateRoomInput {
+  projectId: ProjectId;
+  firstPrompt: string;
+  templateId: TemplateId;
+}
+
 export interface PostUserMessageInput {
   roomId: RoomId;
   content: string;

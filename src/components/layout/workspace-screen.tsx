@@ -1,13 +1,12 @@
-import { useEffect, type CSSProperties } from "react";
+import { useEffect, type CSSProperties, type PointerEvent } from "react";
 
 import { useNavigate } from "@tanstack/react-router";
 
 import type { Room } from "@/domain/model";
 import { ChatPane } from "@/components/chat/chat-pane";
-import { getRoomGridColumns } from "@/lib/shell-panels";
+import { clampLeftPanelWidth, getRoomGridColumns } from "@/lib/shell-panels";
 import { Sidebar } from "@/components/layout/sidebar";
 import { useShellPanels } from "@/components/layout/use-shell-panels";
-import { MemberPanel } from "@/components/members/member-panel";
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
 
@@ -17,6 +16,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const snapshot = useWorkspaceStore((state) => state.snapshot);
   const loading = useWorkspaceStore((state) => state.loading);
   const connected = useWorkspaceStore((state) => state.connected);
+  const error = useWorkspaceStore((state) => state.error);
   const selectRoom = useWorkspaceStore((state) => state.selectRoom);
   const selectMember = useWorkspaceStore((state) => state.selectMember);
   const sendUserMessage = useWorkspaceStore((state) => state.sendUserMessage);
@@ -25,7 +25,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const updateMemberConfig = useWorkspaceStore((state) => state.updateMemberConfig);
   const setEntryMember = useWorkspaceStore((state) => state.setEntryMember);
   const upsertWatcher = useWorkspaceStore((state) => state.upsertWatcher);
-  const { leftCollapsed, rightCollapsed, toggleLeftCollapsed, toggleRightCollapsed } = useShellPanels();
+  const { leftCollapsed, leftWidth, toggleLeftCollapsed, setLeftWidth } = useShellPanels();
 
   useEffect(() => {
     if (projectId && roomId) {
@@ -46,7 +46,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const template = room ? snapshot.templates[room.templateId] : undefined;
   const members = room ? room.memberIds.map((memberId) => snapshot.members[memberId]) : [];
   const routedMember = memberId ? members.find((candidate) => candidate.id === memberId) : undefined;
-  const selectedMember = routedMember ?? (snapshot.selection.memberId ? snapshot.members[snapshot.selection.memberId] : undefined);
+  const selectedMemberId = routedMember?.id ?? snapshot.selection.memberId;
   const projects = snapshot.projectOrder.map((candidate) => snapshot.projects[candidate]);
   const roomsByProject = Object.fromEntries(
     snapshot.projectOrder.map((candidate) => [
@@ -84,13 +84,30 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     });
   };
 
+  const startSidebarResize = (event: PointerEvent<HTMLDivElement>): void => {
+    const startX = event.clientX;
+    const startWidth = leftWidth;
+
+    const handlePointerMove = (moveEvent: globalThis.PointerEvent): void => {
+      const nextWidth = clampLeftPanelWidth(startWidth + moveEvent.clientX - startX);
+      setLeftWidth(nextWidth);
+    };
+
+    const handlePointerUp = (): void => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
+
   const gridColumns = getRoomGridColumns({
     leftCollapsed,
-    rightCollapsed,
+    leftWidth,
   });
   const gridStyle = {
     "--oa-left-panel": gridColumns.leftPanel,
-    "--oa-right-panel": gridColumns.rightPanel,
   } as CSSProperties;
 
   return (
@@ -104,32 +121,22 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           activeRoomId={selectedRoomId}
           templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
           connected={connected}
+          error={error}
           loading={loading}
-          onToggleCollapsed={toggleLeftCollapsed}
+          onResizeStart={startSidebarResize}
         />
         <ChatPane
           leftSidebarCollapsed={leftCollapsed}
-          rightSidebarCollapsed={rightCollapsed}
           snapshot={snapshot}
           room={room}
           template={template}
           members={members}
-          selectedMemberId={selectedMember?.id}
+          selectedMemberId={selectedMemberId}
+          connected={connected}
+          error={error}
           onOpenMember={openMemberStudio}
           onSend={(content, directMemberId) => sendUserMessage(content, directMemberId)}
           onToggleLeftSidebar={toggleLeftCollapsed}
-          onToggleRightSidebar={toggleRightCollapsed}
-        />
-        <MemberPanel
-          collapsed={rightCollapsed}
-          snapshot={snapshot}
-          room={room}
-          members={members}
-          selectedMember={selectedMember}
-          onSelectMember={selectMember}
-          onOpenStudio={openMemberStudio}
-          onRunWatcher={(watcherId) => void runWatcher(watcherId)}
-          onToggleCollapsed={toggleRightCollapsed}
         />
       </div>
       <MemberStudioDialog

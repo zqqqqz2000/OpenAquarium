@@ -2,6 +2,7 @@ import type {
   ChatAuthor,
   ChatMessage,
   CompleteTaskInput,
+  CreateRoomInput,
   CreateProjectInput,
   MemberId,
   MemberTask,
@@ -292,14 +293,45 @@ export function createProjectWithRoom(
   context: MutationContext,
 ): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
-  const template = snapshot.templates[input.templateId];
+  const now = context.now();
+  const projectId = context.createId("project");
 
+  snapshot.projects[projectId] = {
+    id: projectId,
+    name: input.projectName.trim(),
+    createdAt: now,
+  };
+  snapshot.projectOrder.push(projectId);
+  snapshot.roomOrderByProject[projectId] = [];
+
+  return createRoomInProject(
+    snapshot,
+    {
+      projectId,
+      firstPrompt: input.firstPrompt,
+      templateId: input.templateId,
+    },
+    context,
+  );
+}
+
+export function createRoomInProject(
+  current: WorkspaceSnapshot,
+  input: CreateRoomInput,
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const template = snapshot.templates[input.templateId];
+  const project = snapshot.projects[input.projectId];
+
+  if (!project) {
+    throw new Error(`Unknown project "${input.projectId}"`);
+  }
   if (!template) {
     throw new Error(`Unknown template "${input.templateId}"`);
   }
 
   const now = context.now();
-  const projectId = context.createId("project");
   const roomId = context.createId("room");
   const roomMembers = template.members.map((blueprint) => instantiateMember(roomId, blueprint, context.createId));
   const memberIdByBlueprint = Object.fromEntries(roomMembers.map((member) => [member.blueprintId, member.id]));
@@ -308,16 +340,10 @@ export function createProjectWithRoom(
     .map((blueprint) => instantiateWatcher(roomId, memberIdByBlueprint[blueprint.id], blueprint, context.createId))
     .filter((watcher): watcher is WatchSubscription => watcher !== undefined);
 
-  snapshot.projects[projectId] = {
-    id: projectId,
-    name: input.projectName.trim(),
-    createdAt: now,
-  };
-  snapshot.projectOrder.push(projectId);
-  snapshot.roomOrderByProject[projectId] = [roomId];
+  snapshot.roomOrderByProject[input.projectId] = [...(snapshot.roomOrderByProject[input.projectId] ?? []), roomId];
   snapshot.rooms[roomId] = {
     id: roomId,
-    projectId,
+    projectId: input.projectId,
     name: deriveRoomName(input.firstPrompt),
     topic: input.firstPrompt.trim(),
     templateId: template.id,
@@ -334,7 +360,7 @@ export function createProjectWithRoom(
     snapshot.watchers[watcher.id] = watcher;
   });
   snapshot.selection = {
-    projectId,
+    projectId: input.projectId,
     roomId,
     memberId: memberIdByBlueprint[entryBlueprint.id],
   };

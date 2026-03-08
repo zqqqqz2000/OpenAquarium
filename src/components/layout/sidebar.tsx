@@ -1,9 +1,11 @@
+import type { PointerEvent as ReactPointerEvent } from "react";
+
 import { Link } from "@tanstack/react-router";
 import { FolderKanban, MessageSquareShare, Waves } from "lucide-react";
 
-import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import type { Project, Room, TeamTemplate } from "@/domain/model";
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog";
+import { CreateRoomDialog } from "@/components/projects/create-room-dialog";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,10 +20,11 @@ export function Sidebar(props: {
   activeRoomId?: string;
   templates: TeamTemplate[];
   connected: boolean;
+  error?: string;
   loading: boolean;
-  onToggleCollapsed: () => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
-  const { collapsed, projects, roomsByProject, activeProjectId, activeRoomId, templates, connected, loading, onToggleCollapsed } = props;
+  const { collapsed, projects, roomsByProject, activeProjectId, activeRoomId, templates, connected, error, loading, onResizeStart } = props;
   const connectionBadge = badgeToneProps(connected ? "blueprint" : "correction");
 
   if (collapsed) {
@@ -29,37 +32,46 @@ export function Sidebar(props: {
   }
 
   return (
-    <aside className="flex min-h-screen min-w-0 flex-col gap-5 border-r border-border/60 px-4 py-5 md:px-5">
+    <aside className="relative flex min-h-screen min-w-0 flex-col gap-5 border-r border-border/60 px-4 py-5 md:px-5">
       <Card className="border border-border shadow-sm">
         <CardContent className="flex flex-col gap-4 p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex size-12 items-center justify-center rounded-xl border border-border bg-card shadow-sm">
-                <Waves size={24} />
-              </div>
-              <div className="min-w-0">
-                <p className="m-0 truncate text-2xl font-semibold tracking-tight">OpenAquarium</p>
-                <p className="m-0 text-sm text-muted-foreground">ACP multi-agent workspace.</p>
-              </div>
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex size-12 items-center justify-center rounded-xl border border-border bg-card shadow-sm">
+              <Waves size={24} />
             </div>
-            <PanelToggleButton collapsed={false} side="left" onToggle={onToggleCollapsed} />
+            <div className="min-w-0">
+              <p className="m-0 truncate text-2xl font-semibold tracking-tight">OpenAquarium</p>
+              <p className="m-0 text-sm text-muted-foreground">ACP multi-agent workspace.</p>
+            </div>
           </div>
           <ThemeToggle className="w-full" />
-          <CreateProjectDialog templates={templates} triggerClassName="w-full justify-center" />
+          <div className="flex gap-2">
+            <CreateProjectDialog templates={templates} triggerClassName="flex-1 justify-center" />
+          </div>
           <div className="flex flex-wrap gap-2">
             <Badge variant={connectionBadge.variant} className={connectionBadge.className}>
               {connected ? "Runtime online" : "Runtime offline"}
             </Badge>
             {loading ? <Badge variant="secondary">Loading state…</Badge> : null}
           </div>
+          {!connected ? (
+            <p className="m-0 text-xs leading-5 text-muted-foreground">
+              前端会连接本地 runtime `http://127.0.0.1:4301`。如果只启动了前端而没启动服务端，就会显示 offline。
+              当前你看到的是 seed workspace。启动命令：`bun run server`
+            </p>
+          ) : null}
+          {error ? <p className="m-0 text-xs leading-5 text-destructive">{error}</p> : null}
         </CardContent>
       </Card>
 
       <Card className="border border-border shadow-sm">
         <CardContent className="flex flex-col gap-4 p-4">
-          <div className="flex items-center gap-2">
-            <FolderKanban size={20} />
-            <p className="m-0 text-xl font-semibold tracking-tight">Projects</p>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <FolderKanban size={20} />
+              <p className="m-0 text-xl font-semibold tracking-tight">Projects</p>
+            </div>
+            <CreateRoomDialog activeProjectId={activeProjectId} projects={projects} templates={templates} />
           </div>
           <div className="flex flex-col gap-4">
             {projects.map((project) => (
@@ -126,6 +138,13 @@ export function Sidebar(props: {
           </p>
         </CardContent>
       </Card>
+      <div
+        aria-hidden
+        className="absolute inset-y-0 -right-2 hidden w-4 cursor-col-resize lg:block"
+        onPointerDown={onResizeStart}
+      >
+        <div className="absolute inset-y-4 left-1/2 w-px -translate-x-1/2 rounded-full bg-border/80" />
+      </div>
     </aside>
   );
 }

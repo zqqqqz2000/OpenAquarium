@@ -17,21 +17,20 @@ describe("shell panels", () => {
   it("round-trips a valid persisted state", () => {
     const state = {
       leftCollapsed: true,
-      rightCollapsed: false,
+      leftWidth: 320,
     };
 
     expect(parseShellPanelsState(serializeShellPanelsState(state))).toEqual(state);
   });
 
-  it("returns zero-width columns for collapsed panels", () => {
+  it("returns zero-width columns for a collapsed left panel", () => {
     expect(
       getRoomGridColumns({
         leftCollapsed: true,
-        rightCollapsed: false,
+        leftWidth: 304,
       }),
     ).toEqual({
       leftPanel: "0rem",
-      rightPanel: "minmax(19rem, 21rem)",
     });
   });
 });

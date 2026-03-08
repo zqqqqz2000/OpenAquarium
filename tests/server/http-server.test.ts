@@ -119,11 +119,18 @@ describe("workspace http server", () => {
     resources.push({ runtime, close: server.close });
 
     const stateResponse = await fetch(`http://127.0.0.1:${server.port}/api/state`);
-    const statePayload = (await stateResponse.json()) as { snapshot: { selection: { roomId?: string }; rooms: Record<string, { memberIds: string[] }> } };
+    const statePayload = (await stateResponse.json()) as {
+      snapshot: {
+        selection: { projectId?: string; roomId?: string };
+        rooms: Record<string, { memberIds: string[] }>;
+      };
+    };
+    const projectId = statePayload.snapshot.selection.projectId;
     const roomId = statePayload.snapshot.selection.roomId;
+    expect(projectId).toBeDefined();
     expect(roomId).toBeDefined();
-    if (!roomId) {
-      throw new Error("Expected room id");
+    if (!projectId || !roomId) {
+      throw new Error("Expected project and room ids");
     }
     const room = statePayload.snapshot.rooms[roomId];
     expect(room).toBeDefined();
@@ -219,6 +226,20 @@ describe("workspace http server", () => {
       template: { id: string; name: string };
       snapshot: { templates: Record<string, { description: string }> };
     };
+    const createRoomResponse = await fetch(`http://127.0.0.1:${server.port}/api/projects/${projectId}/rooms`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        firstPrompt: "为同一个 project 新开一个 room",
+        templateId: "template-product-pod",
+      }),
+    });
+    const createRoomPayload = (await createRoomResponse.json()) as {
+      roomId: string;
+      snapshot: { rooms: Record<string, { projectId: string; topic: string }> };
+    };
 
     expect(contents.some((content) => content.includes("@builder"))).toBe(true);
     expect(configPayload.snapshot.members[builderId]?.provider.command).toBe("claude-code");
@@ -232,5 +253,7 @@ describe("workspace http server", () => {
     ).toBe(true);
     expect(templatePayload.template.id).toBe("template-http-generated");
     expect(templatePayload.snapshot.templates["template-http-generated"]?.description).toBe("生成一个新的协作模板");
+    expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.projectId).toBe(projectId);
+    expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.topic).toBe("为同一个 project 新开一个 room");
   });
 });

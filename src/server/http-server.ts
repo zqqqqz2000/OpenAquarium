@@ -76,6 +76,23 @@ export async function startWorkspaceHttpServer(args: {
         return;
       }
 
+      const projectRoomsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/rooms$/u);
+      if (request.method === "POST" && projectRoomsMatch) {
+        const [, projectId] = projectRoomsMatch;
+        if (!projectId) {
+          sendJson(response, 400, { error: "Missing project id" });
+          return;
+        }
+        const body = await readJson<{ firstPrompt: string; templateId: string }>(request);
+        const created = await args.runtime.createRoom({
+          projectId,
+          firstPrompt: body.firstPrompt,
+          templateId: body.templateId,
+        });
+        sendJson(response, 200, created);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/templates/generate") {
         const body = await readJson<{ brief: string }>(request);
         const template = await args.runtime.generateTemplate(body.brief);

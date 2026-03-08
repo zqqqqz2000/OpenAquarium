@@ -1,10 +1,9 @@
-import { startTransition, useState } from "react";
+import { startTransition, useMemo, useState } from "react";
 
 import { Plus } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
-import type { TeamTemplate } from "@/domain/model";
-import { Badge } from "@/components/ui/badge";
+import type { Project, TeamTemplate } from "@/domain/model";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -24,39 +23,60 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { badgeToneProps } from "@/lib/ui-tone";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
 
-export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerClassName?: string }) {
-  const { templates, triggerClassName } = props;
+export function CreateRoomDialog(props: {
+  activeProjectId?: string;
+  projects: Project[];
+  templates: TeamTemplate[];
+}) {
+  const { activeProjectId, projects, templates } = props;
   const navigate = useNavigate();
-  const createProject = useWorkspaceStore((state) => state.createProject);
-  const generateTemplate = useWorkspaceStore((state) => state.generateTemplate);
+  const createRoom = useWorkspaceStore((state) => state.createRoom);
   const [open, setOpen] = useState(false);
-  const [projectName, setProjectName] = useState("Untitled Project");
-  const [firstPrompt, setFirstPrompt] = useState("先定义一个支持 ACP 和多 member 配置的 agent-team 产品。");
+  const [projectId, setProjectId] = useState(activeProjectId ?? projects[0]?.id ?? "");
+  const [firstPrompt, setFirstPrompt] = useState("继续细化当前 project 的 agent-team 协作和实现路径。");
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
-  const [isGenerating, setIsGenerating] = useState(false);
-  const selectedTemplate = templates.find((template) => template.id === templateId);
+  const projectOptions = useMemo(() => projects, [projects]);
+  const disabled = projectOptions.length === 0;
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen && !projectId) {
+          setProjectId(activeProjectId ?? projects[0]?.id ?? "");
+        }
+      }}
+    >
       <DialogTrigger asChild>
-        <Button className={triggerClassName}>
-          <Plus size={18} />
-          New project
+        <Button size="sm" variant="secondary" disabled={disabled}>
+          <Plus size={16} />
+          New room
         </Button>
       </DialogTrigger>
       <DialogContent className="w-[min(92vw,720px)] max-w-[720px] sm:max-w-[720px]">
         <DialogHeader>
-          <DialogTitle className="text-2xl font-semibold tracking-tight">Create project</DialogTitle>
-          <DialogDescription>room 名会按首条问题自动生成，template 第一次固定。</DialogDescription>
+          <DialogTitle className="text-2xl font-semibold tracking-tight">Create room</DialogTitle>
+          <DialogDescription>在现有 project 下新开一个 room，名称会按首条问题自动生成。</DialogDescription>
         </DialogHeader>
         <Card className="border border-transparent shadow-none">
           <CardContent className="flex flex-col gap-4 p-0">
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium">Project name</span>
-              <Input value={projectName} onChange={(event) => setProjectName(event.currentTarget.value)} />
+              <span className="text-sm font-medium">Project</span>
+              <Select value={projectId} onValueChange={setProjectId}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select a project" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projectOptions.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">First user prompt</span>
@@ -81,47 +101,22 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
                 </SelectContent>
               </Select>
             </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Project note</span>
+              <Input
+                disabled
+                value={projectOptions.find((project) => project.id === projectId)?.name ?? ""}
+                placeholder="Select a project first"
+              />
+            </label>
             <div className="flex justify-end">
               <Button
-                size="sm"
-                variant="secondary"
-                disabled={isGenerating}
-                onClick={() => {
-                  void (async () => {
-                    setIsGenerating(true);
-                    try {
-                      const template = await generateTemplate(firstPrompt);
-                      setTemplateId(template.id);
-                    } finally {
-                      setIsGenerating(false);
-                    }
-                  })();
-                }}
-              >
-                {isGenerating ? "Generating…" : "Generate template"}
-              </Button>
-            </div>
-            <p className="m-0 text-sm text-muted-foreground">
-              生成会调用 ACP agent，并参考内置 templates、CLI 命令范式和成员配置约束。
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {selectedTemplate?.members.map((member) => {
-                const toneBadge = badgeToneProps(member.accentTone);
-
-                return (
-                  <Badge key={member.id} variant={toneBadge.variant} className={toneBadge.className}>
-                    @{member.handle}
-                  </Badge>
-                );
-              })}
-            </div>
-            <div className="flex justify-end">
-              <Button
+                disabled={!projectId || firstPrompt.trim().length === 0 || !templateId}
                 onClick={() => {
                   void (async () => {
                     try {
-                      const next = await createProject({
-                        projectName,
+                      const next = await createRoom({
+                        projectId,
                         firstPrompt,
                         templateId,
                       });
@@ -129,14 +124,14 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
                         void navigate({
                           to: "/projects/$projectId/rooms/$roomId",
                           params: {
-                            projectId: next.projectId,
+                            projectId,
                             roomId: next.roomId,
                           },
                         });
                       });
                       setOpen(false);
                     } catch {
-                      // Sidebar error state will explain why project creation failed.
+                      // Sidebar error state will explain why room creation failed.
                     }
                   })();
                 }}

@@ -19,6 +19,10 @@ function mergeIncomingSnapshot(current: WorkspaceSnapshot, incoming: WorkspaceSn
   };
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export interface WorkspaceRemoteStoreState {
   snapshot: WorkspaceSnapshot;
   loading: boolean;
@@ -26,6 +30,7 @@ export interface WorkspaceRemoteStoreState {
   error?: string;
   hydrate(): Promise<void>;
   createProject(input: { projectName: string; firstPrompt: string; templateId: string }): Promise<{ projectId: string; roomId: string }>;
+  createRoom(input: { projectId: string; firstPrompt: string; templateId: string }): Promise<{ roomId: string }>;
   selectRoom(projectId: string, roomId: string): void;
   selectMember(memberId?: string): void;
   sendUserMessage(content: string, directMemberId?: string): Promise<void>;
@@ -41,7 +46,49 @@ export interface WorkspaceRemoteStoreState {
   setConnected(connected: boolean): void;
 }
 
-export function createWorkspaceRemoteStore(client = new WorkspaceRuntimeClient()): StoreApi<WorkspaceRemoteStoreState> {
+export interface WorkspaceRemoteClient {
+  getState(): Promise<WorkspaceSnapshot>;
+  createProject(input: { projectName: string; firstPrompt: string; templateId: string }): Promise<{
+    snapshot: WorkspaceSnapshot;
+    projectId: string;
+    roomId: string;
+  }>;
+  createRoom(input: { projectId: string; firstPrompt: string; templateId: string }): Promise<{
+    snapshot: WorkspaceSnapshot;
+    roomId: string;
+  }>;
+  sendUserMessage(input: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot>;
+  updatePrompt(memberId: string, prompt: string): Promise<WorkspaceSnapshot>;
+  updateMemberConfig(input: UpdateMemberConfigInput): Promise<WorkspaceSnapshot>;
+  setEntryMember(memberId: string): Promise<WorkspaceSnapshot>;
+  upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number }): Promise<WorkspaceSnapshot>;
+  toggleMemberMonitoring(memberId: string): Promise<WorkspaceSnapshot>;
+  toggleWatcher(watcherId: string): Promise<WorkspaceSnapshot>;
+  runWatcher(watcherId: string): Promise<WorkspaceSnapshot>;
+  generateTemplate(brief: string): Promise<{ template: TeamTemplate; snapshot: WorkspaceSnapshot }>;
+  connect(onSnapshot: (snapshot: WorkspaceSnapshot) => void, onConnectionChange: (connected: boolean) => void): () => void;
+}
+
+export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new WorkspaceRuntimeClient()): StoreApi<WorkspaceRemoteStoreState> {
+  const runMutation = async <T,>(
+    set: (partial:
+      | WorkspaceRemoteStoreState
+      | Partial<WorkspaceRemoteStoreState>
+      | ((state: WorkspaceRemoteStoreState) => WorkspaceRemoteStoreState | Partial<WorkspaceRemoteStoreState>),
+    ) => void,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    try {
+      const result = await operation();
+      set({ error: undefined });
+      return result;
+    } catch (error) {
+      const message = getErrorMessage(error);
+      set({ error: message });
+      throw error;
+    }
+  };
+
   return createStore<WorkspaceRemoteStoreState>((set, get) => ({
     snapshot: createSeedWorkspace(),
     loading: true,
@@ -52,6 +99,7 @@ export function createWorkspaceRemoteStore(client = new WorkspaceRuntimeClient()
         set((state) => ({
           snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
           loading: false,
+          connected: true,
           error: undefined,
         }));
       } catch (error) {
@@ -62,12 +110,21 @@ export function createWorkspaceRemoteStore(client = new WorkspaceRuntimeClient()
       }
     },
     async createProject(input) {
-      const result = await client.createProject(input);
+      const result = await runMutation(set, () => client.createProject(input));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, result.snapshot),
       }));
       return {
         projectId: result.projectId,
+        roomId: result.roomId,
+      };
+    },
+    async createRoom(input) {
+      const result = await runMutation(set, () => client.createRoom(input));
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, result.snapshot),
+      }));
+      return {
         roomId: result.roomId,
       };
     },
@@ -99,59 +156,61 @@ export function createWorkspaceRemoteStore(client = new WorkspaceRuntimeClient()
       if (!roomId || content.trim().length === 0) {
         return;
       }
-      const snapshot = await client.sendUserMessage({
-        roomId,
-        content,
-        directMemberId,
-      });
+      const snapshot = await runMutation(set, () =>
+        client.sendUserMessage({
+          roomId,
+          content,
+          directMemberId,
+        }),
+      );
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
     },
     async toggleMemberMonitoring(memberId) {
-      const snapshot = await client.toggleMemberMonitoring(memberId);
+      const snapshot = await runMutation(set, () => client.toggleMemberMonitoring(memberId));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
     },
     async toggleWatcherSchedule(watcherId) {
-      const snapshot = await client.toggleWatcher(watcherId);
+      const snapshot = await runMutation(set, () => client.toggleWatcher(watcherId));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
     },
     async runWatcher(watcherId) {
-      const snapshot = await client.runWatcher(watcherId);
+      const snapshot = await runMutation(set, () => client.runWatcher(watcherId));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
     },
     async updatePrompt(memberId, prompt) {
-      const snapshot = await client.updatePrompt(memberId, prompt);
+      const snapshot = await runMutation(set, () => client.updatePrompt(memberId, prompt));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
     },
     async updateMemberConfig(input) {
-      const snapshot = await client.updateMemberConfig(input);
+      const snapshot = await runMutation(set, () => client.updateMemberConfig(input));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
     },
     async setEntryMember(memberId) {
-      const snapshot = await client.setEntryMember(memberId);
+      const snapshot = await runMutation(set, () => client.setEntryMember(memberId));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
     },
     async upsertWatcher(input) {
-      const snapshot = await client.upsertWatcher(input);
+      const snapshot = await runMutation(set, () => client.upsertWatcher(input));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
     },
     async generateTemplate(brief) {
-      const result = await client.generateTemplate(brief);
+      const result = await runMutation(set, () => client.generateTemplate(brief));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, result.snapshot),
       }));
@@ -161,10 +220,14 @@ export function createWorkspaceRemoteStore(client = new WorkspaceRuntimeClient()
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
         loading: false,
+        error: undefined,
       }));
     },
     setConnected(connected) {
-      set({ connected });
+      set((state) => ({
+        connected,
+        error: connected ? undefined : state.error,
+      }));
     },
   }));
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { TeamTemplate, WorkspaceSnapshot } from "../domain/model";
 import {
   completeMemberTask,
+  createRoomInProject,
   createProjectWithRoom,
   createWorkspaceSnapshot,
   extractMentionMemberIds,
@@ -18,7 +19,7 @@ import {
   upsertMemberWatcher,
 } from "../domain/workspace";
 import { createRuntimeContext } from "../domain/identity";
-import type { CreateProjectInput, MemberId, PostMemberMessageInput, UpsertWatcherInput, UpdateMemberConfigInput } from "../domain/model";
+import type { CreateProjectInput, CreateRoomInput, MemberId, PostMemberMessageInput, UpsertWatcherInput, UpdateMemberConfigInput } from "../domain/model";
 import type { MemberExecutor, MemberExecutorFactory } from "./executor";
 import { AcpMemberExecutor } from "./acp-executor";
 import { buildTaskPrompt } from "./prompt-builder";
@@ -111,6 +112,16 @@ export class WorkspaceRuntime {
     return {
       snapshot: this.snapshot,
       projectId: this.snapshot.selection.projectId!,
+      roomId: this.snapshot.selection.roomId!,
+    };
+  }
+
+  async createRoom(input: CreateRoomInput): Promise<{ snapshot: WorkspaceSnapshot; roomId: string }> {
+    const previous = this.snapshot;
+    const next = createRoomInProject(previous, input, this.context);
+    await this.applySnapshot(previous, next);
+    return {
+      snapshot: this.snapshot,
       roomId: this.snapshot.selection.roomId!,
     };
   }

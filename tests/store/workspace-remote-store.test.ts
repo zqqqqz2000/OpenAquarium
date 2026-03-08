@@ -1,0 +1,74 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
+import { createSeedWorkspace } from "@/lib/sample-data/workspace";
+import { createWorkspaceRemoteStore, type WorkspaceRemoteClient } from "@/store/workspace-remote-store";
+
+function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
+  return {
+    getState: () => Promise.resolve(snapshot),
+    createProject: () => Promise.reject(new Error("not implemented")),
+    createRoom: () => Promise.reject(new Error("not implemented")),
+    sendUserMessage: () => Promise.reject(new Error("not implemented")),
+    updatePrompt: () => Promise.reject(new Error("not implemented")),
+    updateMemberConfig: (input: UpdateMemberConfigInput) => {
+      void input;
+      return Promise.reject(new Error("not implemented"));
+    },
+    setEntryMember: () => Promise.reject(new Error("not implemented")),
+    upsertWatcher: () => Promise.reject(new Error("not implemented")),
+    toggleMemberMonitoring: () => Promise.reject(new Error("not implemented")),
+    toggleWatcher: () => Promise.reject(new Error("not implemented")),
+    runWatcher: () => Promise.reject(new Error("not implemented")),
+    generateTemplate: (brief: string) => {
+      void brief;
+      return Promise.reject(new Error("not implemented"));
+    },
+    connect: vi.fn(() => () => {}),
+  };
+}
+
+describe("workspace remote store", () => {
+  it("marks the runtime as connected after a successful hydrate", async () => {
+    const snapshot = createSeedWorkspace();
+    const store = createWorkspaceRemoteStore(createClient(snapshot));
+
+    await store.getState().hydrate();
+
+    expect(store.getState().connected).toBe(true);
+    expect(store.getState().error).toBeUndefined();
+    expect(store.getState().loading).toBe(false);
+  });
+
+  it("clears a stale runtime error when a fresh snapshot arrives", () => {
+    const snapshot = createSeedWorkspace();
+    const store = createWorkspaceRemoteStore(createClient(snapshot));
+
+    store.setState({
+      ...store.getState(),
+      error: "Failed to fetch",
+      loading: false,
+    });
+
+    store.getState().replaceSnapshot(snapshot);
+
+    expect(store.getState().error).toBeUndefined();
+  });
+
+  it("clears a stale runtime error when websocket connectivity recovers", () => {
+    const snapshot = createSeedWorkspace();
+    const store = createWorkspaceRemoteStore(createClient(snapshot));
+
+    store.setState({
+      ...store.getState(),
+      error: "Failed to fetch",
+      connected: false,
+      loading: false,
+    });
+
+    store.getState().setConnected(true);
+
+    expect(store.getState().connected).toBe(true);
+    expect(store.getState().error).toBeUndefined();
+  });
+});
