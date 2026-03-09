@@ -1,16 +1,13 @@
-import * as acp from "@agentclientprotocol/sdk";
-import { spawn, type ChildProcessByStdio } from "node:child_process";
-import type { Readable, Writable } from "node:stream";
+import { createACPProvider } from "@mcpc-tech/acp-ai-provider";
+import { generateText } from "ai";
 
 import { z } from "zod";
 
 import type { SkillDefinition, TeamMemberBlueprint, TeamTemplate } from "../domain/model";
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND, createCodexAcpProvider, createGenericAcpProvider } from "../lib/acp";
 import { defaultTemplates } from "../lib/sample-data/templates";
-import { buildClientCapabilities, buildClientConnection, isCommandAvailable, resolveMockAcpCommand } from "./acp-session";
-import { AcpWorkspaceClient } from "./acp-workspace-client";
-import { getErrorCode, getErrorMessage } from "./error-utils";
-import { TerminalRegistry } from "./terminal-registry";
+import { isCommandAvailable } from "./acp-session";
+import { getErrorMessage } from "./error-utils";
 
 const accentToneSchema = z.enum(["paper", "postit", "blueprint", "correction"]);
 
@@ -262,84 +259,6 @@ function sanitizeDraft(draft: TemplateDraft, brief: string): TeamTemplate {
   };
 }
 
-function generateHeuristicTemplateFromBrief(brief: string): TeamTemplate {
-  const normalized = brief.trim() || "custom pod";
-  const seed = slugify(normalized) || "generated-pod";
-  const incident = /incident|告警|故障|debug|排障/i.test(normalized);
-  const researchHeavy = /research|调研|方案|design|架构/i.test(normalized);
-
-  return {
-    id: `template-${seed}`,
-    name: incident ? "Generated Incident Pod" : "Generated Collaboration Pod",
-    description: `Generated from brief: ${normalized}`,
-    accentTone: incident ? "blueprint" : researchHeavy ? "postit" : "paper",
-    members: [
-      {
-        id: "entry",
-        name: incident ? "Dispatch Heron" : "Lead Koi",
-        handle: "lead",
-        summary: "入口成员，接用户消息并分派到其他成员。",
-        prompt: `你是入口成员。请围绕这个 brief 组织团队：${normalized}`,
-        accentTone: incident ? "blueprint" : "postit",
-        provider: createCodexAcpProvider(),
-        isEntryMember: true,
-        observeAllRoomMessages: true,
-        skills: [
-          {
-            id: "send-room",
-            name: "群消息发送",
-            description: "向 room 发送群消息。",
-            command: "./bin/oa-room-send --scope group",
-          },
-        ],
-      },
-      {
-        id: "specialist-a",
-        name: researchHeavy ? "Reed Otter" : "Forge Crab",
-        handle: researchHeavy ? "research" : "builder",
-        summary: researchHeavy ? "负责资料、现状和备选路径。" : "负责实现、工具和代码落地。",
-        prompt: researchHeavy ? "你负责调研和信息整理。" : "你负责可执行实现和工程化。",
-        accentTone: researchHeavy ? "blueprint" : "paper",
-        provider: createCodexAcpProvider(),
-        skills: [
-          {
-            id: "room-send",
-            name: "发送消息",
-            description: "给 room 或指定成员发消息。",
-            command: "./bin/oa-room-send --scope group",
-          },
-        ],
-      },
-      {
-        id: "specialist-b",
-        name: incident ? "Probe Fox" : "Tape Finch",
-        handle: incident ? "investigator" : "scribe",
-        summary: incident ? "负责排障证据链和日志。" : "负责记录、监控和 digest。",
-        prompt: incident ? "你负责证据链、日志和 root cause 假设。" : "你负责记录和 watcher 增量消费。",
-        accentTone: incident ? "paper" : "correction",
-        provider: createGenericAcpProvider({
-          label: incident ? "Investigate ACP" : "Scribe ACP",
-          command: incident ? "investigate-acp" : "scribe-acp",
-          args: ["--stdio"],
-        }),
-        observeAllRoomMessages: true,
-        skills: [
-          {
-            id: "digest",
-            name: incident ? "状态播报" : "增量汇总",
-            description: incident ? "按时间线回报状态。" : "消费自上次游标后的群消息。",
-            command: "./bin/oa-room-watch",
-          },
-        ],
-        watch: {
-          intervalMinutes: incident ? 5 : 15,
-          enabledByDefault: true,
-        },
-      },
-    ],
-  };
-}
-
 function parseArgsConfig(env: Record<string, string | undefined>): string[] {
   const json = env.OA_TEMPLATE_ACP_ARGS_JSON?.trim();
   if (json) {
@@ -426,147 +345,41 @@ class AcpTemplateGenerationTransport implements TemplateGenerationTransport {
   }
 
   async generate(prompt: string): Promise<string> {
-    const terminalRegistry = new TerminalRegistry();
-    const client = new AcpWorkspaceClient({
-      workspaceRoot: this.workspaceRoot,
-      terminalRegistry,
-    });
     const templateAcp = resolveTemplateAcpCommand(this.env);
     const primaryCwd = this.env.OA_TEMPLATE_ACP_WORKDIR?.trim() || this.workspaceRoot;
     const primaryEnv = {
       ...process.env,
       ...parseEnvJson(this.env),
     };
-    const fallback = resolveMockAcpCommand();
     const timeoutMs = parseTemplateTimeoutMs(this.env);
-    let child: ChildProcessByStdio<Writable, Readable, null> | undefined;
-    let connection: acp.ClientSideConnection | undefined;
-    let sessionId: string | undefined;
-    let responseText = "";
+
+    if (!isCommandAvailable(templateAcp.command, primaryCwd, primaryEnv)) {
+      throw new Error(`Template ACP provider is unavailable: ${templateAcp.command} ${templateAcp.args.join(" ")}`.trim());
+    }
+
+    const provider = createACPProvider({
+      command: templateAcp.command,
+      args: templateAcp.args,
+      env: parseEnvJson(this.env),
+      session: {
+        cwd: primaryCwd,
+        mcpServers: [],
+      },
+    });
 
     try {
-      return await withTimeout(
-        (async () => {
-          ({ child, connection } = await this.connectWithFallback({
-            client,
-            primary: {
-              command: templateAcp.command,
-              args: templateAcp.args,
-              cwd: primaryCwd,
-              env: primaryEnv,
-            },
-            fallback: {
-              command: fallback.command,
-              args: fallback.args,
-              cwd: this.workspaceRoot,
-              env: process.env,
-            },
-          }));
-
-          client.setCallbacks({
-            onDraft: (chunk) => {
-              responseText = `${responseText}${chunk}`;
-            },
-          });
-
-          const session = await connection.newSession({
-            cwd: primaryCwd,
-            mcpServers: [],
-          });
-          sessionId = session.sessionId;
-
-          await connection.prompt({
-            sessionId,
-            prompt: [
-              {
-                type: "text",
-                text: prompt,
-              },
-            ],
-          });
-
-          return responseText.trim();
-        })(),
+      const result = await withTimeout(
+        generateText({
+          model: provider.languageModel(),
+          prompt,
+          tools: provider.tools,
+        }),
         timeoutMs,
         "ACP template generation",
       );
+      return result.text.trim();
     } finally {
-      client.clearCallbacks();
-      if (connection && sessionId) {
-        try {
-          await connection.cancel({ sessionId });
-        } catch {
-          // Ignore close-time cancellation errors.
-        }
-      }
-      await terminalRegistry.disposeAll();
-      child?.kill("SIGTERM");
-    }
-  }
-
-  private async connectWithFallback(args: {
-    client: AcpWorkspaceClient;
-    primary: {
-      command: string;
-      args: string[];
-      cwd: string;
-      env: Record<string, string | undefined>;
-    };
-    fallback: {
-      command: string;
-      args: string[];
-      cwd: string;
-      env: Record<string, string | undefined>;
-    };
-  }): Promise<{ child: ChildProcessByStdio<Writable, Readable, null>; connection: acp.ClientSideConnection }> {
-    if (!isCommandAvailable(args.primary.command, args.primary.cwd, args.primary.env)) {
-      return this.launchConnection(args.client, args.fallback);
-    }
-
-    try {
-      return await this.launchConnection(args.client, args.primary);
-    } catch (error) {
-      if (getErrorCode(error) !== "ENOENT") {
-        throw error;
-      }
-
-      return this.launchConnection(args.client, args.fallback);
-    }
-  }
-
-  private async launchConnection(
-    client: AcpWorkspaceClient,
-    config: {
-      command: string;
-      args: string[];
-      cwd: string;
-      env: Record<string, string | undefined>;
-    },
-  ): Promise<{ child: ChildProcessByStdio<Writable, Readable, null>; connection: acp.ClientSideConnection }> {
-    let child: ChildProcessByStdio<Writable, Readable, null> | undefined;
-
-    try {
-      child = spawn(config.command, config.args, {
-        cwd: config.cwd,
-        env: config.env,
-        stdio: ["pipe", "pipe", "inherit"],
-      });
-      const connection = buildClientConnection(client, child);
-      await connection.initialize({
-        protocolVersion: acp.PROTOCOL_VERSION,
-        clientInfo: {
-          name: "OpenAquarium Template Generator",
-          version: "0.1.0",
-        },
-        clientCapabilities: buildClientCapabilities(),
-      });
-      return {
-        child,
-        connection,
-      };
-    } catch (error) {
-      child?.kill("SIGTERM");
-      throw error;
+      provider.cleanup();
     }
   }
 }
@@ -585,16 +398,11 @@ export async function generateTemplateFromBrief(
       env,
     });
 
-  try {
-    const raw = await withTimeout(
-      transport.generate(buildTemplateGenerationPrompt(normalizedBrief, references)),
-      parseTemplateTimeoutMs(env),
-      "Template generation",
-    );
-    const parsed = templateDraftSchema.parse(JSON.parse(extractJsonPayload(raw)));
-    return sanitizeDraft(parsed, normalizedBrief);
-  } catch (error) {
-    console.warn(`Template generation fallback engaged: ${getErrorMessage(error)}`);
-    return generateHeuristicTemplateFromBrief(normalizedBrief);
-  }
+  const raw = await withTimeout(
+    transport.generate(buildTemplateGenerationPrompt(normalizedBrief, references)),
+    parseTemplateTimeoutMs(env),
+    "Template generation",
+  );
+  const parsed = templateDraftSchema.parse(JSON.parse(extractJsonPayload(raw)));
+  return sanitizeDraft(parsed, normalizedBrief);
 }

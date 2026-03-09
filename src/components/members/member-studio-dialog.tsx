@@ -32,7 +32,9 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { getMemberHistory } from "@/lib/message-feed";
+import { getMemberTaskTraceGroups } from "@/lib/task-traces";
 import { badgeToneProps, surfaceToneClass } from "@/lib/ui-tone";
+import { formatTime } from "@/lib/utils";
 
 function FactTile(props: { label: string; value: string }) {
   const { label, value } = props;
@@ -43,6 +45,15 @@ function FactTile(props: { label: string; value: string }) {
       <p className="m-0 text-sm font-medium">{value}</p>
     </div>
   );
+}
+
+function TraceKindBadge(props: { kind: string }) {
+  const { kind } = props;
+  const label = kind.replaceAll("-", " ");
+  const variant: "destructive" | "secondary" | "outline" =
+    kind === "error" ? "destructive" : kind === "completed" ? "secondary" : "outline";
+
+  return <Badge variant={variant}>{label}</Badge>;
 }
 
 export function MemberStudioDialog(props: {
@@ -69,6 +80,7 @@ export function MemberStudioDialog(props: {
   const watcher = getWatcherForMember(room, snapshot, member.id);
   const cliCommands = buildMemberCliCommands(room, member);
   const memberHistory = getMemberHistory(snapshot, room, member);
+  const memberTaskTraces = getMemberTaskTraceGroups(snapshot, room, member);
   const configDraft = configDrafts[member.id] ?? createMemberConfigDraft(member);
   const watcherDraft = watcherDrafts[member.id] ?? createWatcherDraft(watcher);
   const error = errorByMember[member.id];
@@ -197,9 +209,10 @@ export function MemberStudioDialog(props: {
             ) : null}
           </div>
 
-          <Tabs defaultValue="history" className="flex min-h-0 flex-col gap-4 overflow-hidden">
+          <Tabs defaultValue="trace" className="flex min-h-0 flex-col gap-4 overflow-hidden">
             <TabsList variant="line" className="h-auto w-full flex-wrap justify-start rounded-none border-b bg-transparent p-0">
               {[
+                ["trace", "Trace"],
                 ["history", "History"],
                 ["behavior", "Behavior"],
                 ["provider", "ACP"],
@@ -214,13 +227,78 @@ export function MemberStudioDialog(props: {
             </TabsList>
 
             <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              <TabsContent value="trace" className="m-0">
+                <Card>
+                  <CardContent className="flex flex-col gap-4 p-4">
+                    <div>
+                      <p className="m-0 text-lg font-semibold tracking-tight">Execution trace</p>
+                      <p className="m-0 text-sm text-muted-foreground">
+                        这里展示成员真正拿到的 task prompt、可见 transcript、ACP 状态和完成/失败结果。
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-4">
+                      {memberTaskTraces.map((group) => (
+                        <Card key={group.task.id} className="border-dashed">
+                          <CardContent className="flex flex-col gap-3 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="space-y-1">
+                                <p className="m-0 text-base font-semibold tracking-tight">{group.task.title}</p>
+                                <p className="m-0 text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                                  {formatTime(group.task.startedAt)} · task {group.task.id}
+                                </p>
+                              </div>
+                              <Badge variant="outline">{group.task.status}</Badge>
+                            </div>
+                            {group.sourceMessage ? (
+                              <div className="rounded-lg border border-border bg-muted/30 px-3 py-3">
+                                <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Source message</p>
+                                <p className="m-0 whitespace-pre-wrap text-sm leading-6">
+                                  {group.sourceMessage.author.label}: {group.sourceMessage.content}
+                                </p>
+                              </div>
+                            ) : null}
+                            <div className="flex flex-col gap-3">
+                              {group.entries.map((entry) => (
+                                <div key={entry.id} className="rounded-lg border border-border bg-background px-3 py-3">
+                                  <div className="flex flex-wrap items-start justify-between gap-2">
+                                    <div className="space-y-1">
+                                      <p className="m-0 text-sm font-medium">{entry.title}</p>
+                                      <p className="m-0 text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                                        {formatTime(entry.createdAt)}
+                                      </p>
+                                    </div>
+                                    <TraceKindBadge kind={entry.kind} />
+                                  </div>
+                                  <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words pt-3 text-xs leading-6 text-muted-foreground">
+                                    {entry.content}
+                                  </pre>
+                                </div>
+                              ))}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                      {memberTaskTraces.length === 0 ? (
+                        <Card className="border-dashed">
+                          <CardContent className="p-5">
+                            <p className="m-0 text-sm text-muted-foreground">
+                              还没有 task trace。下一次这个成员接到任务后，这里会出现原始 prompt 和执行状态。
+                            </p>
+                          </CardContent>
+                        </Card>
+                      ) : null}
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
               <TabsContent value="history" className="m-0">
                 <Card>
                   <CardContent className="flex flex-col gap-4 p-4">
                     <div>
                       <p className="m-0 text-lg font-semibold tracking-tight">Processing history</p>
                       <p className="m-0 text-sm text-muted-foreground">
-                        这里不是全量群聊，而是当前成员真正接收、处理、回复过的消息链。
+                        这里是结果化消息视图。原始 task prompt 和可见 transcript 在 Trace 里。
                       </p>
                     </div>
                     <div className="flex flex-col gap-4">

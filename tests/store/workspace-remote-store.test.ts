@@ -29,6 +29,15 @@ function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
 }
 
 describe("workspace remote store", () => {
+  it("starts from an empty workspace shell before runtime hydration", () => {
+    const store = createWorkspaceRemoteStore(createClient(createSeedWorkspace()));
+
+    expect(store.getState().snapshot.projectOrder).toEqual([]);
+    expect(store.getState().snapshot.selection.roomId).toBeUndefined();
+    expect(store.getState().connected).toBe(false);
+    expect(store.getState().loading).toBe(true);
+  });
+
   it("marks the runtime as connected after a successful hydrate", async () => {
     const snapshot = createSeedWorkspace();
     const store = createWorkspaceRemoteStore(createClient(snapshot));

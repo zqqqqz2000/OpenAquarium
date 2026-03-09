@@ -15,11 +15,11 @@ export function ChatComposer(props: {
   error?: string;
   members: TeamMember[];
   onSend: (content: string, directMemberId?: string) => void | Promise<void>;
+  sending?: boolean;
 }) {
-  const { connected, error, members, onSend } = props;
+  const { connected, error, members, onSend, sending = false } = props;
   const [text, setText] = useState("");
   const [directMemberId, setDirectMemberId] = useState<string | undefined>();
-  const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | undefined>();
   const directMember = useMemo(
     () => members.find((member) => member.id === directMemberId),
@@ -69,19 +69,16 @@ export function ChatComposer(props: {
           <Button
             disabled={text.trim().length === 0 || !connected || sending}
             onClick={() => {
-              void (async () => {
-                setSending(true);
-                setSendError(undefined);
-                try {
-                  await onSend(text, directMemberId);
-                  setText("");
-                  setDirectMemberId(undefined);
-                } catch (caughtError) {
-                  setSendError(caughtError instanceof Error ? caughtError.message : String(caughtError));
-                } finally {
-                  setSending(false);
-                }
-              })();
+              const nextText = text;
+              const nextDirectMemberId = directMemberId;
+              setText("");
+              setDirectMemberId(undefined);
+              setSendError(undefined);
+              void Promise.resolve(onSend(nextText, nextDirectMemberId)).catch((caughtError) => {
+                setText(nextText);
+                setDirectMemberId(nextDirectMemberId);
+                setSendError(caughtError instanceof Error ? caughtError.message : String(caughtError));
+              });
             }}
           >
             <Send size={18} />

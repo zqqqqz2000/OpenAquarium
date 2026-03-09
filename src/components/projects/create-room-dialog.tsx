@@ -29,16 +29,18 @@ export function CreateRoomDialog(props: {
   activeProjectId?: string;
   projects: Project[];
   templates: TeamTemplate[];
+  disabled?: boolean;
 }) {
-  const { activeProjectId, projects, templates } = props;
+  const { activeProjectId, projects, templates, disabled = false } = props;
   const navigate = useNavigate();
   const createRoom = useWorkspaceStore((state) => state.createRoom);
   const [open, setOpen] = useState(false);
   const [projectId, setProjectId] = useState(activeProjectId ?? projects[0]?.id ?? "");
   const [firstPrompt, setFirstPrompt] = useState("继续细化当前 project 的 agent-team 协作和实现路径。");
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
+  const [actionError, setActionError] = useState<string | undefined>();
   const projectOptions = useMemo(() => projects, [projects]);
-  const disabled = projectOptions.length === 0;
+  const triggerDisabled = disabled || projectOptions.length === 0;
 
   return (
     <Dialog
@@ -51,7 +53,7 @@ export function CreateRoomDialog(props: {
       }}
     >
       <DialogTrigger asChild>
-        <Button size="sm" variant="secondary" disabled={disabled}>
+        <Button size="sm" variant="secondary" disabled={triggerDisabled}>
           <Plus size={16} />
           New room
         </Button>
@@ -109,12 +111,14 @@ export function CreateRoomDialog(props: {
                 placeholder="Select a project first"
               />
             </label>
+            {actionError ? <p className="m-0 text-sm text-destructive">{actionError}</p> : null}
             <div className="flex justify-end">
               <Button
-                disabled={!projectId || firstPrompt.trim().length === 0 || !templateId}
+                disabled={triggerDisabled || !projectId || firstPrompt.trim().length === 0 || !templateId}
                 onClick={() => {
                   void (async () => {
                     try {
+                      setActionError(undefined);
                       const next = await createRoom({
                         projectId,
                         firstPrompt,
@@ -130,8 +134,8 @@ export function CreateRoomDialog(props: {
                         });
                       });
                       setOpen(false);
-                    } catch {
-                      // Sidebar error state will explain why room creation failed.
+                    } catch (error) {
+                      setActionError(error instanceof Error ? error.message : String(error));
                     }
                   })();
                 }}

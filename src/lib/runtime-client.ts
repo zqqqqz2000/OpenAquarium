@@ -1,6 +1,6 @@
 import type { TeamTemplate, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
 
-function resolveBaseUrl(): string {
+export function resolveWorkspaceRuntimeBaseUrl(): string {
   const configured = import.meta.env.VITE_OA_SERVER_URL as string | undefined;
   return configured ?? "http://127.0.0.1:4301";
 }
@@ -21,7 +21,7 @@ async function parseJson<T>(response: Response): Promise<T> {
 }
 
 export class WorkspaceRuntimeClient {
-  readonly baseUrl = resolveBaseUrl();
+  readonly baseUrl = resolveWorkspaceRuntimeBaseUrl();
 
   async getState(): Promise<WorkspaceSnapshot> {
     const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(await fetch(`${this.baseUrl}/api/state`));

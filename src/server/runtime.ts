@@ -2,6 +2,7 @@ import path from "node:path";
 
 import type { TeamTemplate, WorkspaceSnapshot } from "../domain/model";
 import {
+  appendTaskTrace,
   completeMemberTask,
   createRoomInProject,
   createProjectWithRoom,
@@ -18,30 +19,95 @@ import {
   updateMemberPrompt,
   upsertMemberWatcher,
 } from "../domain/workspace";
-import { createRuntimeContext } from "../domain/identity";
+import { createRuntimeContext, type MutationContext } from "../domain/identity";
 import type { CreateProjectInput, CreateRoomInput, MemberId, PostMemberMessageInput, UpsertWatcherInput, UpdateMemberConfigInput } from "../domain/model";
 import type { MemberExecutor, MemberExecutorFactory } from "./executor";
 import { AcpMemberExecutor } from "./acp-executor";
+import { getErrorMessage } from "./error-utils";
 import { buildTaskPrompt } from "./prompt-builder";
 import { WorkspacePersistence } from "./persistence";
 import { generateTemplateFromBrief } from "./template-generator";
-import { defaultTemplates } from "../lib/sample-data/templates";
-import { createSeedWorkspace } from "../lib/sample-data/workspace";
+import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 
 type SnapshotListener = (snapshot: WorkspaceSnapshot) => void;
 type TemplateGenerator = (brief: string, args: { workspaceRoot: string; references: TeamTemplate[] }) => Promise<TeamTemplate>;
+
+export interface TaskStreamRoute {
+  taskId: string;
+  memberId: string;
+  memberName: string;
+  memberHandle: string;
+}
+
+export interface TaskStreamCallbacks {
+  onTaskAccepted?(route: TaskStreamRoute): Promise<void> | void;
+  onDraft?(event: TaskStreamRoute & { content: string; messageId?: string }): Promise<void> | void;
+  onStatus?(event: TaskStreamRoute & { summary: string }): Promise<void> | void;
+  onComplete?(event: TaskStreamRoute & { content: string; messageId?: string; stopReason: string }): Promise<void> | void;
+  onError?(event: TaskStreamRoute & { message: string; messageId?: string }): Promise<void> | void;
+}
+
+interface TaskObserverEntry {
+  route: TaskStreamRoute;
+  callbacks: TaskStreamCallbacks;
+  resolve(): void;
+  reject(error: unknown): void;
+}
 
 function cloneTemplates(snapshot: WorkspaceSnapshot): TeamTemplate[] {
   return snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
 }
 
+function getIdSuffixValue(id: string): number | undefined {
+  const match = id.match(/_(\d+)$/u);
+  if (!match) {
+    return undefined;
+  }
+
+  return Number.parseInt(match[1], 10);
+}
+
+function getSnapshotSequenceStart(snapshot: WorkspaceSnapshot): number {
+  const ids = [
+    ...Object.keys(snapshot.projects),
+    ...Object.keys(snapshot.rooms),
+    ...Object.keys(snapshot.templates),
+    ...Object.keys(snapshot.members),
+    ...Object.keys(snapshot.messages),
+    ...Object.keys(snapshot.tasks),
+    ...Object.keys(snapshot.taskTraces),
+    ...Object.keys(snapshot.watchers),
+  ];
+
+  return ids.reduce((max, id) => {
+    const suffix = getIdSuffixValue(id);
+    return suffix !== undefined && suffix > max ? suffix : max;
+  }, 10_000);
+}
+
+function getSnapshotTimeStart(snapshot: WorkspaceSnapshot): string {
+  const timestamps = [
+    ...Object.values(snapshot.projects).map((project) => project.createdAt),
+    ...Object.values(snapshot.rooms).map((room) => room.createdAt),
+    ...Object.values(snapshot.messages).map((message) => message.createdAt),
+    ...Object.values(snapshot.tasks).flatMap((task) => [task.startedAt, task.updatedAt]),
+    ...Object.values(snapshot.taskTraces).map((trace) => trace.createdAt),
+  ]
+    .map((value) => Date.parse(value))
+    .filter((value) => Number.isFinite(value));
+
+  const latest = timestamps.length > 0 ? Math.max(...timestamps) : Date.now();
+  return new Date(latest + 1_000).toISOString();
+}
+
 export class WorkspaceRuntime {
   private snapshot: WorkspaceSnapshot;
-  private readonly context = createRuntimeContext(10_000, "2026-03-09T10:00:00.000Z");
+  private readonly context: MutationContext;
   private readonly listeners = new Set<SnapshotListener>();
   private readonly executors = new Map<MemberId, MemberExecutor>();
   private readonly runningTaskIds = new Set<string>();
   private readonly watcherTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly taskObservers = new Map<string, TaskObserverEntry>();
   private readonly persistence: WorkspacePersistence;
   private readonly workspaceRoot: string;
   private readonly executorFactory: MemberExecutorFactory;
@@ -53,8 +119,10 @@ export class WorkspaceRuntime {
     workspaceRoot: string;
     executorFactory?: MemberExecutorFactory;
     templateGenerator?: TemplateGenerator;
+    context?: MutationContext;
   }) {
     this.snapshot = args.initialSnapshot;
+    this.context = args.context ?? createRuntimeContext(10_000, "2026-03-09T10:00:00.000Z");
     this.persistence = args.persistence;
     this.workspaceRoot = args.workspaceRoot;
     this.executorFactory =
@@ -63,6 +131,28 @@ export class WorkspaceRuntime {
         new AcpMemberExecutor({
           workspaceRoot: this.workspaceRoot,
           member,
+          host: {
+            sendGroupMessage: async (input) => {
+              await this.sendMemberMessage({
+                roomId: input.roomId,
+                memberId: input.memberId,
+                content: input.content,
+              });
+            },
+            sendDirectMessage: async (input) => {
+              const directMemberId = this.findMemberIdByHandle(input.roomId, input.targetHandle);
+              await this.sendMemberMessage({
+                roomId: input.roomId,
+                memberId: input.memberId,
+                content: input.content,
+                directMemberId,
+              });
+            },
+            runWatcher: async (input) => {
+              await this.runWatcherNow(input.watcherId);
+            },
+            inspectRoomState: (input) => Promise.resolve(this.describeRoomState(input.roomId)),
+          },
         }));
     this.templateGenerator = args.templateGenerator ?? ((brief, generatorArgs) =>
       generateTemplateFromBrief(brief, {
@@ -81,13 +171,14 @@ export class WorkspaceRuntime {
       args.stateFilePath ?? path.join(args.workspaceRoot, ".openaquarium", "state.json"),
     );
     const loadedSnapshot = await persistence.load();
-    const initialSnapshot = loadedSnapshot ?? createSeedWorkspace();
+    const initialSnapshot = loadedSnapshot ?? createDefaultWorkspaceSnapshot();
     const runtime = new WorkspaceRuntime({
       initialSnapshot,
       persistence,
       workspaceRoot: args.workspaceRoot,
       executorFactory: args.executorFactory,
       templateGenerator: args.templateGenerator,
+      context: createRuntimeContext(getSnapshotSequenceStart(initialSnapshot), getSnapshotTimeStart(initialSnapshot)),
     });
     runtime.syncWatchers();
     runtime.dispatchNewTasks(createWorkspaceSnapshot(cloneTemplates(initialSnapshot), initialSnapshot.currentUserName), initialSnapshot);
@@ -140,6 +231,55 @@ export class WorkspaceRuntime {
     );
     await this.applySnapshot(previous, next);
     return this.snapshot;
+  }
+
+  async streamUserMessage(
+    args: { roomId: string; content: string; directMemberId?: string },
+    callbacks: TaskStreamCallbacks,
+  ): Promise<void> {
+    const previous = this.snapshot;
+    const next = postUserMessage(
+      previous,
+      {
+        roomId: args.roomId,
+        content: args.content,
+        directMemberId: args.directMemberId,
+        mentionedMemberIds: extractMentionMemberIds(previous, args.roomId, args.content),
+      },
+      this.context,
+    );
+    const nextTaskIds = Object.keys(next.tasks).filter((taskId) => !previous.tasks[taskId] && next.tasks[taskId]?.status === "running");
+    const primaryTaskId = nextTaskIds[0];
+
+    if (!primaryTaskId) {
+      await this.applySnapshot(previous, next);
+      return;
+    }
+
+    const task = next.tasks[primaryTaskId];
+    const member = next.members[task.memberId];
+    const route: TaskStreamRoute = {
+      taskId: task.id,
+      memberId: member.id,
+      memberName: member.name,
+      memberHandle: member.handle,
+    };
+
+    await callbacks.onTaskAccepted?.(route);
+
+    const completion = new Promise<void>((resolve, reject) => {
+      this.taskObservers.set(primaryTaskId, {
+        route,
+        callbacks,
+        resolve,
+        reject,
+      });
+    });
+
+    await this.applySnapshot(previous, next);
+    await completion.finally(() => {
+      this.taskObservers.delete(primaryTaskId);
+    });
   }
 
   async sendMemberMessage(input: PostMemberMessageInput): Promise<WorkspaceSnapshot> {
@@ -218,6 +358,50 @@ export class WorkspaceRuntime {
     return nextTemplate;
   }
 
+  private findMemberIdByHandle(roomId: string, handle: string): string {
+    const room = this.snapshot.rooms[roomId];
+    const normalizedHandle = handle.replace(/^@/u, "").trim();
+    const memberId = room?.memberIds.find((candidateId) => this.snapshot.members[candidateId]?.handle === normalizedHandle);
+
+    if (!memberId) {
+      throw new Error(`Unknown member handle "@${normalizedHandle}" in room "${roomId}"`);
+    }
+
+    return memberId;
+  }
+
+  private describeRoomState(roomId: string): string {
+    const room = this.snapshot.rooms[roomId];
+    if (!room) {
+      throw new Error(`Unknown room "${roomId}"`);
+    }
+
+    const transcript = (this.snapshot.messageOrderByRoom[roomId] ?? [])
+      .slice(-20)
+      .map((messageId) => {
+        const message = this.snapshot.messages[messageId];
+        return message ? `[${message.createdAt}] ${message.author.label}: ${message.content}` : undefined;
+      })
+      .filter((line): line is string => Boolean(line))
+      .join("\n");
+
+    const members = room.memberIds
+      .map((memberId) => this.snapshot.members[memberId])
+      .map((member) => `- ${member.name} (@${member.handle}) status=${member.status} entry=${member.isEntryMember}`)
+      .join("\n");
+
+    return [
+      `room: ${room.name}`,
+      `topic: ${room.topic}`,
+      "",
+      "[members]",
+      members || "(none)",
+      "",
+      "[recent transcript]",
+      transcript || "(none)",
+    ].join("\n");
+  }
+
   async dispose(): Promise<void> {
     this.watcherTimers.forEach((timer) => clearInterval(timer));
     this.watcherTimers.clear();
@@ -259,90 +443,208 @@ export class WorkspaceRuntime {
     const member = this.snapshot.members[task.memberId];
     const room = this.snapshot.rooms[task.roomId];
     const project = this.snapshot.projects[room.projectId];
-    const executor = this.getExecutor(member.id, member, room, project);
-    const prompt = buildTaskPrompt({
-      workspaceRoot: this.workspaceRoot,
-      project,
-      room,
-      member,
-      task,
-      snapshot: this.snapshot,
-    });
-
     this.runningTaskIds.add(taskId);
-
-    await executor.execute(
-      {
+    try {
+      const executor = this.getExecutor(member.id, member, room, project);
+      const prompt = buildTaskPrompt({
+        workspaceRoot: this.workspaceRoot,
         project,
         room,
         member,
         task,
         snapshot: this.snapshot,
-        prompt,
-      },
-      {
-        onDraft: async (content) => {
-          const currentTask = this.snapshot.tasks[taskId];
-          if (!currentTask || currentTask.status !== "running") {
-            return;
-          }
-          this.snapshot = postMemberDraft(this.snapshot, { taskId, content }, this.context);
-          await this.persistence.save(this.snapshot);
-          this.emit();
+      });
+      this.snapshot = appendTaskTrace(
+        this.snapshot,
+        {
+          taskId: task.id,
+          roomId: room.id,
+          memberId: member.id,
+          kind: "task-prompt",
+          title: "Task prompt",
+          content: prompt,
         },
-        onStatus: async (summary) => {
-          const currentTask = this.snapshot.tasks[taskId];
-          if (!currentTask || currentTask.status !== "running") {
-            return;
-          }
-          this.snapshot = postMemberDraft(
-            this.snapshot,
-            {
-              taskId,
-              content: `${this.snapshot.messages[currentTask.draftMessageId ?? ""]?.content ?? ""}\n\n[status] ${summary}`.trim(),
-            },
-            this.context,
-          );
-          await this.persistence.save(this.snapshot);
-          this.emit();
-        },
-        onComplete: async (finalContent, stopReason) => {
-          const currentTask = this.snapshot.tasks[taskId];
-          if (!currentTask || currentTask.status !== "running") {
-            return;
-          }
-          const previous = this.snapshot;
-          const next = completeMemberTask(
-            previous,
-            {
-              taskId,
-              finalContent:
-                finalContent.trim().length > 0 ? finalContent : `${member.name} completed the task with stop reason: ${stopReason}`,
-            },
-            this.context,
-          );
-          await this.applySnapshot(previous, next);
-        },
-        onError: async (message) => {
-          const currentTask = this.snapshot.tasks[taskId];
-          if (!currentTask || currentTask.status !== "running") {
-            return;
-          }
-          const previous = this.snapshot;
-          const next = completeMemberTask(
-            previous,
-            {
-              taskId,
-              finalContent: `${member.name} failed to complete the task: ${message}`,
-            },
-            this.context,
-          );
-          await this.applySnapshot(previous, next);
-        },
-      },
-    );
+        this.context,
+      );
+      await this.persistence.save(this.snapshot);
+      this.emit();
 
-    this.runningTaskIds.delete(taskId);
+      await executor.execute(
+        {
+          project,
+          room,
+          member,
+          task,
+          snapshot: this.snapshot,
+          prompt,
+        },
+        {
+          onDraft: async (content) => {
+            const currentTask = this.snapshot.tasks[taskId];
+            if (!currentTask || currentTask.status !== "running") {
+              return;
+            }
+            this.snapshot = postMemberDraft(this.snapshot, { taskId, content }, this.context);
+            await this.persistence.save(this.snapshot);
+            this.emit();
+            const draftTask = this.snapshot.tasks[taskId];
+            const observer = this.taskObservers.get(taskId);
+            if (observer) {
+              await observer.callbacks.onDraft?.({
+                ...observer.route,
+                content,
+                messageId: draftTask?.draftMessageId,
+              });
+            }
+          },
+          onStatus: async (summary) => {
+            const currentTask = this.snapshot.tasks[taskId];
+            if (!currentTask || currentTask.status !== "running") {
+              return;
+            }
+            this.snapshot = appendTaskTrace(
+              this.snapshot,
+              {
+                taskId,
+                roomId: currentTask.roomId,
+                memberId: currentTask.memberId,
+                kind: "status",
+                title: "ACP status",
+                content: summary,
+              },
+              this.context,
+            );
+            await this.persistence.save(this.snapshot);
+            this.emit();
+            const observer = this.taskObservers.get(taskId);
+            if (observer) {
+              await observer.callbacks.onStatus?.({
+                ...observer.route,
+                summary,
+              });
+            }
+          },
+          onComplete: async (finalContent, stopReason) => {
+            const currentTask = this.snapshot.tasks[taskId];
+            if (!currentTask || currentTask.status !== "running") {
+              return;
+            }
+            const previous = this.snapshot;
+            const snapshotWithTrace = appendTaskTrace(
+              previous,
+              {
+                taskId,
+                roomId: currentTask.roomId,
+                memberId: currentTask.memberId,
+                kind: "completed",
+                title: `Task completed (${stopReason})`,
+                content: finalContent.trim().length > 0 ? finalContent : stopReason,
+              },
+              this.context,
+            );
+            const next = completeMemberTask(
+              snapshotWithTrace,
+              {
+                taskId,
+                finalContent:
+                  finalContent.trim().length > 0 ? finalContent : `${member.name} completed the task with stop reason: ${stopReason}`,
+              },
+              this.context,
+            );
+            await this.applySnapshot(previous, next);
+            const observer = this.taskObservers.get(taskId);
+            if (observer) {
+              await observer.callbacks.onComplete?.({
+                ...observer.route,
+                content: finalContent.trim().length > 0 ? finalContent : `${member.name} completed the task with stop reason: ${stopReason}`,
+                messageId: this.snapshot.tasks[taskId]?.draftMessageId,
+                stopReason,
+              });
+              observer.resolve();
+            }
+          },
+          onError: async (message) => {
+            const currentTask = this.snapshot.tasks[taskId];
+            if (!currentTask || currentTask.status !== "running") {
+              return;
+            }
+            const previous = this.snapshot;
+            const snapshotWithTrace = appendTaskTrace(
+              previous,
+              {
+                taskId,
+                roomId: currentTask.roomId,
+                memberId: currentTask.memberId,
+                kind: "error",
+                title: "Task failed",
+                content: message,
+              },
+              this.context,
+            );
+            const next = completeMemberTask(
+              snapshotWithTrace,
+              {
+                taskId,
+                finalContent: `${member.name} failed to complete the task: ${message}`,
+              },
+              this.context,
+            );
+            await this.applySnapshot(previous, next);
+            const observer = this.taskObservers.get(taskId);
+            if (observer) {
+              await observer.callbacks.onError?.({
+                ...observer.route,
+                message,
+                messageId: this.snapshot.tasks[taskId]?.draftMessageId,
+              });
+              observer.resolve();
+            }
+          },
+        },
+      );
+    } catch (error) {
+      const currentTask = this.snapshot.tasks[taskId];
+      if (currentTask?.status === "running") {
+        const currentMember = this.snapshot.members[currentTask.memberId];
+        const previous = this.snapshot;
+        const snapshotWithTrace = appendTaskTrace(
+          previous,
+          {
+            taskId,
+            roomId: currentTask.roomId,
+            memberId: currentTask.memberId,
+            kind: "error",
+            title: "Task crashed before ACP completion",
+            content: getErrorMessage(error),
+          },
+          this.context,
+        );
+        const next = completeMemberTask(
+          snapshotWithTrace,
+          {
+            taskId,
+            finalContent: `${currentMember.name} failed before returning a result: ${getErrorMessage(error)}`,
+          },
+          this.context,
+        );
+        await this.applySnapshot(previous, next);
+        const observer = this.taskObservers.get(taskId);
+        if (observer) {
+          await observer.callbacks.onError?.({
+            ...observer.route,
+            message: getErrorMessage(error),
+            messageId: this.snapshot.tasks[taskId]?.draftMessageId,
+          });
+          observer.resolve();
+        }
+      }
+    } finally {
+      const observer = this.taskObservers.get(taskId);
+      if (observer && this.snapshot.tasks[taskId]?.status !== "running") {
+        observer.resolve();
+      }
+      this.runningTaskIds.delete(taskId);
+    }
   }
 
   private getExecutor(memberId: string, member: WorkspaceSnapshot["members"][string], room: WorkspaceSnapshot["rooms"][string], project: WorkspaceSnapshot["projects"][string]): MemberExecutor {
@@ -395,9 +697,9 @@ export class WorkspaceRuntime {
 }
 
 export function createDefaultInitialSnapshot(): WorkspaceSnapshot {
-  return createSeedWorkspace();
+  return createDefaultWorkspaceSnapshot();
 }
 
 export function createEmptyRuntimeSnapshot(): WorkspaceSnapshot {
-  return createWorkspaceSnapshot(defaultTemplates);
+  return createDefaultWorkspaceSnapshot();
 }

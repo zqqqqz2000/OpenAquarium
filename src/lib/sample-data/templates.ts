@@ -1,5 +1,5 @@
 import type { TeamTemplate } from "../../domain/model";
-import { createCodexAcpProvider, createGenericAcpProvider } from "../acp";
+import { createCodexAcpProvider } from "../acp";
 
 export const defaultTemplates: TeamTemplate[] = [
   {
@@ -41,11 +41,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "负责调研、信息汇总和提出备选方案。",
         prompt: "你专注于调研和信息整理，优先总结事实、风险和备选路径。",
         accentTone: "blueprint",
-        provider: createGenericAcpProvider({
-          label: "Research ACP",
-          command: "research-acp",
-          args: ["--stdio"],
-        }),
+        provider: createCodexAcpProvider(),
         observeAllRoomMessages: false,
         skills: [
           {
@@ -67,9 +63,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "负责把方案落成代码或自动化步骤。",
         prompt: "你只关心可执行实现、模块边界、测试和回归风险。",
         accentTone: "paper",
-        provider: createCodexAcpProvider({
-          args: ["--mode", "code"],
-        }),
+        provider: createCodexAcpProvider(),
         skills: [
           {
             id: "exec",
@@ -92,11 +86,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "记录决策、监控群聊变化，并在有增量时补发 digest。",
         prompt: "你负责记录、归档和周期性回看群消息，仅在有增量时动作。",
         accentTone: "correction",
-        provider: createGenericAcpProvider({
-          label: "Clerk ACP",
-          command: "clerk-acp",
-          args: ["--stdio"],
-        }),
+        provider: createCodexAcpProvider(),
         observeAllRoomMessages: true,
         skills: [
           {
@@ -145,9 +135,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "查看日志、指标和配置差异。",
         prompt: "你聚焦排障证据链，避免拍脑袋结论。",
         accentTone: "paper",
-        provider: createCodexAcpProvider({
-          args: ["--mode", "diagnose"],
-        }),
+        provider: createCodexAcpProvider(),
         skills: [
           {
             id: "logs",
@@ -164,11 +152,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "写时间线和状态播报。",
         prompt: "你负责结构化记录事故时间线和对外播报。",
         accentTone: "postit",
-        provider: createGenericAcpProvider({
-          label: "Recorder ACP",
-          command: "recorder-acp",
-          args: ["--stdio"],
-        }),
+        provider: createCodexAcpProvider(),
         observeAllRoomMessages: true,
         skills: [
           {

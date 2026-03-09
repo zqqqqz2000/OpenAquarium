@@ -101,7 +101,7 @@ describe("workspace domain", () => {
     expect(handles).toEqual(["builder", "scribe"]);
   });
 
-  it("only sends watcher digests when new room messages exist", () => {
+  it("establishes a watcher baseline before sending digests for new room activity", () => {
     const context = createRuntimeContext();
     let snapshot = createProjectWithRoom(
       createWorkspaceSnapshot(defaultTemplates),
@@ -116,14 +116,29 @@ describe("workspace domain", () => {
     const roomId = snapshot.selection.roomId!;
     const watcherId = snapshot.rooms[roomId].watcherIds[0];
     const firstRun = runWatcher(snapshot, watcherId, context);
-    const secondRun = runWatcher(firstRun, watcherId, context);
+    const firstDigestMessages = (firstRun.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => firstRun.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(firstDigestMessages).toHaveLength(0);
+    expect(firstRun.watchers[watcherId].lastConsumedMessageId).toBeDefined();
+
+    const secondSnapshot = postUserMessage(
+      firstRun,
+      {
+        roomId,
+        content: "这是一个新的房间消息",
+      },
+      context,
+    );
+    const secondRun = runWatcher(secondSnapshot, watcherId, context);
 
     const digestMessages = (secondRun.messageOrderByRoom[roomId] ?? [])
       .map((messageId) => secondRun.messages[messageId])
       .filter((message) => message.transport === "watch-digest");
 
     expect(digestMessages).toHaveLength(1);
-    expect(digestMessages[0].content).toContain("New room activity");
+    expect(digestMessages[0].content).toContain("这是一个新的房间消息");
     expect(secondRun.watchers[watcherId].lastConsumedMessageId).toBeDefined();
   });
 

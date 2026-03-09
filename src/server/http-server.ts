@@ -1,8 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 
+import { createUIMessageStream, pipeUIMessageStreamToResponse, validateUIMessages } from "ai";
 import { WebSocketServer } from "ws";
 
+import type { WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
+import { extractLastUserText } from "@/lib/chat/workspace-ui-message";
 import type { WorkspaceRuntime } from "./runtime";
 import { getErrorMessage } from "./error-utils";
 
@@ -38,6 +41,239 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
   response.setHeader("access-control-allow-headers", "content-type");
   response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
   response.end(JSON.stringify(payload));
+}
+
+export async function handleWorkspaceJsonApiRequest(args: {
+  runtime: WorkspaceRuntime;
+  method: string;
+  pathname: string;
+  body?: unknown;
+}): Promise<{ statusCode: number; payload: unknown } | undefined> {
+  const { runtime, method, pathname, body } = args;
+
+  if (method === "GET" && pathname === "/api/state") {
+    return {
+      statusCode: 200,
+      payload: { snapshot: runtime.getSnapshot() },
+    };
+  }
+
+  if (method === "POST" && pathname === "/api/projects") {
+    const created = await runtime.createProject(body as { projectName: string; firstPrompt: string; templateId: string });
+    return {
+      statusCode: 200,
+      payload: created,
+    };
+  }
+
+  const projectRoomsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/rooms$/u);
+  if (method === "POST" && projectRoomsMatch) {
+    const [, projectId] = projectRoomsMatch;
+    if (!projectId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing project id" },
+      };
+    }
+
+    const created = await runtime.createRoom({
+      projectId,
+      firstPrompt: (body as { firstPrompt: string }).firstPrompt,
+      templateId: (body as { templateId: string }).templateId,
+    });
+    return {
+      statusCode: 200,
+      payload: created,
+    };
+  }
+
+  if (method === "POST" && pathname === "/api/templates/generate") {
+    const template = await runtime.generateTemplate((body as { brief: string }).brief);
+    return {
+      statusCode: 200,
+      payload: { template, snapshot: runtime.getSnapshot() },
+    };
+  }
+
+  const roomMessageMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/messages$/u);
+  if (method === "POST" && roomMessageMatch) {
+    const [, roomId] = roomMessageMatch;
+    if (!roomId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing room id" },
+      };
+    }
+    const snapshot = await runtime.sendUserMessage({
+      roomId,
+      content: (body as { content: string }).content,
+      directMemberId: (body as { directMemberId?: string }).directMemberId,
+    });
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  if (method === "POST" && pathname === "/api/internal/member-message") {
+    const parsedBody = body as {
+      roomId: string;
+      memberId: string;
+      content: string;
+      directMemberId?: string;
+      targetHandle?: string;
+      taskId?: string;
+    };
+    const room = runtime.getSnapshot().rooms[parsedBody.roomId];
+    const directMemberId =
+      parsedBody.directMemberId ??
+      room?.memberIds
+        .map((memberId) => runtime.getSnapshot().members[memberId])
+        .find((member) => member.handle === parsedBody.targetHandle?.replace(/^@/u, ""))?.id;
+    const snapshot = await runtime.sendMemberMessage({
+      ...parsedBody,
+      directMemberId,
+    });
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const promptMatch = pathname.match(/^\/api\/members\/([^/]+)\/prompt$/u);
+  if (method === "POST" && promptMatch) {
+    const [, memberId] = promptMatch;
+    if (!memberId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing member id" },
+      };
+    }
+    const snapshot = await runtime.updatePrompt(memberId, (body as { prompt: string }).prompt);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const configMatch = pathname.match(/^\/api\/members\/([^/]+)\/config$/u);
+  if (method === "POST" && configMatch) {
+    const [, memberId] = configMatch;
+    if (!memberId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing member id" },
+      };
+    }
+    const snapshot = await runtime.updateMemberConfig({
+      memberId,
+      ...(body as {
+        summary: string;
+        prompt: string;
+        acceptsDirectMessages: boolean;
+        skills: Array<{ id: string; name: string; description: string; command: string }>;
+        provider: {
+          kind: "codex-acp" | "generic-acp";
+          label: string;
+          command: string;
+          args: string[];
+          env: Record<string, string>;
+          workingDirectory?: string;
+          capabilities: string[];
+        };
+      }),
+    });
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const entryMatch = pathname.match(/^\/api\/members\/([^/]+)\/entry$/u);
+  if (method === "POST" && entryMatch) {
+    const [, memberId] = entryMatch;
+    if (!memberId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing member id" },
+      };
+    }
+    const snapshot = await runtime.setEntryMember(memberId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const watcherConfigMatch = pathname.match(/^\/api\/members\/([^/]+)\/watcher$/u);
+  if (method === "POST" && watcherConfigMatch) {
+    const [, memberId] = watcherConfigMatch;
+    if (!memberId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing member id" },
+      };
+    }
+    const snapshot = await runtime.upsertWatcher({
+      memberId,
+      enabled: (body as { enabled: boolean }).enabled,
+      intervalMinutes: (body as { intervalMinutes: number }).intervalMinutes,
+    });
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const monitorMatch = pathname.match(/^\/api\/members\/([^/]+)\/monitor-toggle$/u);
+  if (method === "POST" && monitorMatch) {
+    const [, memberId] = monitorMatch;
+    if (!memberId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing member id" },
+      };
+    }
+    const snapshot = await runtime.toggleMemberMonitoring(memberId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const watcherToggleMatch = pathname.match(/^\/api\/watchers\/([^/]+)\/toggle$/u);
+  if (method === "POST" && watcherToggleMatch) {
+    const [, watcherId] = watcherToggleMatch;
+    if (!watcherId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing watcher id" },
+      };
+    }
+    const snapshot = await runtime.toggleWatcher(watcherId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const watcherRunMatch = pathname.match(/^\/api\/watchers\/([^/]+)\/run$/u);
+  if (method === "POST" && watcherRunMatch) {
+    const [, watcherId] = watcherRunMatch;
+    if (!watcherId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing watcher id" },
+      };
+    }
+    const snapshot = await runtime.runWatcherNow(watcherId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  return undefined;
 }
 
 export async function startWorkspaceHttpServer(args: {
@@ -97,6 +333,136 @@ export async function startWorkspaceHttpServer(args: {
         const body = await readJson<{ brief: string }>(request);
         const template = await args.runtime.generateTemplate(body.brief);
         sendJson(response, 200, { template, snapshot: args.runtime.getSnapshot() });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/chat") {
+        const body = await readJson<{
+          messages: WorkspaceUIMessage[];
+          roomId: string;
+          directMemberId?: string;
+        }>(request);
+
+        if (!body.roomId) {
+          sendJson(response, 400, { error: "Missing room id" });
+          return;
+        }
+
+        const messages = await validateUIMessages<WorkspaceUIMessage>({
+          messages: body.messages ?? [],
+        });
+        const content = extractLastUserText(messages);
+        if (content.length === 0) {
+          sendJson(response, 400, { error: "Missing user message content" });
+          return;
+        }
+
+        const textPartId = `task-${Date.now()}`;
+        let textStarted = false;
+        let streamedContent = "";
+        const stream = createUIMessageStream<WorkspaceUIMessage>({
+          async execute({ writer }) {
+            await args.runtime.streamUserMessage(
+              {
+                roomId: body.roomId,
+                content,
+                directMemberId: body.directMemberId,
+              },
+              {
+                onTaskAccepted(route) {
+                  writer.write({
+                    type: "data-taskRoute",
+                    transient: true,
+                    data: route,
+                  });
+                },
+                onDraft(event) {
+                  if (!textStarted) {
+                    writer.write({
+                      type: "text-start",
+                      id: textPartId,
+                    });
+                    textStarted = true;
+                  }
+
+                  const nextDelta = event.content.slice(streamedContent.length);
+                  streamedContent = event.content;
+                  if (nextDelta.length === 0) {
+                    return;
+                  }
+
+                  writer.write({
+                    type: "text-delta",
+                    id: textPartId,
+                    delta: nextDelta,
+                  });
+                },
+                onStatus(event) {
+                  writer.write({
+                    type: "data-taskStatus",
+                    transient: true,
+                    data: {
+                      taskId: event.taskId,
+                      memberId: event.memberId,
+                      summary: event.summary,
+                    },
+                  });
+                },
+                onComplete(event) {
+                  if (!textStarted) {
+                    writer.write({
+                      type: "text-start",
+                      id: textPartId,
+                    });
+                    writer.write({
+                      type: "text-delta",
+                      id: textPartId,
+                      delta: event.content,
+                    });
+                    textStarted = true;
+                    streamedContent = event.content;
+                  }
+                  writer.write({
+                    type: "text-end",
+                    id: textPartId,
+                  });
+                },
+                onError(event) {
+                  writer.write({
+                    type: "data-notification",
+                    transient: true,
+                    data: {
+                      level: "error",
+                      message: event.message,
+                    },
+                  });
+                  if (!textStarted) {
+                    writer.write({
+                      type: "text-start",
+                      id: textPartId,
+                    });
+                    writer.write({
+                      type: "text-delta",
+                      id: textPartId,
+                      delta: event.message,
+                    });
+                    textStarted = true;
+                    streamedContent = event.message;
+                  }
+                  writer.write({
+                    type: "text-end",
+                    id: textPartId,
+                  });
+                },
+              },
+            );
+          },
+        });
+
+        pipeUIMessageStreamToResponse({
+          response,
+          stream,
+        });
         return;
       }
 

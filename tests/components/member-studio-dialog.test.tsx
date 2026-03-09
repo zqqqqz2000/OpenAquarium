@@ -70,6 +70,28 @@ describe("MemberStudioDialog", () => {
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
     const lead = members.find((member) => member.handle === "lead")!;
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.memberId === lead.id)!;
+    snapshot.taskTraces.trace_0001 = {
+      id: "trace_0001",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "task-prompt",
+      title: "Task prompt",
+      content: "[Recent Room Transcript]\n[07:30] You (group/sent): 做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品",
+      createdAt: "2026-03-09T07:30:01.000Z",
+    };
+    snapshot.taskTraces.trace_0002 = {
+      id: "trace_0002",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "completed",
+      title: "Task completed (end_turn)",
+      content: "先整理需求边界，然后 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。",
+      createdAt: "2026-03-09T07:30:02.000Z",
+    };
+    snapshot.taskTraceOrderByTask[leadTask.id] = ["trace_0001", "trace_0002"];
 
     render(
       <MemberStudioDialog
@@ -91,5 +113,45 @@ describe("MemberStudioDialog", () => {
     expect(screen.getByText("Accepted")).toBeInTheDocument();
     expect(screen.getByText("Reply")).toBeInTheDocument();
     expect(screen.getByText("先整理需求边界，然后 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。")).toBeInTheDocument();
+  });
+
+  it("shows raw task traces including the prompt transcript", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const lead = members.find((member) => member.handle === "lead")!;
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.memberId === lead.id)!;
+    snapshot.taskTraces.trace_0100 = {
+      id: "trace_0100",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "task-prompt",
+      title: "Task prompt",
+      content: "[Recent Room Transcript]\n[07:30] You (group/sent): 原始上下文消息",
+      createdAt: "2026-03-09T07:30:01.000Z",
+    };
+    snapshot.taskTraceOrderByTask[leadTask.id] = ["trace_0100"];
+
+    render(
+      <MemberStudioDialog
+        snapshot={snapshot}
+        room={room}
+        member={lead}
+        onClose={vi.fn()}
+        onToggleMonitor={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSetEntryMember={vi.fn()}
+        onSaveWatcher={vi.fn()}
+        onRunWatcher={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Trace" }));
+
+    expect(screen.getByText("Execution trace")).toBeInTheDocument();
+    expect(screen.getByText("Task prompt")).toBeInTheDocument();
+    expect(screen.getByText(/原始上下文消息/)).toBeInTheDocument();
   });
 });

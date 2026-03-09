@@ -1,15 +1,17 @@
 import { useEffect, useRef } from "react";
 
+import type { ChatStatus } from "ai";
 import { Bot, Info, Sparkles } from "lucide-react";
 
-import type { Room, TeamMember, TeamTemplate, WorkspaceSnapshot } from "@/domain/model";
+import type { ChatMessage, Room, TeamMember, TeamTemplate, WorkspaceSnapshot } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
-import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import { MessageBubble } from "@/components/chat/message-bubble";
-import { MemberHoverPreview } from "@/components/members/member-hover-preview";
+import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import { MemberAvatar } from "@/components/members/member-avatar";
-import { Button } from "@/components/ui/button";
+import { MemberHoverPreview } from "@/components/members/member-hover-preview";
+import { getWatcherForMember } from "@/components/members/member-utils";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Popover,
@@ -19,10 +21,11 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { cn, summarizePrompt } from "@/lib/utils";
+import { useRoomChat } from "@/lib/chat/use-room-chat";
+import { getUIMessageText, type WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
+import type { MessageHandlerSummary } from "@/lib/message-feed";
 import { badgeToneProps, memberStatusBadgeProps } from "@/lib/ui-tone";
-import { getWatcherForMember } from "@/components/members/member-utils";
-import { getMessageHandlers, getMessageMentionHandles, getMessageRecipientHandles } from "@/lib/message-feed";
+import { cn, summarizePrompt } from "@/lib/utils";
 
 export function ChatPane(props: {
   leftSidebarCollapsed: boolean;
@@ -34,7 +37,6 @@ export function ChatPane(props: {
   connected: boolean;
   error?: string;
   onOpenMember: (memberId: string) => void;
-  onSend: (content: string, directMemberId?: string) => void | Promise<void>;
   onToggleLeftSidebar: () => void;
 }) {
   const {
@@ -47,13 +49,17 @@ export function ChatPane(props: {
     connected,
     error,
     onOpenMember,
-    onSend,
     onToggleLeftSidebar,
   } = props;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const previousRoomIdRef = useRef<string | undefined>(undefined);
+  const roomChat = useRoomChat({
+    room,
+    members,
+    snapshot,
+  });
   const roomId = room?.id;
-  const latestMessageId = roomId ? (snapshot.messageOrderByRoom[roomId] ?? []).at(-1) : undefined;
+  const latestMessageId = roomChat.messages.at(-1)?.id;
 
   useEffect(() => {
     if (!roomId) {
@@ -106,7 +112,6 @@ export function ChatPane(props: {
     );
   }
 
-  const messages = (snapshot.messageOrderByRoom[room.id] ?? []).map((messageId) => snapshot.messages[messageId]);
   const templateBadge = badgeToneProps(template?.accentTone ?? "paper");
   const watcherBadge = badgeToneProps("correction");
   const neutralBadge = badgeToneProps("paper");
@@ -121,7 +126,7 @@ export function ChatPane(props: {
             <p className="m-0 text-sm text-muted-foreground">
               当前聊天依赖本地 runtime 服务；如果它没启动，发消息、建 room、改成员配置都不会生效。
             </p>
-            <p className="m-0 text-xs text-muted-foreground">现在页面里展示的是本地 seed workspace，不是已经连上 runtime 的真实状态。</p>
+            <p className="m-0 text-xs text-muted-foreground">现在页面里展示的是本地空工作区，不是已经连上 runtime 的真实状态。</p>
             <p className="m-0 font-mono text-xs text-muted-foreground">bun run server</p>
             {error ? <p className="m-0 text-xs text-destructive">{error}</p> : null}
           </CardContent>
@@ -201,27 +206,30 @@ export function ChatPane(props: {
         <div className="flex items-center justify-between gap-3">
           <p className="m-0 text-2xl font-semibold tracking-tight">Room transcript</p>
           <div className="flex items-center gap-3">
-            <p className="m-0 text-sm text-muted-foreground">中途 draft 会保留在消息流里，不会被打断后抹掉。</p>
+            <p className="m-0 text-sm text-muted-foreground">
+              {describeStreamingState(roomChat.chat.status, roomChat.roomStatus?.memberHandle, roomChat.roomStatus?.summary)}
+            </p>
             <RoomInfoPopover room={room} template={template} members={members} />
           </div>
         </div>
         <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-          {messages.map((message) => {
-            const authorMember = members.find((member) => member.id === message.author.id);
+          {roomChat.messages.map((message) => {
+            const bubble = toBubbleModel(message, room.id, snapshot.currentUserName, roomChat.roomStatus);
+            const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
 
             return (
               <MessageBubble
-                key={message.id}
-                message={message}
+                key={bubble.message.id}
+                message={bubble.message}
                 authorMember={authorMember}
-                mentionedHandles={getMessageMentionHandles(snapshot, message)}
-                recipientHandles={getMessageRecipientHandles(snapshot, room, message)}
-                handlerSummaries={getMessageHandlers(snapshot, message)}
+                mentionedHandles={bubble.mentionedHandles}
+                recipientHandles={bubble.recipientHandles}
+                handlerSummaries={bubble.handlerSummaries}
                 onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
               />
             );
           })}
-          {messages.length === 0 ? (
+          {roomChat.messages.length === 0 ? (
             <Card className="border border-border shadow-sm">
               <CardContent className="flex items-center gap-4 p-6">
                 <Bot size={28} />
@@ -232,7 +240,13 @@ export function ChatPane(props: {
         </div>
       </section>
 
-      <ChatComposer connected={connected} error={error} members={members} onSend={onSend} />
+      <ChatComposer
+        connected={connected}
+        error={error ?? roomChat.chat.error?.message}
+        members={members}
+        onSend={roomChat.sendMessage}
+        sending={roomChat.chat.status === "streaming" || roomChat.chat.status === "submitted"}
+      />
     </main>
   );
 }
@@ -282,4 +296,75 @@ function RoomInfoPopover(props: {
       </PopoverContent>
     </Popover>
   );
+}
+
+function describeStreamingState(status: ChatStatus, memberHandle?: string, summary?: string): string {
+  if (status === "streaming" || status === "submitted") {
+    if (memberHandle && summary) {
+      return `@${memberHandle} 正在处理: ${summary}`;
+    }
+
+    if (memberHandle) {
+      return `@${memberHandle} 正在处理当前消息。`;
+    }
+
+    return "当前消息正在流式返回。";
+  }
+
+  return "中途 draft 会保留在消息流里，不会被打断后抹掉。";
+}
+
+function inferMessageStatus(message: WorkspaceUIMessage): ChatMessage["status"] {
+  const textPart = message.parts.find((part) => part.type === "text");
+  if (textPart?.state === "streaming") {
+    return "streaming";
+  }
+
+  return message.role === "assistant" ? "completed" : "sent";
+}
+
+function toBubbleModel(
+  message: WorkspaceUIMessage,
+  roomId: string,
+  currentUserName: string,
+  activeRoute?: {
+    memberId: string;
+    memberName: string;
+    memberHandle: string;
+  },
+): {
+  message: ChatMessage;
+  authorMemberId?: string;
+  mentionedHandles: string[];
+  recipientHandles: string[];
+  handlerSummaries: MessageHandlerSummary[];
+} {
+  const text = getUIMessageText(message);
+  const status = message.metadata?.status ?? inferMessageStatus(message);
+  const authorKind = message.metadata?.authorKind ?? (message.role === "user" ? "user" : "member");
+  const authorId = message.metadata?.authorId ?? (message.role === "user" ? "user" : activeRoute?.memberId ?? "assistant");
+  const authorLabel = message.metadata?.authorLabel ?? (message.role === "user" ? currentUserName : activeRoute?.memberName ?? "Assistant");
+
+  return {
+    message: {
+      id: message.id,
+      roomId,
+      author: {
+        kind: authorKind,
+        id: authorId,
+        label: authorLabel,
+      },
+      content: text,
+      createdAt: message.metadata?.createdAt ?? new Date().toISOString(),
+      transport: message.metadata?.transport ?? "group",
+      status,
+      mentionedMemberIds: [],
+      recipientMemberIds: [],
+      taskId: message.metadata?.handlerSummaries?.[0]?.taskId,
+    },
+    authorMemberId: message.metadata?.memberId ?? (message.role === "assistant" ? activeRoute?.memberId : undefined),
+    mentionedHandles: message.metadata?.mentionedHandles ?? [],
+    recipientHandles: message.metadata?.recipientHandles ?? [],
+    handlerSummaries: message.metadata?.handlerSummaries ?? [],
+  };
 }

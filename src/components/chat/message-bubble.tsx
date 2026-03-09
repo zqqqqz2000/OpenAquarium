@@ -1,14 +1,17 @@
+import { memo } from "react";
+
 import { AtSign, Cpu, Lock, Megaphone, PencilLine, UserRound } from "lucide-react";
 
 import type { ChatMessage, TeamMember } from "@/domain/model";
 import type { ContextBadge, MessageHandlerSummary } from "@/lib/message-feed";
+import { areMessageBubblePropsEqual } from "@/components/chat/message-bubble-equality";
 import { MemberAvatar } from "@/components/members/member-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { badgeToneProps, messageStatusBadgeProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn, formatTime } from "@/lib/utils";
 
-export function MessageBubble(props: {
+export interface MessageBubbleProps {
   message: ChatMessage;
   authorMember?: TeamMember;
   mentionedHandles?: string[];
@@ -16,7 +19,9 @@ export function MessageBubble(props: {
   handlerSummaries?: MessageHandlerSummary[];
   contextBadges?: ContextBadge[];
   onAuthorClick?: () => void;
-}) {
+}
+
+function MessageBubbleComponent(props: MessageBubbleProps) {
   const {
     message,
     authorMember,
@@ -143,3 +148,5 @@ export function MessageBubble(props: {
     </Card>
   );
 }
+
+export const MessageBubble = memo(MessageBubbleComponent, areMessageBubblePropsEqual);

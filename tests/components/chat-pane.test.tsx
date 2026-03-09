@@ -26,7 +26,6 @@ describe("ChatPane", () => {
           selectedMemberId={room.entryMemberId}
           connected
           onOpenMember={vi.fn()}
-          onSend={vi.fn()}
           error={undefined}
           onToggleLeftSidebar={onToggleLeftSidebar}
         />
@@ -68,7 +67,6 @@ describe("ChatPane", () => {
           selectedMemberId={room.entryMemberId}
           connected
           onOpenMember={vi.fn()}
-          onSend={vi.fn()}
           error={undefined}
           onToggleLeftSidebar={vi.fn()}
         />

@@ -19,7 +19,7 @@ import {
   toggleWatcher,
   updateMemberPrompt,
 } from "@/domain/workspace";
-import { createSeedWorkspace } from "@/lib/sample-data/workspace";
+import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
 
 function buildSyntheticDraft(snapshot: WorkspaceSnapshot, taskId: TaskId): string {
   const task = snapshot.tasks[taskId];
@@ -85,7 +85,7 @@ export interface WorkspaceStoreState {
   updatePrompt: (memberId: MemberId, prompt: string) => void;
 }
 
-export function createWorkspaceStore(initialSnapshot = createSeedWorkspace()): StoreApi<WorkspaceStoreState> {
+export function createWorkspaceStore(initialSnapshot = createDefaultWorkspaceSnapshot()): StoreApi<WorkspaceStoreState> {
   const context = createRuntimeContext(2000, "2026-03-09T09:00:00.000Z");
 
   return createStore<WorkspaceStoreState>((set, get) => ({

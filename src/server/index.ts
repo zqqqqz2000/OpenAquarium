@@ -15,12 +15,27 @@ async function main(): Promise<void> {
     runtime,
     port,
   });
+  let isShuttingDown = false;
 
   console.log(`OpenAquarium server listening on http://127.0.0.1:${port}`);
 
   const shutdown = async (): Promise<void> => {
-    await server.close();
-    await runtime.dispose();
+    if (isShuttingDown) {
+      return;
+    }
+
+    isShuttingDown = true;
+
+    try {
+      await server.close();
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ERR_SERVER_NOT_RUNNING") {
+        throw error;
+      }
+    } finally {
+      await runtime.dispose();
+    }
+
     process.exit(0);
   };
 

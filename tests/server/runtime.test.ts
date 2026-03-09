@@ -88,6 +88,20 @@ describe("WorkspaceRuntime", () => {
       expect(messages.some((message) => message.includes("@builder"))).toBe(true);
       expect(messages.some((message) => message.includes("builder 已收到"))).toBe(true);
     });
+
+    const snapshot = runtime.getSnapshot();
+    const roomId = snapshot.selection.roomId!;
+    const lead = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead")!;
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
+    const leadTraceKinds = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map(
+      (traceId) => snapshot.taskTraces[traceId]?.kind,
+    );
+
+    expect(leadTraceKinds).toContain("task-started");
+    expect(leadTraceKinds).toContain("task-prompt");
+    expect(leadTraceKinds).toContain("completed");
   });
 
   it("persists the latest snapshot to disk", async () => {
@@ -114,5 +128,154 @@ describe("WorkspaceRuntime", () => {
       const payload = JSON.parse(raw) as { snapshot: { projectOrder: string[] } };
       expect(payload.snapshot.projectOrder.length).toBeGreaterThan(0);
     });
+  });
+
+  it("captures an error trace when execution crashes before ACP completes", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-crash-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(() => {
+          if (member.handle === "lead") {
+            return Promise.reject(new Error("executor crashed"));
+          }
+
+          return Promise.resolve();
+        }),
+    });
+    runtimes.push(runtime);
+
+    await runtime.createProject({
+      projectName: "Crash Check",
+      firstPrompt: "@lead 请回应一下",
+      templateId: "template-product-pod",
+    });
+
+    await waitFor(() => {
+      const snapshot = runtime.getSnapshot();
+      const roomId = snapshot.selection.roomId!;
+      const lead = snapshot.rooms[roomId].memberIds
+        .map((memberId) => snapshot.members[memberId])
+        .find((member) => member.handle === "lead")!;
+      const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
+      const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map(
+        (traceId) => snapshot.taskTraces[traceId],
+      );
+
+      expect(leadTask.status).toBe("completed");
+      expect(leadTraceEntries.some((entry) => entry?.kind === "error")).toBe(true);
+    });
+  });
+
+  it("records ACP status in trace without rewriting the streaming draft body", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-status-"));
+    let allowCompletion: (() => void) | undefined;
+    const completionGate = new Promise<void>((resolve) => {
+      allowCompletion = resolve;
+    });
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          if (member.handle !== "lead") {
+            await callbacks.onComplete(`${member.handle} done`, "end_turn");
+            return;
+          }
+
+          await callbacks.onDraft("正在整理上下文");
+          await callbacks.onStatus("Run room state (in_progress)");
+          await completionGate;
+          await callbacks.onComplete("整理完成", "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    await runtime.createProject({
+      projectName: "Status Check",
+      firstPrompt: "@lead 看一下当前状态",
+      templateId: "template-product-pod",
+    });
+
+    await waitFor(() => {
+      const snapshot = runtime.getSnapshot();
+      const roomId = snapshot.selection.roomId!;
+      const lead = snapshot.rooms[roomId].memberIds
+        .map((memberId) => snapshot.members[memberId])
+        .find((member) => member.handle === "lead")!;
+      const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
+      const draftMessageId = leadTask.draftMessageId;
+
+      expect(draftMessageId).toBeDefined();
+      expect(snapshot.messages[draftMessageId!]?.content).toBe("正在整理上下文");
+      expect((snapshot.taskTraceOrderByTask[leadTask.id] ?? []).some((traceId) => snapshot.taskTraces[traceId]?.kind === "status")).toBe(true);
+    });
+
+    allowCompletion?.();
+
+    await waitFor(() => {
+      const snapshot = runtime.getSnapshot();
+      const roomId = snapshot.selection.roomId!;
+      const lead = snapshot.rooms[roomId].memberIds
+        .map((memberId) => snapshot.members[memberId])
+        .find((member) => member.handle === "lead")!;
+      const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
+
+      expect(leadTask.status).toBe("completed");
+      expect(snapshot.messages[leadTask.draftMessageId!]?.content).toBe("整理完成");
+    });
+  });
+
+  it("continues id allocation after restart instead of colliding with persisted state", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-ids-"));
+    const stateFilePath = path.join(workspaceRoot, ".openaquarium", "state.json");
+    const executorFactory: MemberExecutorFactory = ({ member }) =>
+      new FakeExecutor(async (_request, callbacks) => {
+        await callbacks.onComplete(`${member.handle} done`, "end_turn");
+      });
+    const firstRuntime = await WorkspaceRuntime.create({
+      workspaceRoot,
+      stateFilePath,
+      executorFactory,
+    });
+    runtimes.push(firstRuntime);
+
+    const first = await firstRuntime.createProject({
+      projectName: "First",
+      firstPrompt: "first prompt",
+      templateId: "template-product-pod",
+    });
+
+    await waitFor(() => {
+      const runningTasks = Object.values(firstRuntime.getSnapshot().tasks).filter((task) => task.status === "running");
+      expect(runningTasks.length).toBe(0);
+    });
+
+    await firstRuntime.dispose();
+    runtimes.pop();
+
+    const secondRuntime = await WorkspaceRuntime.create({
+      workspaceRoot,
+      stateFilePath,
+      executorFactory,
+    });
+    runtimes.push(secondRuntime);
+
+    const second = await secondRuntime.createProject({
+      projectName: "Second",
+      firstPrompt: "second prompt",
+      templateId: "template-product-pod",
+    });
+
+    await waitFor(() => {
+      const runningTasks = Object.values(secondRuntime.getSnapshot().tasks).filter((task) => task.status === "running");
+      expect(runningTasks.length).toBe(0);
+    });
+
+    expect(second.projectId).not.toBe(first.projectId);
+    expect(second.roomId).not.toBe(first.roomId);
   });
 });

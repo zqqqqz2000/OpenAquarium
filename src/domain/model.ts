@@ -5,6 +5,7 @@ export type MemberId = string;
 export type MessageId = string;
 export type TaskId = string;
 export type WatcherId = string;
+export type TraceId = string;
 
 export type ProviderKind = "codex-acp" | "generic-acp";
 export type MemberStatus = "idle" | "running" | "interrupted";
@@ -12,6 +13,7 @@ export type TaskStatus = "running" | "interrupted" | "completed";
 export type MessageTransport = "group" | "direct" | "watch-digest" | "status";
 export type MessageStatus = "sent" | "streaming" | "completed" | "interrupted";
 export type AccentTone = "paper" | "postit" | "blueprint" | "correction";
+export type TaskTraceKind = "task-started" | "task-prompt" | "status" | "completed" | "error" | "interrupted";
 
 export interface SkillDefinition {
   id: string;
@@ -135,6 +137,17 @@ export interface MemberTask {
   draftMessageId?: MessageId;
 }
 
+export interface TaskTraceEntry {
+  id: TraceId;
+  taskId: TaskId;
+  roomId: RoomId;
+  memberId: MemberId;
+  kind: TaskTraceKind;
+  title: string;
+  content: string;
+  createdAt: string;
+}
+
 export interface WorkspaceSelection {
   projectId?: ProjectId;
   roomId?: RoomId;
@@ -152,6 +165,8 @@ export interface WorkspaceSnapshot {
   messages: Record<MessageId, ChatMessage>;
   messageOrderByRoom: Record<RoomId, MessageId[]>;
   tasks: Record<TaskId, MemberTask>;
+  taskTraces: Record<TraceId, TaskTraceEntry>;
+  taskTraceOrderByTask: Record<TaskId, TraceId[]>;
   watchers: Record<WatcherId, WatchSubscription>;
   selection: WorkspaceSelection;
   currentUserName: string;

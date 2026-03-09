@@ -26,6 +26,7 @@ export function Sidebar(props: {
 }) {
   const { collapsed, projects, roomsByProject, activeProjectId, activeRoomId, templates, connected, error, loading, onResizeStart } = props;
   const connectionBadge = badgeToneProps(connected ? "blueprint" : "correction");
+  const actionsDisabled = !connected || loading;
 
   if (collapsed) {
     return <aside className="min-h-0 min-w-0 overflow-hidden" data-collapsed="true" aria-hidden />;
@@ -46,7 +47,7 @@ export function Sidebar(props: {
           </div>
           <ThemeToggle className="w-full" />
           <div className="flex gap-2">
-            <CreateProjectDialog templates={templates} triggerClassName="flex-1 justify-center" />
+            <CreateProjectDialog templates={templates} triggerClassName="flex-1 justify-center" disabled={actionsDisabled} />
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge variant={connectionBadge.variant} className={connectionBadge.className}>
@@ -57,7 +58,7 @@ export function Sidebar(props: {
           {!connected ? (
             <p className="m-0 text-xs leading-5 text-muted-foreground">
               前端会连接本地 runtime `http://127.0.0.1:4301`。如果只启动了前端而没启动服务端，就会显示 offline。
-              当前你看到的是 seed workspace。启动命令：`bun run server`
+              当前页面只会显示空白工作区，不会执行任何真实 ACP 任务。启动命令：`bun run server`
             </p>
           ) : null}
           {error ? <p className="m-0 text-xs leading-5 text-destructive">{error}</p> : null}
@@ -71,7 +72,7 @@ export function Sidebar(props: {
               <FolderKanban size={20} />
               <p className="m-0 text-xl font-semibold tracking-tight">Projects</p>
             </div>
-            <CreateRoomDialog activeProjectId={activeProjectId} projects={projects} templates={templates} />
+            <CreateRoomDialog activeProjectId={activeProjectId} projects={projects} templates={templates} disabled={actionsDisabled} />
           </div>
           <div className="flex flex-col gap-4">
             {projects.map((project) => (

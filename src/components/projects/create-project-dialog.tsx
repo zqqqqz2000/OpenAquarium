@@ -27,8 +27,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { badgeToneProps } from "@/lib/ui-tone";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
 
-export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerClassName?: string }) {
-  const { templates, triggerClassName } = props;
+export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerClassName?: string; disabled?: boolean }) {
+  const { templates, triggerClassName, disabled = false } = props;
   const navigate = useNavigate();
   const createProject = useWorkspaceStore((state) => state.createProject);
   const generateTemplate = useWorkspaceStore((state) => state.generateTemplate);
@@ -37,12 +37,13 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
   const [firstPrompt, setFirstPrompt] = useState("先定义一个支持 ACP 和多 member 配置的 agent-team 产品。");
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [actionError, setActionError] = useState<string | undefined>();
   const selectedTemplate = templates.find((template) => template.id === templateId);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button className={triggerClassName}>
+        <Button className={triggerClassName} disabled={disabled}>
           <Plus size={18} />
           New project
         </Button>
@@ -85,13 +86,16 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={isGenerating}
+                disabled={disabled || isGenerating}
                 onClick={() => {
                   void (async () => {
                     setIsGenerating(true);
+                    setActionError(undefined);
                     try {
                       const template = await generateTemplate(firstPrompt);
                       setTemplateId(template.id);
+                    } catch (error) {
+                      setActionError(error instanceof Error ? error.message : String(error));
                     } finally {
                       setIsGenerating(false);
                     }
@@ -101,8 +105,9 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
                 {isGenerating ? "Generating…" : "Generate template"}
               </Button>
             </div>
+            {actionError ? <p className="m-0 text-sm text-destructive">{actionError}</p> : null}
             <p className="m-0 text-sm text-muted-foreground">
-              生成会调用 ACP agent，并参考内置 templates、CLI 命令范式和成员配置约束。
+              生成会调用真实 ACP agent，并参考内置 templates、CLI 命令范式和成员配置约束。
             </p>
             <div className="flex flex-wrap gap-2">
               {selectedTemplate?.members.map((member) => {
@@ -120,6 +125,7 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
                 onClick={() => {
                   void (async () => {
                     try {
+                      setActionError(undefined);
                       const next = await createProject({
                         projectName,
                         firstPrompt,
@@ -135,11 +141,12 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
                         });
                       });
                       setOpen(false);
-                    } catch {
-                      // Sidebar error state will explain why project creation failed.
+                    } catch (error) {
+                      setActionError(error instanceof Error ? error.message : String(error));
                     }
                   })();
                 }}
+                disabled={disabled || projectName.trim().length === 0 || firstPrompt.trim().length === 0 || templateId.length === 0}
               >
                 Create room
               </Button>

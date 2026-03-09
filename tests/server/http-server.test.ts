@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
 import { WorkspacePersistence } from "@/server/persistence";
-import { startWorkspaceHttpServer } from "@/server/http-server";
+import { handleWorkspaceJsonApiRequest } from "@/server/http-server";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
 import type { ExecutorCallbacks, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 
@@ -26,17 +26,12 @@ class EchoExecutor implements MemberExecutor {
   }
 }
 
-describe("workspace http server", () => {
-  const resources: Array<{ runtime: WorkspaceRuntime; close(): Promise<void> }> = [];
+describe("workspace http api routing", () => {
+  const runtimes: WorkspaceRuntime[] = [];
 
   afterEach(async () => {
-    await Promise.all(
-      resources.map(async (resource) => {
-        await resource.close();
-        await resource.runtime.dispose();
-      }),
-    );
-    resources.length = 0;
+    await Promise.all(runtimes.map((runtime) => runtime.dispose()));
+    runtimes.length = 0;
   });
 
   it("serves state and accepts member/message configuration mutations", async () => {
@@ -106,20 +101,20 @@ describe("workspace http server", () => {
         ],
       }),
     });
+    runtimes.push(runtime);
+
     await runtime.createProject({
       projectName: "HTTP Check",
       firstPrompt: "验证 API",
       templateId: "template-product-pod",
     });
 
-    const server = await startWorkspaceHttpServer({
+    const stateResult = await handleWorkspaceJsonApiRequest({
       runtime,
-      port: 0,
+      method: "GET",
+      pathname: "/api/state",
     });
-    resources.push({ runtime, close: server.close });
-
-    const stateResponse = await fetch(`http://127.0.0.1:${server.port}/api/state`);
-    const statePayload = (await stateResponse.json()) as {
+    const statePayload = stateResult?.payload as {
       snapshot: {
         selection: { projectId?: string; roomId?: string };
         rooms: Record<string, { memberIds: string[] }>;
@@ -145,28 +140,26 @@ describe("workspace http server", () => {
       throw new Error("Expected builder id");
     }
 
-    const memberMessageResponse = await fetch(`http://127.0.0.1:${server.port}/api/internal/member-message`, {
+    const memberMessageResult = await handleWorkspaceJsonApiRequest({
+      runtime,
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+      pathname: "/api/internal/member-message",
+      body: {
         roomId,
         memberId,
         content: "@builder 请看这里",
-      }),
+      },
     });
-    const payload = (await memberMessageResponse.json()) as { snapshot: { messageOrderByRoom: Record<string, string[]>; messages: Record<string, { content: string }> } };
+    const payload = memberMessageResult?.payload as { snapshot: { messageOrderByRoom: Record<string, string[]>; messages: Record<string, { content: string }> } };
     const contents = (payload.snapshot.messageOrderByRoom[roomId] ?? []).map(
       (messageId) => payload.snapshot.messages[messageId]?.content ?? "",
     );
 
-    const configResponse = await fetch(`http://127.0.0.1:${server.port}/api/members/${builderId}/config`, {
+    const configResult = await handleWorkspaceJsonApiRequest({
+      runtime,
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+      pathname: `/api/members/${builderId}/config`,
+      body: {
         summary: "Builder v2",
         prompt: "新的 builder prompt",
         acceptsDirectMessages: false,
@@ -188,55 +181,56 @@ describe("workspace http server", () => {
           },
           capabilities: ["prompt", "cancel"],
         },
-      }),
-    });
-    const configPayload = (await configResponse.json()) as { snapshot: { members: Record<string, { provider: { command: string }; summary: string }> } };
-
-    const entryResponse = await fetch(`http://127.0.0.1:${server.port}/api/members/${builderId}/entry`, {
-      method: "POST",
-    });
-    const entryPayload = (await entryResponse.json()) as { snapshot: { rooms: Record<string, { entryMemberId: string }> } };
-
-    const watcherResponse = await fetch(`http://127.0.0.1:${server.port}/api/members/${builderId}/watcher`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
       },
-      body: JSON.stringify({
+    });
+    const configPayload = configResult?.payload as { snapshot: { members: Record<string, { provider: { command: string }; summary: string }> } };
+
+    const entryResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: `/api/members/${builderId}/entry`,
+    });
+    const entryPayload = entryResult?.payload as { snapshot: { rooms: Record<string, { entryMemberId: string }> } };
+
+    const watcherResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: `/api/members/${builderId}/watcher`,
+      body: {
         enabled: true,
         intervalMinutes: 6,
-      }),
+      },
     });
-    const watcherPayload = (await watcherResponse.json()) as {
+    const watcherPayload = watcherResult?.payload as {
       snapshot: {
         rooms: Record<string, { watcherIds: string[] }>;
         watchers: Record<string, { memberId: string; intervalMinutes: number }>;
       };
     };
-    const templateResponse = await fetch(`http://127.0.0.1:${server.port}/api/templates/generate`, {
+
+    const templateResult = await handleWorkspaceJsonApiRequest({
+      runtime,
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+      pathname: "/api/templates/generate",
+      body: {
         brief: "生成一个新的协作模板",
-      }),
+      },
     });
-    const templatePayload = (await templateResponse.json()) as {
+    const templatePayload = templateResult?.payload as {
       template: { id: string; name: string };
       snapshot: { templates: Record<string, { description: string }> };
     };
-    const createRoomResponse = await fetch(`http://127.0.0.1:${server.port}/api/projects/${projectId}/rooms`, {
+
+    const createRoomResult = await handleWorkspaceJsonApiRequest({
+      runtime,
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+      pathname: `/api/projects/${projectId}/rooms`,
+      body: {
         firstPrompt: "为同一个 project 新开一个 room",
         templateId: "template-product-pod",
-      }),
+      },
     });
-    const createRoomPayload = (await createRoomResponse.json()) as {
+    const createRoomPayload = createRoomResult?.payload as {
       roomId: string;
       snapshot: { rooms: Record<string, { projectId: string; topic: string }> };
     };

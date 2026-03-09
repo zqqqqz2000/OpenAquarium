@@ -1,7 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 import type { TeamTemplate, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
-import { createSeedWorkspace } from "@/lib/sample-data/workspace";
+import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
 import { WorkspaceRuntimeClient } from "@/lib/runtime-client";
 
 function mergeIncomingSnapshot(current: WorkspaceSnapshot, incoming: WorkspaceSnapshot): WorkspaceSnapshot {
@@ -90,7 +90,7 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
   };
 
   return createStore<WorkspaceRemoteStoreState>((set, get) => ({
-    snapshot: createSeedWorkspace(),
+    snapshot: createDefaultWorkspaceSnapshot(),
     loading: true,
     connected: false,
     async hydrate() {

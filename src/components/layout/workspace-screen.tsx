@@ -19,7 +19,6 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const error = useWorkspaceStore((state) => state.error);
   const selectRoom = useWorkspaceStore((state) => state.selectRoom);
   const selectMember = useWorkspaceStore((state) => state.selectMember);
-  const sendUserMessage = useWorkspaceStore((state) => state.sendUserMessage);
   const toggleMemberMonitoring = useWorkspaceStore((state) => state.toggleMemberMonitoring);
   const runWatcher = useWorkspaceStore((state) => state.runWatcher);
   const updateMemberConfig = useWorkspaceStore((state) => state.updateMemberConfig);
@@ -135,7 +134,6 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           connected={connected}
           error={error}
           onOpenMember={openMemberStudio}
-          onSend={(content, directMemberId) => sendUserMessage(content, directMemberId)}
           onToggleLeftSidebar={toggleLeftCollapsed}
         />
       </div>

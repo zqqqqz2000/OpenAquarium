@@ -101,21 +101,20 @@ describe("template generator", () => {
     expect(template.members[1]?.provider.command).toBe("claude-code");
   });
 
-  it("falls back to heuristic generation when ACP output is invalid", async () => {
-    const template = await generateTemplateFromBrief("incident 调试 pod", {
-      workspaceRoot: process.cwd(),
-      transport: {
-        generate() {
-          return Promise.resolve("not json");
+  it("fails when ACP output is invalid", async () => {
+    await expect(
+      generateTemplateFromBrief("incident 调试 pod", {
+        workspaceRoot: process.cwd(),
+        transport: {
+          generate() {
+            return Promise.resolve("not json");
+          },
         },
-      },
-    });
-
-    expect(template.name).toContain("Incident");
-    expect(template.members.some((member) => member.isEntryMember)).toBe(true);
+      }),
+    ).rejects.toThrow("ACP template response did not contain a JSON object");
   });
 
-  it("falls back to heuristic generation when transport exceeds timeout", async () => {
+  it("fails when transport exceeds timeout", async () => {
     vi.useFakeTimers();
 
     const promise = generateTemplateFromBrief("research pod", {
@@ -126,10 +125,8 @@ describe("template generator", () => {
       },
     });
 
+    const rejection = expect(promise).rejects.toThrow("Template generation timed out after 5ms");
     await vi.advanceTimersByTimeAsync(5);
-    const template = await promise;
-
-    expect(template.name).toContain("Generated");
-    expect(template.members.some((member) => member.isEntryMember)).toBe(true);
+    await rejection;
   });
 });

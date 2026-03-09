@@ -10,8 +10,11 @@ import type {
   PostMemberMessageInput,
   PostMemberDraftInput,
   PostUserMessageInput,
+  RoomId,
   Room,
   SkillDefinition,
+  TaskId,
+  TaskTraceEntry,
   TeamMember,
   TeamMemberBlueprint,
   TeamTemplate,
@@ -39,6 +42,10 @@ function cloneSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
       Object.entries(snapshot.messageOrderByRoom).map(([roomId, messageIds]) => [roomId, [...messageIds]]),
     ),
     tasks: { ...snapshot.tasks },
+    taskTraces: { ...snapshot.taskTraces },
+    taskTraceOrderByTask: Object.fromEntries(
+      Object.entries(snapshot.taskTraceOrderByTask).map(([taskId, traceIds]) => [taskId, [...traceIds]]),
+    ),
     watchers: { ...snapshot.watchers },
     selection: { ...snapshot.selection },
   };
@@ -80,6 +87,12 @@ function updateMember(snapshot: WorkspaceSnapshot, member: TeamMember): void {
 
 function updateTask(snapshot: WorkspaceSnapshot, task: MemberTask): void {
   snapshot.tasks[task.id] = task;
+}
+
+function insertTaskTrace(snapshot: WorkspaceSnapshot, trace: TaskTraceEntry): void {
+  snapshot.taskTraces[trace.id] = trace;
+  snapshot.taskTraceOrderByTask[trace.taskId] ??= [];
+  snapshot.taskTraceOrderByTask[trace.taskId].push(trace.id);
 }
 
 function findBlueprint(template: TeamTemplate, predicate: (member: TeamMemberBlueprint) => boolean): TeamMemberBlueprint {
@@ -125,7 +138,13 @@ function buildTaskTitle(message: ChatMessage): string {
   return "Handle teammate mention";
 }
 
-function markTaskInterrupted(snapshot: WorkspaceSnapshot, member: TeamMember, interruptingMessageId: MessageId, now: string): void {
+function markTaskInterrupted(
+  snapshot: WorkspaceSnapshot,
+  member: TeamMember,
+  interruptingMessageId: MessageId,
+  now: string,
+  createId: MutationContext["createId"],
+): void {
   if (!member.activeTaskId) {
     return;
   }
@@ -144,6 +163,16 @@ function markTaskInterrupted(snapshot: WorkspaceSnapshot, member: TeamMember, in
   };
 
   updateTask(snapshot, interruptedTask);
+  insertTaskTrace(snapshot, {
+    id: createId("trace"),
+    taskId: interruptedTask.id,
+    roomId: interruptedTask.roomId,
+    memberId: interruptedTask.memberId,
+    kind: "interrupted",
+    title: "Task interrupted",
+    content: snapshot.messages[interruptingMessageId]?.content ?? interruptingMessageId,
+    createdAt: now,
+  });
 
   if (existingTask.draftMessageId) {
     const draft = snapshot.messages[existingTask.draftMessageId];
@@ -164,7 +193,7 @@ function startTaskForMember(
   now: string,
   createId: MutationContext["createId"],
 ): void {
-  markTaskInterrupted(snapshot, member, sourceMessageId, now);
+  markTaskInterrupted(snapshot, member, sourceMessageId, now, createId);
 
   const taskId = createId("task");
   const sourceMessage = snapshot.messages[sourceMessageId];
@@ -187,6 +216,16 @@ function startTaskForMember(
 
   updateTask(snapshot, nextTask);
   updateMember(snapshot, { ...nextMember, status: "running" });
+  insertTaskTrace(snapshot, {
+    id: createId("trace"),
+    taskId,
+    roomId: room.id,
+    memberId: member.id,
+    kind: "task-started",
+    title: nextTask.title,
+    content: `${sourceMessage.author.label}: ${sourceMessage.content}`,
+    createdAt: now,
+  });
 }
 
 function resolveRecipients(snapshot: WorkspaceSnapshot, message: ChatMessage): MemberId[] {
@@ -281,6 +320,8 @@ export function createWorkspaceSnapshot(templates: TeamTemplate[], currentUserNa
     messages: {},
     messageOrderByRoom: {},
     tasks: {},
+    taskTraces: {},
+    taskTraceOrderByTask: {},
     watchers: {},
     selection: {},
     currentUserName,
@@ -700,6 +741,32 @@ export function upsertMemberWatcher(
   return snapshot;
 }
 
+export function appendTaskTrace(
+  current: WorkspaceSnapshot,
+  input: {
+    taskId: TaskId;
+    roomId: RoomId;
+    memberId: MemberId;
+    kind: TaskTraceEntry["kind"];
+    title: string;
+    content: string;
+  },
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  insertTaskTrace(snapshot, {
+    id: context.createId("trace"),
+    taskId: input.taskId,
+    roomId: input.roomId,
+    memberId: input.memberId,
+    kind: input.kind,
+    title: input.title.trim(),
+    content: input.content.trim(),
+    createdAt: context.now(),
+  });
+  return snapshot;
+}
+
 export function toggleWatcher(current: WorkspaceSnapshot, watcherId: string): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
   const watcher = snapshot.watchers[watcherId];
@@ -736,8 +803,36 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
   }
 
   const roomMessageIds = snapshot.messageOrderByRoom[watcher.roomId] ?? [];
-  const startIndex = watcher.lastConsumedMessageId ? roomMessageIds.indexOf(watcher.lastConsumedMessageId) + 1 : 0;
-  const newMessageIds = roomMessageIds.slice(Math.max(startIndex, 0)).filter((messageId) => {
+  const validRoomMessageIds = roomMessageIds.filter((messageId) => snapshot.messages[messageId]?.roomId === watcher.roomId);
+
+  if (!watcher.lastConsumedMessageId) {
+    const latestMessageId = [...validRoomMessageIds]
+      .reverse()
+      .find((messageId) => snapshot.messages[messageId]?.transport !== "watch-digest");
+
+    snapshot.watchers[watcherId] = {
+      ...watcher,
+      lastConsumedMessageId: latestMessageId,
+    };
+
+    return snapshot;
+  }
+
+  const startIndex = validRoomMessageIds.indexOf(watcher.lastConsumedMessageId) + 1;
+  if (startIndex <= 0) {
+    const latestMessageId = [...validRoomMessageIds]
+      .reverse()
+      .find((messageId) => snapshot.messages[messageId]?.transport !== "watch-digest");
+
+    snapshot.watchers[watcherId] = {
+      ...watcher,
+      lastConsumedMessageId: latestMessageId,
+    };
+
+    return snapshot;
+  }
+
+  const newMessageIds = validRoomMessageIds.slice(startIndex).filter((messageId) => {
     const message = snapshot.messages[messageId];
     return message.transport !== "watch-digest";
   });
