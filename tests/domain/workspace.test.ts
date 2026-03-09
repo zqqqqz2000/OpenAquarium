@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { createRuntimeContext } from "@/domain/identity";
+import type { ChatMessage } from "@/domain/model";
 import {
   completeMemberTask,
   createProjectWithRoom,
   createWorkspaceSnapshot,
   extractMentionMemberIds,
   postMemberDraft,
+  postMemberMessage,
   postUserMessage,
   runWatcher,
   setEntryMember,
@@ -42,7 +44,7 @@ describe("workspace domain", () => {
     ).toBe(true);
   });
 
-  it("interrupts a running member while preserving the streaming draft message", () => {
+  it("interrupts a running member without leaking internal draft text into the room transcript", () => {
     const context = createRuntimeContext();
     let snapshot = createProjectWithRoom(
       createWorkspaceSnapshot(defaultTemplates),
@@ -65,7 +67,6 @@ describe("workspace domain", () => {
       context,
     );
 
-    const draftMessageId = snapshot.tasks[entryMember.activeTaskId!].draftMessageId!;
     snapshot = postUserMessage(
       snapshot,
       {
@@ -76,8 +77,7 @@ describe("workspace domain", () => {
       context,
     );
 
-    expect(snapshot.messages[draftMessageId].status).toBe("interrupted");
-    expect(snapshot.messages[draftMessageId].content).toContain("状态机");
+    expect((snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId].author.kind)).toEqual(["user", "user"]);
     expect(snapshot.members[entryMember.id].activeTaskId).not.toBe(snapshot.tasks[entryMember.activeTaskId!]?.interruptedByMessageId);
     expect(snapshot.members[entryMember.id].status).toBe("running");
   });
@@ -142,6 +142,131 @@ describe("workspace domain", () => {
     expect(secondRun.watchers[watcherId].lastConsumedMessageId).toBeDefined();
   });
 
+  it("filters template ack placeholders without blocking later real updates", () => {
+    const context = createRuntimeContext();
+    let snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "ACP Lab",
+        firstPrompt: "实现一个可中断的 agent team",
+        templateId: "template-product-pod",
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId!;
+    const watcherId = snapshot.rooms[roomId].watcherIds[0];
+    const builder = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder")!;
+
+    snapshot = runWatcher(snapshot, watcherId, context);
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: builder.id,
+        content: "收到任务。我会先整理当前房间上下文。如果需要协调其他成员，我会在最终消息里明确 @handle。",
+      },
+      context,
+    );
+
+    const afterAckRun = runWatcher(snapshot, watcherId, context);
+    const messagesAfterAck = (afterAckRun.messageOrderByRoom[roomId] ?? []).map((messageId) => afterAckRun.messages[messageId]);
+
+    expect(messagesAfterAck.filter((message) => message.transport === "watch-digest")).toHaveLength(0);
+    expect(afterAckRun.watchers[watcherId].lastConsumedMessageId).toBe(messagesAfterAck[messagesAfterAck.length - 1].id);
+
+    const nextSnapshot = postUserMessage(
+      afterAckRun,
+      {
+        roomId,
+        content: "这是一个新的房间消息",
+      },
+      context,
+    );
+    const finalRun = runWatcher(nextSnapshot, watcherId, context);
+    const digestMessages = (finalRun.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => finalRun.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(digestMessages).toHaveLength(1);
+    expect(digestMessages[0].content).toContain("这是一个新的房间消息");
+    expect(digestMessages[0].content).not.toContain("收到任务");
+  });
+
+  it("excludes watcher-task digest summaries from future watcher digests", () => {
+    const context = createRuntimeContext();
+    let snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "ACP Lab",
+        firstPrompt: "实现一个可中断的 agent team",
+        templateId: "template-product-pod",
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId!;
+    const watcherId = snapshot.rooms[roomId].watcherIds[0];
+
+    snapshot = runWatcher(snapshot, watcherId, context);
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId,
+        content: "第一条真实消息",
+      },
+      context,
+    );
+    snapshot = runWatcher(snapshot, watcherId, context);
+
+    const firstDigest = [...((snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId]))]
+      .reverse()
+      .find((message): message is ChatMessage => message.transport === "watch-digest");
+
+    expect(firstDigest).toBeDefined();
+
+    const digestTask = Object.values(snapshot.tasks).find((task) => task.sourceMessageId === firstDigest!.id);
+    expect(digestTask).toBeDefined();
+
+    snapshot = completeMemberTask(
+      snapshot,
+      {
+        taskId: digestTask!.id,
+        finalContent: "本轮 watcher digest 仅新增一条提醒，暂无新决策、新分工或待跟进事项。",
+      },
+      context,
+    );
+
+    const summaryMessageId = snapshot.messageOrderByRoom[roomId][snapshot.messageOrderByRoom[roomId].length - 1];
+    const afterSummaryRun = runWatcher(snapshot, watcherId, context);
+    const digestMessagesAfterSummary = (afterSummaryRun.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => afterSummaryRun.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(digestMessagesAfterSummary).toHaveLength(1);
+    expect(afterSummaryRun.watchers[watcherId].lastConsumedMessageId).toBe(summaryMessageId);
+
+    const nextSnapshot = postUserMessage(
+      afterSummaryRun,
+      {
+        roomId,
+        content: "第二条真实消息",
+      },
+      context,
+    );
+    const finalRun = runWatcher(nextSnapshot, watcherId, context);
+    const finalDigestMessages = (finalRun.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => finalRun.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+    const latestDigest = finalDigestMessages[finalDigestMessages.length - 1];
+
+    expect(finalDigestMessages).toHaveLength(2);
+    expect(latestDigest.content).toContain("第二条真实消息");
+    expect(latestDigest.content).not.toContain("本轮 watcher digest");
+  });
+
   it("does not auto-route monitor-all members when a teammate sends a normal group reply", () => {
     const context = createRuntimeContext();
     let snapshot = createProjectWithRoom(
@@ -156,18 +281,22 @@ describe("workspace domain", () => {
 
     const lead = Object.values(snapshot.members).find((member) => member.isEntryMember);
     const scribe = Object.values(snapshot.members).find((member) => member.handle === "scribe");
+    const roomId = snapshot.selection.roomId!;
     expect(lead?.activeTaskId).toBeDefined();
     expect(scribe?.observeAllRoomMessages).toBe(true);
     expect(scribe?.activeTaskId).toBeUndefined();
 
-    snapshot = completeMemberTask(
+    snapshot = postMemberMessage(
       snapshot,
       {
+        roomId,
+        memberId: lead!.id,
         taskId: lead!.activeTaskId!,
-        finalContent: "我先整理范围，暂时不委派其他成员。",
+        content: "我先整理范围，暂时不委派其他成员。",
       },
       context,
     );
+    snapshot = completeMemberTask(snapshot, { taskId: lead!.activeTaskId! }, context);
 
     expect(Object.values(snapshot.tasks).filter((task) => task.status === "running")).toHaveLength(0);
     expect(snapshot.members[scribe!.id].activeTaskId).toBeUndefined();

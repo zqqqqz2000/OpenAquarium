@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceSnapshot } from "@/domain/model";
-import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
+import { CODEX_ACP_DEFAULT_MODE, CODEX_ACP_MODE_ENV_KEY, CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
 import { WorkspacePersistence } from "@/server/persistence";
 
 describe("workspace persistence state normalization", () => {
@@ -95,7 +95,7 @@ describe("workspace persistence state normalization", () => {
     const loaded = await persistence.load();
 
     expect(loaded?.messageOrderByRoom.room_a).toEqual(["message_a"]);
-    expect(loaded?.watchers.watcher_a.lastConsumedMessageId).toBeUndefined();
+    expect(loaded?.watchers.watcher_a.lastConsumedMessageId).toBe("message_a");
     const fileContents = await readFile(filePath, "utf8");
     expect(fileContents).toContain("message_b");
   });
@@ -200,10 +200,16 @@ describe("workspace persistence state normalization", () => {
     expect(loaded?.templates.template_a.members[0]?.provider.command).toBe(CODEX_ACP_NPX_COMMAND);
     expect(loaded?.templates.template_a.members[0]?.provider.args).toEqual(CODEX_ACP_NPX_ARGS);
     expect(loaded?.templates.template_a.members[0]?.provider.label).toBe("Codex ACP");
-    expect(loaded?.templates.template_a.members[0]?.provider.env).toEqual({ OA_TEST: "1" });
+    expect(loaded?.templates.template_a.members[0]?.provider.env).toEqual({
+      [CODEX_ACP_MODE_ENV_KEY]: CODEX_ACP_DEFAULT_MODE,
+      OA_TEST: "1",
+    });
     expect(loaded?.members.member_a.provider.command).toBe(CODEX_ACP_NPX_COMMAND);
     expect(loaded?.members.member_a.provider.args).toEqual(CODEX_ACP_NPX_ARGS);
     expect(loaded?.members.member_a.provider.label).toBe("Codex ACP");
-    expect(loaded?.members.member_a.provider.env).toEqual({ OA_TEST: "2" });
+    expect(loaded?.members.member_a.provider.env).toEqual({
+      [CODEX_ACP_MODE_ENV_KEY]: CODEX_ACP_DEFAULT_MODE,
+      OA_TEST: "2",
+    });
   });
 });

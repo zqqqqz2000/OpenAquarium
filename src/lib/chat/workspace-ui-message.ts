@@ -1,6 +1,8 @@
 import type { UIMessage } from "ai";
 
 import type { ChatMessage, Room, WorkspaceSnapshot } from "@/domain/model";
+import type { JsonValue } from "@/lib/json";
+import { isVisibleRoomMessage } from "@/lib/message-visibility";
 import { getMessageHandlers, getMessageMentionHandles, getMessageRecipientHandles, type MessageHandlerSummary } from "@/lib/message-feed";
 
 export interface WorkspaceMessageMetadata {
@@ -18,7 +20,7 @@ export interface WorkspaceMessageMetadata {
   handlerSummaries?: MessageHandlerSummary[];
 }
 
-export interface WorkspaceMessageDataParts extends Record<string, unknown> {
+export interface WorkspaceMessageDataParts extends Record<string, JsonValue | object> {
   taskRoute: {
     taskId: string;
     memberId: string;
@@ -51,6 +53,11 @@ function mapDomainMessageRole(message: ChatMessage): WorkspaceUIMessage["role"] 
 }
 
 export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: Room, message: ChatMessage): WorkspaceUIMessage {
+  const handlerSummaries =
+    message.author.kind === "user" || message.transport === "watch-digest"
+      ? getMessageHandlers(snapshot, message)
+      : [];
+
   return {
     id: message.id,
     role: mapDomainMessageRole(message),
@@ -66,7 +73,7 @@ export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: R
       status: message.status,
       mentionedHandles: getMessageMentionHandles(snapshot, message),
       recipientHandles: getMessageRecipientHandles(snapshot, room, message),
-      handlerSummaries: getMessageHandlers(snapshot, message),
+      handlerSummaries,
     },
     parts: [
       {
@@ -81,7 +88,7 @@ export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: R
 export function mapRoomMessagesToUIMessages(snapshot: WorkspaceSnapshot, room: Room): WorkspaceUIMessage[] {
   return (snapshot.messageOrderByRoom[room.id] ?? [])
     .map((messageId) => snapshot.messages[messageId])
-    .filter((message): message is ChatMessage => Boolean(message))
+    .filter((message): message is ChatMessage => Boolean(message) && isVisibleRoomMessage(message))
     .map((message) => mapDomainMessageToUIMessage(snapshot, room, message));
 }
 

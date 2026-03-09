@@ -1,4 +1,5 @@
 import type { AcpProviderDescriptor } from "../types";
+import { mergeCodexAcpEnv } from "./codex-session";
 
 export const CODEX_ACP_NPX_COMMAND = "npx";
 export const CODEX_ACP_NPX_ARGS = ["@zed-industries/codex-acp"];
@@ -16,7 +17,7 @@ export function createCodexAcpProvider(options: CodexAcpOptions = {}): AcpProvid
     label: "Codex ACP",
     command: options.command ?? CODEX_ACP_NPX_COMMAND,
     args: options.args ?? CODEX_ACP_NPX_ARGS,
-    env: options.env ?? {},
+    env: mergeCodexAcpEnv(options.env),
     workingDirectory: options.workingDirectory,
     capabilities: ["prompt", "cancel", "loadSession"],
     supportsInterrupt: true,

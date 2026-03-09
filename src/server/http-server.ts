@@ -6,10 +6,15 @@ import { WebSocketServer } from "ws";
 
 import type { WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
 import { extractLastUserText } from "@/lib/chat/workspace-ui-message";
+import type { DiagnosticsLogger } from "./diagnostics";
+import { summarizeWorkspaceSnapshot } from "./diagnostics";
 import type { WorkspaceRuntime } from "./runtime";
-import { getErrorMessage } from "./error-utils";
+import { getErrorMessage, type RuntimeError } from "./error-utils";
+import { buildTransportSnapshot } from "./transport-snapshot";
 
-function normalizeChunk(chunk: unknown): Buffer {
+type JsonPayload = object | string | number | boolean | null;
+
+function normalizeChunk(chunk: Buffer | string | Uint8Array): Buffer {
   if (Buffer.isBuffer(chunk)) {
     return chunk;
   }
@@ -28,13 +33,13 @@ function normalizeChunk(chunk: unknown): Buffer {
 async function readJson<T>(request: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
-    chunks.push(normalizeChunk(chunk));
+    chunks.push(normalizeChunk(chunk as Buffer | string | Uint8Array));
   }
   const body = Buffer.concat(chunks).toString("utf8");
   return (body ? JSON.parse(body) : {}) as T;
 }
 
-function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
+function sendJson(response: ServerResponse, statusCode: number, payload: JsonPayload): void {
   response.statusCode = statusCode;
   response.setHeader("content-type", "application/json; charset=utf-8");
   response.setHeader("access-control-allow-origin", "*");
@@ -47,8 +52,8 @@ export async function handleWorkspaceJsonApiRequest(args: {
   runtime: WorkspaceRuntime;
   method: string;
   pathname: string;
-  body?: unknown;
-}): Promise<{ statusCode: number; payload: unknown } | undefined> {
+  body?: JsonPayload;
+}): Promise<{ statusCode: number; payload: JsonPayload } | undefined> {
   const { runtime, method, pathname, body } = args;
 
   if (method === "GET" && pathname === "/api/state") {
@@ -280,6 +285,7 @@ export async function startWorkspaceHttpServer(args: {
   runtime: WorkspaceRuntime;
   port: number;
   host?: string;
+  logger?: DiagnosticsLogger;
 }): Promise<{ port: number; close(): Promise<void> }> {
   const handleRequest = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     if (!request.url || !request.method) {
@@ -301,14 +307,24 @@ export async function startWorkspaceHttpServer(args: {
       }
 
       if (request.method === "GET" && url.pathname === "/api/state") {
-        sendJson(response, 200, { snapshot: args.runtime.getSnapshot() });
+        const payload = { snapshot: buildTransportSnapshot(args.runtime.getSnapshot()) };
+        if (args.logger?.shouldLog("api-state", 1_000) ?? false) {
+          args.logger?.info("api-state", {
+            bytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
+            ...summarizeWorkspaceSnapshot(payload.snapshot),
+          });
+        }
+        sendJson(response, 200, payload);
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/projects") {
         const body = await readJson<{ projectName: string; firstPrompt: string; templateId: string }>(request);
         const created = await args.runtime.createProject(body);
-        sendJson(response, 200, created);
+        sendJson(response, 200, {
+          ...created,
+          snapshot: buildTransportSnapshot(created.snapshot),
+        });
         return;
       }
 
@@ -325,14 +341,17 @@ export async function startWorkspaceHttpServer(args: {
           firstPrompt: body.firstPrompt,
           templateId: body.templateId,
         });
-        sendJson(response, 200, created);
+        sendJson(response, 200, {
+          ...created,
+          snapshot: buildTransportSnapshot(created.snapshot),
+        });
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/templates/generate") {
         const body = await readJson<{ brief: string }>(request);
         const template = await args.runtime.generateTemplate(body.brief);
-        sendJson(response, 200, { template, snapshot: args.runtime.getSnapshot() });
+        sendJson(response, 200, { template, snapshot: buildTransportSnapshot(args.runtime.getSnapshot()) });
         return;
       }
 
@@ -357,9 +376,6 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
 
-        const textPartId = `task-${Date.now()}`;
-        let textStarted = false;
-        let streamedContent = "";
         const stream = createUIMessageStream<WorkspaceUIMessage>({
           async execute({ writer }) {
             await args.runtime.streamUserMessage(
@@ -377,81 +393,22 @@ export async function startWorkspaceHttpServer(args: {
                   });
                 },
                 onDraft(event) {
-                  if (!textStarted) {
-                    writer.write({
-                      type: "text-start",
-                      id: textPartId,
-                    });
-                    textStarted = true;
-                  }
-
-                  const nextDelta = event.content.slice(streamedContent.length);
-                  streamedContent = event.content;
-                  if (nextDelta.length === 0) {
-                    return;
-                  }
-
-                  writer.write({
-                    type: "text-delta",
-                    id: textPartId,
-                    delta: nextDelta,
-                  });
+                  void event;
                 },
                 onStatus(event) {
-                  writer.write({
-                    type: "data-taskStatus",
-                    transient: true,
-                    data: {
-                      taskId: event.taskId,
-                      memberId: event.memberId,
-                      summary: event.summary,
-                    },
-                  });
+                  void event;
                 },
                 onComplete(event) {
-                  if (!textStarted) {
-                    writer.write({
-                      type: "text-start",
-                      id: textPartId,
-                    });
-                    writer.write({
-                      type: "text-delta",
-                      id: textPartId,
-                      delta: event.content,
-                    });
-                    textStarted = true;
-                    streamedContent = event.content;
-                  }
-                  writer.write({
-                    type: "text-end",
-                    id: textPartId,
-                  });
+                  void event;
                 },
-                onError(event) {
+                onError() {
                   writer.write({
                     type: "data-notification",
                     transient: true,
                     data: {
                       level: "error",
-                      message: event.message,
+                      message: "当前成员执行失败，请打开成员 Trace 查看详情。",
                     },
-                  });
-                  if (!textStarted) {
-                    writer.write({
-                      type: "text-start",
-                      id: textPartId,
-                    });
-                    writer.write({
-                      type: "text-delta",
-                      id: textPartId,
-                      delta: event.message,
-                    });
-                    textStarted = true;
-                    streamedContent = event.message;
-                  }
-                  writer.write({
-                    type: "text-end",
-                    id: textPartId,
                   });
                 },
               },
@@ -479,7 +436,7 @@ export async function startWorkspaceHttpServer(args: {
           content: body.content,
           directMemberId: body.directMemberId,
         });
-        sendJson(response, 200, { snapshot });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
@@ -502,7 +459,7 @@ export async function startWorkspaceHttpServer(args: {
           ...body,
           directMemberId,
         });
-        sendJson(response, 200, { snapshot });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
@@ -515,7 +472,7 @@ export async function startWorkspaceHttpServer(args: {
         }
         const body = await readJson<{ prompt: string }>(request);
         const snapshot = await args.runtime.updatePrompt(memberId, body.prompt);
-        sendJson(response, 200, { snapshot });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
@@ -545,7 +502,7 @@ export async function startWorkspaceHttpServer(args: {
           memberId,
           ...body,
         });
-        sendJson(response, 200, { snapshot });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
@@ -557,7 +514,7 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
         const snapshot = await args.runtime.setEntryMember(memberId);
-        sendJson(response, 200, { snapshot });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
@@ -574,7 +531,7 @@ export async function startWorkspaceHttpServer(args: {
           enabled: body.enabled,
           intervalMinutes: body.intervalMinutes,
         });
-        sendJson(response, 200, { snapshot });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
@@ -586,7 +543,7 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
         const snapshot = await args.runtime.toggleMemberMonitoring(memberId);
-        sendJson(response, 200, { snapshot });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
@@ -598,7 +555,7 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
         const snapshot = await args.runtime.toggleWatcher(watcherId);
-        sendJson(response, 200, { snapshot });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
@@ -610,14 +567,14 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
         const snapshot = await args.runtime.runWatcherNow(watcherId);
-        sendJson(response, 200, { snapshot });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
       sendJson(response, 404, { error: "Not found" });
     } catch (error) {
       sendJson(response, 500, {
-        error: getErrorMessage(error),
+        error: getErrorMessage(error as RuntimeError),
       });
     }
   };
@@ -629,23 +586,49 @@ export async function startWorkspaceHttpServer(args: {
     server,
     path: "/ws",
   });
-  const unsubscribe = args.runtime.subscribe((snapshot) => {
+  let pendingSnapshot = args.runtime.getSnapshot();
+  let pendingBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
+  const broadcastSnapshot = (snapshot: typeof pendingSnapshot): void => {
+    const transportSnapshot = buildTransportSnapshot(snapshot);
     const payload = JSON.stringify({
       type: "snapshot",
-      snapshot,
+      snapshot: transportSnapshot,
     });
+    const clientCount = [...socketServer.clients].filter((client) => client.readyState === client.OPEN).length;
     socketServer.clients.forEach((client) => {
       if (client.readyState === client.OPEN) {
         client.send(payload);
       }
     });
+    if ((args.logger?.shouldLog("ws-broadcast", 1000) ?? false) || payload.length > 500_000) {
+      args.logger?.info("ws-broadcast", {
+        bytes: payload.length,
+        clients: clientCount,
+        ...summarizeWorkspaceSnapshot(transportSnapshot),
+      });
+    }
+  };
+  const scheduleSnapshotBroadcast = (snapshot: typeof pendingSnapshot): void => {
+    pendingSnapshot = snapshot;
+    if (pendingBroadcastTimer) {
+      return;
+    }
+
+    pendingBroadcastTimer = setTimeout(() => {
+      pendingBroadcastTimer = undefined;
+      broadcastSnapshot(pendingSnapshot);
+    }, 80);
+  };
+  const unsubscribe = args.runtime.subscribe((snapshot) => {
+    scheduleSnapshotBroadcast(snapshot);
   });
 
   socketServer.on("connection", (client) => {
+    const transportSnapshot = buildTransportSnapshot(args.runtime.getSnapshot());
     client.send(
       JSON.stringify({
         type: "snapshot",
-        snapshot: args.runtime.getSnapshot(),
+        snapshot: transportSnapshot,
       }),
     );
   });
@@ -660,6 +643,10 @@ export async function startWorkspaceHttpServer(args: {
     port,
     async close() {
       unsubscribe();
+      if (pendingBroadcastTimer) {
+        clearTimeout(pendingBroadcastTimer);
+        pendingBroadcastTimer = undefined;
+      }
       socketServer.close();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {

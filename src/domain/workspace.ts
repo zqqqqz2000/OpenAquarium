@@ -95,6 +95,27 @@ function insertTaskTrace(snapshot: WorkspaceSnapshot, trace: TaskTraceEntry): vo
   snapshot.taskTraceOrderByTask[trace.taskId].push(trace.id);
 }
 
+function findLatestTaskTrace(
+  snapshot: WorkspaceSnapshot,
+  taskId: TaskId,
+  predicate: (trace: TaskTraceEntry) => boolean,
+): TaskTraceEntry | undefined {
+  const traceIds = snapshot.taskTraceOrderByTask[taskId] ?? [];
+
+  for (let index = traceIds.length - 1; index >= 0; index -= 1) {
+    const traceId = traceIds[index];
+    if (!traceId) {
+      continue;
+    }
+    const trace = snapshot.taskTraces[traceId];
+    if (trace && predicate(trace)) {
+      return trace;
+    }
+  }
+
+  return undefined;
+}
+
 function findBlueprint(template: TeamTemplate, predicate: (member: TeamMemberBlueprint) => boolean): TeamMemberBlueprint {
   const match = template.members.find(predicate);
 
@@ -176,7 +197,7 @@ function markTaskInterrupted(
 
   if (existingTask.draftMessageId) {
     const draft = snapshot.messages[existingTask.draftMessageId];
-    if (draft) {
+    if (draft?.visibility === "internal") {
       snapshot.messages[existingTask.draftMessageId] = {
         ...draft,
         status: "interrupted",
@@ -437,6 +458,7 @@ export function postUserMessage(
     createdAt: now,
     transport: input.directMemberId ? "direct" : "group",
     status: "sent",
+    visibility: "public",
     mentionedMemberIds: input.mentionedMemberIds ?? [],
     recipientMemberIds: input.directMemberId ? [input.directMemberId] : [],
   };
@@ -471,12 +493,23 @@ export function postMemberMessage(
     createdAt: now,
     transport: input.directMemberId ? "direct" : "group",
     status: "completed",
+    visibility: "public",
     mentionedMemberIds: input.mentionedMemberIds ?? extractMentionMemberIds(snapshot, input.roomId, input.content),
     recipientMemberIds: input.directMemberId ? [input.directMemberId] : [],
     taskId: input.taskId,
   };
 
   insertMessage(snapshot, message);
+  if (input.taskId) {
+    const task = snapshot.tasks[input.taskId];
+    if (task) {
+      updateTask(snapshot, {
+        ...task,
+        draftMessageId: message.id,
+        updatedAt: now,
+      });
+    }
+  }
   routeMessage(snapshot, message, now, context.createId);
 
   return snapshot;
@@ -496,29 +529,8 @@ export function postMemberDraft(
 
   const member = snapshot.members[task.memberId];
   const now = context.now();
-  const draftMessageId = task.draftMessageId ?? context.createId("message");
-  const draftMessage: ChatMessage = {
-    id: draftMessageId,
-    roomId: task.roomId,
-    author: buildMemberAuthor(member),
-    content: input.content.trim(),
-    createdAt: snapshot.messages[draftMessageId]?.createdAt ?? now,
-    transport: "group",
-    status: "streaming",
-    mentionedMemberIds: [],
-    recipientMemberIds: [],
-    taskId: task.id,
-  };
-
-  if (!task.draftMessageId) {
-    insertMessage(snapshot, draftMessage);
-  } else {
-    snapshot.messages[draftMessageId] = draftMessage;
-  }
-
   updateTask(snapshot, {
     ...task,
-    draftMessageId,
     updatedAt: now,
   });
   updateMember(snapshot, {
@@ -544,21 +556,9 @@ export function completeMemberTask(
 
   const member = snapshot.members[task.memberId];
   const now = context.now();
+  let publishedMessageId = task.draftMessageId;
 
-  if (task.draftMessageId) {
-    const existingDraft = snapshot.messages[task.draftMessageId];
-    snapshot.messages[task.draftMessageId] = {
-      ...existingDraft,
-      content: input.finalContent?.trim() || existingDraft.content,
-      mentionedMemberIds: extractMentionMemberIds(
-        snapshot,
-        task.roomId,
-        input.finalContent?.trim() || existingDraft.content,
-      ),
-      status: "completed",
-    };
-    routeMessage(snapshot, snapshot.messages[task.draftMessageId], now, context.createId);
-  } else if (input.finalContent) {
+  if (input.publishResult && input.finalContent) {
     const messageId = context.createId("message");
     const completedMessage: ChatMessage = {
       id: messageId,
@@ -568,18 +568,19 @@ export function completeMemberTask(
       createdAt: now,
       transport: "group",
       status: "completed",
+      visibility: "public",
       mentionedMemberIds: extractMentionMemberIds(snapshot, task.roomId, input.finalContent),
       recipientMemberIds: [],
       taskId: task.id,
     };
     insertMessage(snapshot, completedMessage);
     routeMessage(snapshot, completedMessage, now, context.createId);
-    task.draftMessageId = messageId;
+    publishedMessageId = messageId;
   }
 
   updateTask(snapshot, {
     ...task,
-    draftMessageId: task.draftMessageId,
+    draftMessageId: publishedMessageId,
     status: "completed",
     updatedAt: now,
   });
@@ -767,6 +768,49 @@ export function appendTaskTrace(
   return snapshot;
 }
 
+export function upsertTaskTrace(
+  current: WorkspaceSnapshot,
+  input: {
+    taskId: TaskId;
+    roomId: RoomId;
+    memberId: MemberId;
+    kind: TaskTraceEntry["kind"];
+    title: string;
+    content: string;
+  },
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const title = input.title.trim();
+  const content = input.content.trim();
+  const existing = findLatestTaskTrace(
+    snapshot,
+    input.taskId,
+    (trace) => trace.kind === input.kind && trace.title === title,
+  );
+
+  if (existing) {
+    snapshot.taskTraces[existing.id] = {
+      ...existing,
+      content,
+      createdAt: context.now(),
+    };
+    return snapshot;
+  }
+
+  insertTaskTrace(snapshot, {
+    id: context.createId("trace"),
+    taskId: input.taskId,
+    roomId: input.roomId,
+    memberId: input.memberId,
+    kind: input.kind,
+    title,
+    content,
+    createdAt: context.now(),
+  });
+  return snapshot;
+}
+
 export function toggleWatcher(current: WorkspaceSnapshot, watcherId: string): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
   const watcher = snapshot.watchers[watcherId];
@@ -794,6 +838,75 @@ function formatDigestLine(snapshot: WorkspaceSnapshot, messageId: MessageId): st
   return `[${stamp}] ${message.author.label}: ${message.content}${mentionSuffix}`;
 }
 
+function normalizeWatcherMessageContent(content: string): string {
+  return content.trim().replace(/\s+/gu, " ").toLowerCase();
+}
+
+function isWatcherTaskOutput(snapshot: WorkspaceSnapshot, message: ChatMessage): boolean {
+  if (!message.taskId) {
+    return false;
+  }
+
+  const task = snapshot.tasks[message.taskId];
+  if (!task) {
+    return false;
+  }
+
+  return snapshot.messages[task.sourceMessageId]?.transport === "watch-digest";
+}
+
+function isTemplateAckMessage(message: ChatMessage): boolean {
+  const content = normalizeWatcherMessageContent(message.content);
+
+  return (
+    /^收到任务[。.!！]?我会先整理当前房间上下文[。.!！]?如果需要协调其他成员[，,]?(?:我会)?在最终消息里明确 @handle[。.!！]?$/u.test(
+      content,
+    )
+    || /^收到群消息[。.!！]?我会按 .+ 先给出一版可执行方向[，,]?然后视情况 @其他成员[。.!！]?$/u.test(content)
+    || /^收到私信[。.!！]?我先按 .+ 处理这个点[，,]?再决定是否回群里同步[。.!！]?$/u.test(content)
+  );
+}
+
+function isDigestLikeMessageContent(content: string): boolean {
+  const normalized = normalizeWatcherMessageContent(content);
+
+  return (
+    normalized.startsWith("new room activity since last poll:")
+    || normalized.startsWith("本轮 watcher digest")
+    || normalized.includes("已消费 watcher digest")
+    || normalized.includes("这轮 watcher digest")
+    || normalized.includes("watcher digest 仅新增")
+  );
+}
+
+function shouldExcludeFromWatcherDigest(snapshot: WorkspaceSnapshot, messageId: MessageId): boolean {
+  const message = snapshot.messages[messageId];
+
+  if (!message) {
+    return true;
+  }
+
+  return (
+    message.visibility === "internal"
+    || message.transport === "watch-digest"
+    || isWatcherTaskOutput(snapshot, message)
+    || isTemplateAckMessage(message)
+    || isDigestLikeMessageContent(message.content)
+  );
+}
+
+function advanceWatcherCursor(
+  snapshot: WorkspaceSnapshot,
+  watcher: WatchSubscription,
+  watcherId: string,
+  lastConsumedMessageId: MessageId | undefined,
+): void {
+  snapshot.watchers[watcherId] = {
+    ...watcher,
+    lastConsumedMessageId,
+  };
+}
+
 export function runWatcher(current: WorkspaceSnapshot, watcherId: string, context: MutationContext): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
   const watcher = snapshot.watchers[watcherId];
@@ -804,40 +917,28 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
 
   const roomMessageIds = snapshot.messageOrderByRoom[watcher.roomId] ?? [];
   const validRoomMessageIds = roomMessageIds.filter((messageId) => snapshot.messages[messageId]?.roomId === watcher.roomId);
+  const latestRoomMessageId = validRoomMessageIds[validRoomMessageIds.length - 1];
 
   if (!watcher.lastConsumedMessageId) {
-    const latestMessageId = [...validRoomMessageIds]
-      .reverse()
-      .find((messageId) => snapshot.messages[messageId]?.transport !== "watch-digest");
-
-    snapshot.watchers[watcherId] = {
-      ...watcher,
-      lastConsumedMessageId: latestMessageId,
-    };
-
+    advanceWatcherCursor(snapshot, watcher, watcherId, latestRoomMessageId);
     return snapshot;
   }
 
   const startIndex = validRoomMessageIds.indexOf(watcher.lastConsumedMessageId) + 1;
   if (startIndex <= 0) {
-    const latestMessageId = [...validRoomMessageIds]
-      .reverse()
-      .find((messageId) => snapshot.messages[messageId]?.transport !== "watch-digest");
-
-    snapshot.watchers[watcherId] = {
-      ...watcher,
-      lastConsumedMessageId: latestMessageId,
-    };
-
+    advanceWatcherCursor(snapshot, watcher, watcherId, latestRoomMessageId);
     return snapshot;
   }
 
-  const newMessageIds = validRoomMessageIds.slice(startIndex).filter((messageId) => {
-    const message = snapshot.messages[messageId];
-    return message.transport !== "watch-digest";
-  });
+  const observedMessageIds = validRoomMessageIds.slice(startIndex);
+  const newMessageIds = observedMessageIds.filter((messageId) => !shouldExcludeFromWatcherDigest(snapshot, messageId));
+
+  if (observedMessageIds.length === 0) {
+    return snapshot;
+  }
 
   if (newMessageIds.length === 0) {
+    advanceWatcherCursor(snapshot, watcher, watcherId, observedMessageIds[observedMessageIds.length - 1]);
     return snapshot;
   }
 
@@ -850,15 +951,13 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
     createdAt: now,
     transport: "watch-digest",
     status: "sent",
+    visibility: "public",
     mentionedMemberIds: [],
     recipientMemberIds: [watcher.memberId],
   };
 
   insertMessage(snapshot, digestMessage);
-  snapshot.watchers[watcherId] = {
-    ...watcher,
-    lastConsumedMessageId: newMessageIds[newMessageIds.length - 1],
-  };
+  advanceWatcherCursor(snapshot, watcher, watcherId, digestMessage.id);
   routeMessage(snapshot, digestMessage, now, context.createId);
 
   return snapshot;

@@ -12,8 +12,9 @@ export type MemberStatus = "idle" | "running" | "interrupted";
 export type TaskStatus = "running" | "interrupted" | "completed";
 export type MessageTransport = "group" | "direct" | "watch-digest" | "status";
 export type MessageStatus = "sent" | "streaming" | "completed" | "interrupted";
+export type MessageVisibility = "public" | "internal";
 export type AccentTone = "paper" | "postit" | "blueprint" | "correction";
-export type TaskTraceKind = "task-started" | "task-prompt" | "status" | "completed" | "error" | "interrupted";
+export type TaskTraceKind = "task-started" | "task-prompt" | "draft" | "status" | "completed" | "error" | "interrupted";
 
 export interface SkillDefinition {
   id: string;
@@ -119,6 +120,7 @@ export interface ChatMessage {
   createdAt: string;
   transport: MessageTransport;
   status: MessageStatus;
+  visibility?: MessageVisibility;
   mentionedMemberIds: MemberId[];
   recipientMemberIds: MemberId[];
   taskId?: TaskId;
@@ -208,6 +210,7 @@ export interface PostMemberDraftInput {
 export interface CompleteTaskInput {
   taskId: TaskId;
   finalContent?: string;
+  publishResult?: boolean;
 }
 
 export interface UpdateMemberConfigInput {

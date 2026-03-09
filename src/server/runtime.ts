@@ -17,20 +17,26 @@ import {
   toggleWatcher,
   updateMemberConfig,
   updateMemberPrompt,
+  upsertTaskTrace,
   upsertMemberWatcher,
 } from "../domain/workspace";
 import { createRuntimeContext, type MutationContext } from "../domain/identity";
 import type { CreateProjectInput, CreateRoomInput, MemberId, PostMemberMessageInput, UpsertWatcherInput, UpdateMemberConfigInput } from "../domain/model";
 import type { MemberExecutor, MemberExecutorFactory } from "./executor";
 import { AcpMemberExecutor } from "./acp-executor";
-import { getErrorMessage } from "./error-utils";
+import type { DiagnosticsLogger } from "./diagnostics";
+import { summarizeWorkspaceSnapshot } from "./diagnostics";
+import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { buildTaskPrompt } from "./prompt-builder";
 import { WorkspacePersistence } from "./persistence";
 import { generateTemplateFromBrief } from "./template-generator";
+import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 
 type SnapshotListener = (snapshot: WorkspaceSnapshot) => void;
 type TemplateGenerator = (brief: string, args: { workspaceRoot: string; references: TeamTemplate[] }) => Promise<TeamTemplate>;
+
+const STALE_RUNNING_TASK_MAX_AGE_MS = 5 * 60 * 1000;
 
 export interface TaskStreamRoute {
   taskId: string;
@@ -51,7 +57,6 @@ interface TaskObserverEntry {
   route: TaskStreamRoute;
   callbacks: TaskStreamCallbacks;
   resolve(): void;
-  reject(error: unknown): void;
 }
 
 function cloneTemplates(snapshot: WorkspaceSnapshot): TeamTemplate[] {
@@ -101,6 +106,8 @@ function getSnapshotTimeStart(snapshot: WorkspaceSnapshot): string {
 }
 
 export class WorkspaceRuntime {
+  private static readonly PROGRESS_PERSIST_DEBOUNCE_MS = 250;
+
   private snapshot: WorkspaceSnapshot;
   private readonly context: MutationContext;
   private readonly listeners = new Set<SnapshotListener>();
@@ -112,6 +119,10 @@ export class WorkspaceRuntime {
   private readonly workspaceRoot: string;
   private readonly executorFactory: MemberExecutorFactory;
   private readonly templateGenerator: TemplateGenerator;
+  private readonly logger?: DiagnosticsLogger;
+  private pendingProgressPersist = false;
+  private pendingProgressPersistTimer: ReturnType<typeof setTimeout> | undefined;
+  private persistenceChain: Promise<void> = Promise.resolve();
 
   constructor(args: {
     initialSnapshot: WorkspaceSnapshot;
@@ -120,11 +131,13 @@ export class WorkspaceRuntime {
     executorFactory?: MemberExecutorFactory;
     templateGenerator?: TemplateGenerator;
     context?: MutationContext;
+    logger?: DiagnosticsLogger;
   }) {
     this.snapshot = args.initialSnapshot;
     this.context = args.context ?? createRuntimeContext(10_000, "2026-03-09T10:00:00.000Z");
     this.persistence = args.persistence;
     this.workspaceRoot = args.workspaceRoot;
+    this.logger = args.logger;
     this.executorFactory =
       args.executorFactory ??
       (({ member }) =>
@@ -137,6 +150,7 @@ export class WorkspaceRuntime {
                 roomId: input.roomId,
                 memberId: input.memberId,
                 content: input.content,
+                taskId: input.taskId,
               });
             },
             sendDirectMessage: async (input) => {
@@ -146,6 +160,7 @@ export class WorkspaceRuntime {
                 memberId: input.memberId,
                 content: input.content,
                 directMemberId,
+                taskId: input.taskId,
               });
             },
             runWatcher: async (input) => {
@@ -166,9 +181,11 @@ export class WorkspaceRuntime {
     stateFilePath?: string;
     executorFactory?: MemberExecutorFactory;
     templateGenerator?: TemplateGenerator;
+    logger?: DiagnosticsLogger;
   }): Promise<WorkspaceRuntime> {
     const persistence = new WorkspacePersistence(
       args.stateFilePath ?? path.join(args.workspaceRoot, ".openaquarium", "state.json"),
+      args.logger,
     );
     const loadedSnapshot = await persistence.load();
     const initialSnapshot = loadedSnapshot ?? createDefaultWorkspaceSnapshot();
@@ -179,9 +196,16 @@ export class WorkspaceRuntime {
       executorFactory: args.executorFactory,
       templateGenerator: args.templateGenerator,
       context: createRuntimeContext(getSnapshotSequenceStart(initialSnapshot), getSnapshotTimeStart(initialSnapshot)),
+      logger: args.logger,
     });
+    runtime.logger?.info("runtime-created", summarizeWorkspaceSnapshot(initialSnapshot));
+    await runtime.expireStaleRunningTasks();
+    const bootSnapshot = runtime.getSnapshot();
     runtime.syncWatchers();
-    runtime.dispatchNewTasks(createWorkspaceSnapshot(cloneTemplates(initialSnapshot), initialSnapshot.currentUserName), initialSnapshot);
+    runtime.dispatchNewTasks(
+      createWorkspaceSnapshot(cloneTemplates(bootSnapshot), bootSnapshot.currentUserName),
+      bootSnapshot,
+    );
     return runtime;
   }
 
@@ -267,12 +291,11 @@ export class WorkspaceRuntime {
 
     await callbacks.onTaskAccepted?.(route);
 
-    const completion = new Promise<void>((resolve, reject) => {
+    const completion = new Promise<void>((resolve) => {
       this.taskObservers.set(primaryTaskId, {
         route,
         callbacks,
         resolve,
-        reject,
       });
     });
 
@@ -332,6 +355,10 @@ export class WorkspaceRuntime {
   }
 
   async runWatcherNow(watcherId: string): Promise<WorkspaceSnapshot> {
+    if (!this.canRunWatcherNow(watcherId)) {
+      return this.snapshot;
+    }
+
     const previous = this.snapshot;
     const next = runWatcher(previous, watcherId, this.context);
     await this.applySnapshot(previous, next);
@@ -405,13 +432,15 @@ export class WorkspaceRuntime {
   async dispose(): Promise<void> {
     this.watcherTimers.forEach((timer) => clearInterval(timer));
     this.watcherTimers.clear();
+    await this.persistImmediately(this.snapshot);
     await Promise.all([...this.executors.values()].map((executor) => executor.dispose()));
     this.executors.clear();
   }
 
   private async applySnapshot(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): Promise<void> {
-    this.snapshot = next;
-    await this.persistence.save(this.snapshot);
+    this.snapshot = compactWorkspaceSnapshot(next);
+    await this.persistImmediately(this.snapshot);
+    this.logger?.info("snapshot-applied", summarizeWorkspaceSnapshot(this.snapshot));
     this.syncWatchers();
     this.emit();
     this.dispatchNewTasks(previous, this.snapshot);
@@ -419,6 +448,42 @@ export class WorkspaceRuntime {
 
   private emit(): void {
     this.listeners.forEach((listener) => listener(this.snapshot));
+  }
+
+  private scheduleProgressPersistence(): void {
+    this.pendingProgressPersist = true;
+
+    if (this.pendingProgressPersistTimer) {
+      return;
+    }
+
+    this.pendingProgressPersistTimer = setTimeout(() => {
+      this.pendingProgressPersistTimer = undefined;
+      void this.flushProgressPersistence();
+    }, WorkspaceRuntime.PROGRESS_PERSIST_DEBOUNCE_MS);
+  }
+
+  private async flushProgressPersistence(): Promise<void> {
+    if (!this.pendingProgressPersist) {
+      return;
+    }
+
+    this.pendingProgressPersist = false;
+    await this.enqueuePersistence(this.snapshot);
+  }
+
+  private async persistImmediately(snapshot: WorkspaceSnapshot): Promise<void> {
+    if (this.pendingProgressPersistTimer) {
+      clearTimeout(this.pendingProgressPersistTimer);
+      this.pendingProgressPersistTimer = undefined;
+    }
+    this.pendingProgressPersist = false;
+    await this.enqueuePersistence(snapshot);
+  }
+
+  private async enqueuePersistence(snapshot: WorkspaceSnapshot): Promise<void> {
+    this.persistenceChain = this.persistenceChain.then(() => this.persistence.save(snapshot));
+    await this.persistenceChain;
   }
 
   private dispatchNewTasks(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): void {
@@ -445,6 +510,13 @@ export class WorkspaceRuntime {
     const project = this.snapshot.projects[room.projectId];
     this.runningTaskIds.add(taskId);
     try {
+      this.logger?.info("task-execute-start", {
+        taskId,
+        roomId: room.id,
+        memberId: member.id,
+        memberHandle: member.handle,
+        runningTasks: this.runningTaskIds.size,
+      });
       const executor = this.getExecutor(member.id, member, room, project);
       const prompt = buildTaskPrompt({
         workspaceRoot: this.workspaceRoot,
@@ -454,7 +526,7 @@ export class WorkspaceRuntime {
         task,
         snapshot: this.snapshot,
       });
-      this.snapshot = appendTaskTrace(
+      this.snapshot = compactWorkspaceSnapshot(appendTaskTrace(
         this.snapshot,
         {
           taskId: task.id,
@@ -465,8 +537,8 @@ export class WorkspaceRuntime {
           content: prompt,
         },
         this.context,
-      );
-      await this.persistence.save(this.snapshot);
+      ));
+      this.scheduleProgressPersistence();
       this.emit();
 
       await executor.execute(
@@ -484,9 +556,29 @@ export class WorkspaceRuntime {
             if (!currentTask || currentTask.status !== "running") {
               return;
             }
-            this.snapshot = postMemberDraft(this.snapshot, { taskId, content }, this.context);
-            await this.persistence.save(this.snapshot);
+            this.snapshot = compactWorkspaceSnapshot(upsertTaskTrace(
+              postMemberDraft(this.snapshot, { taskId, content }, this.context),
+              {
+                taskId,
+                roomId: currentTask.roomId,
+                memberId: currentTask.memberId,
+                kind: "draft",
+                title: "Internal draft",
+                content,
+              },
+              this.context,
+            ));
+            this.scheduleProgressPersistence();
             this.emit();
+            const logger = this.logger;
+            if (logger && logger.shouldLog(`task-draft:${taskId}`, 800)) {
+              logger.info("task-draft", {
+                taskId,
+                roomId: currentTask.roomId,
+                memberId: currentTask.memberId,
+                chars: content.length,
+              });
+            }
             const draftTask = this.snapshot.tasks[taskId];
             const observer = this.taskObservers.get(taskId);
             if (observer) {
@@ -502,7 +594,7 @@ export class WorkspaceRuntime {
             if (!currentTask || currentTask.status !== "running") {
               return;
             }
-            this.snapshot = appendTaskTrace(
+            this.snapshot = compactWorkspaceSnapshot(upsertTaskTrace(
               this.snapshot,
               {
                 taskId,
@@ -513,9 +605,16 @@ export class WorkspaceRuntime {
                 content: summary,
               },
               this.context,
-            );
-            await this.persistence.save(this.snapshot);
+            ));
+            this.scheduleProgressPersistence();
             this.emit();
+            this.logger?.info("task-status", {
+              taskId,
+              roomId: currentTask.roomId,
+              memberId: currentTask.memberId,
+              summary,
+              runningTasks: this.runningTaskIds.size,
+            });
             const observer = this.taskObservers.get(taskId);
             if (observer) {
               await observer.callbacks.onStatus?.({
@@ -552,6 +651,14 @@ export class WorkspaceRuntime {
               this.context,
             );
             await this.applySnapshot(previous, next);
+            this.logger?.info("task-complete", {
+              taskId,
+              roomId: currentTask.roomId,
+              memberId: currentTask.memberId,
+              stopReason,
+              chars: finalContent.length,
+              runningTasks: this.runningTaskIds.size,
+            });
             const observer = this.taskObservers.get(taskId);
             if (observer) {
               await observer.callbacks.onComplete?.({
@@ -590,6 +697,13 @@ export class WorkspaceRuntime {
               this.context,
             );
             await this.applySnapshot(previous, next);
+            this.logger?.error("task-error", {
+              taskId,
+              roomId: currentTask.roomId,
+              memberId: currentTask.memberId,
+              message,
+              runningTasks: this.runningTaskIds.size,
+            });
             const observer = this.taskObservers.get(taskId);
             if (observer) {
               await observer.callbacks.onError?.({
@@ -607,6 +721,7 @@ export class WorkspaceRuntime {
       if (currentTask?.status === "running") {
         const currentMember = this.snapshot.members[currentTask.memberId];
         const previous = this.snapshot;
+        const runtimeError = error as RuntimeError;
         const snapshotWithTrace = appendTaskTrace(
           previous,
           {
@@ -615,7 +730,7 @@ export class WorkspaceRuntime {
             memberId: currentTask.memberId,
             kind: "error",
             title: "Task crashed before ACP completion",
-            content: getErrorMessage(error),
+            content: getErrorMessage(runtimeError),
           },
           this.context,
         );
@@ -623,16 +738,23 @@ export class WorkspaceRuntime {
           snapshotWithTrace,
           {
             taskId,
-            finalContent: `${currentMember.name} failed before returning a result: ${getErrorMessage(error)}`,
+            finalContent: `${currentMember.name} failed before returning a result: ${getErrorMessage(runtimeError)}`,
           },
           this.context,
         );
         await this.applySnapshot(previous, next);
+        this.logger?.error("task-crash", {
+          taskId,
+          roomId: currentTask.roomId,
+          memberId: currentTask.memberId,
+          message: getErrorMessage(runtimeError),
+          runningTasks: this.runningTaskIds.size,
+        });
         const observer = this.taskObservers.get(taskId);
         if (observer) {
           await observer.callbacks.onError?.({
             ...observer.route,
-            message: getErrorMessage(error),
+            message: getErrorMessage(runtimeError),
             messageId: this.snapshot.tasks[taskId]?.draftMessageId,
           });
           observer.resolve();
@@ -693,6 +815,63 @@ export class WorkspaceRuntime {
         this.watcherTimers.delete(watcherId);
       }
     });
+  }
+
+  private hasRunningTaskInRoom(roomId: string): boolean {
+    return Object.values(this.snapshot.tasks).some((task) => task.roomId === roomId && task.status === "running");
+  }
+
+  private canRunWatcherNow(watcherId: string): boolean {
+    const watcher = this.snapshot.watchers[watcherId];
+    if (!watcher || !watcher.enabled) {
+      return false;
+    }
+
+    return !this.hasRunningTaskInRoom(watcher.roomId);
+  }
+
+  private async expireStaleRunningTasks(referenceTimeMs = Date.now()): Promise<void> {
+    let nextSnapshot = this.snapshot;
+    let didExpireTask = false;
+
+    Object.values(this.snapshot.tasks)
+      .filter((task) => task.status === "running")
+      .forEach((task) => {
+        const updatedAtMs = Date.parse(task.updatedAt);
+        if (!Number.isFinite(updatedAtMs) || referenceTimeMs - updatedAtMs <= STALE_RUNNING_TASK_MAX_AGE_MS) {
+          return;
+        }
+
+        const member = nextSnapshot.members[task.memberId];
+        didExpireTask = true;
+        const snapshotWithTrace = appendTaskTrace(
+          nextSnapshot,
+          {
+            taskId: task.id,
+            roomId: task.roomId,
+            memberId: task.memberId,
+            kind: "error",
+            title: "Task expired after runtime restart",
+            content: `Task exceeded ${Math.floor(STALE_RUNNING_TASK_MAX_AGE_MS / 60_000)} minutes without completing before the runtime restarted.`,
+          },
+          this.context,
+        );
+        nextSnapshot = completeMemberTask(
+          snapshotWithTrace,
+          {
+            taskId: task.id,
+            finalContent: `${member.name} did not finish before the runtime restarted, so the stale task was closed automatically.`,
+          },
+          this.context,
+        );
+      });
+
+    if (!didExpireTask) {
+      return;
+    }
+
+    this.snapshot = compactWorkspaceSnapshot(nextSnapshot);
+    await this.persistImmediately(this.snapshot);
   }
 }
 

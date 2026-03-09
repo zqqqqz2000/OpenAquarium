@@ -1,12 +1,14 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 
 import { AtSign, Cpu, Lock, Megaphone, PencilLine, UserRound } from "lucide-react";
 
 import type { ChatMessage, TeamMember } from "@/domain/model";
 import type { ContextBadge, MessageHandlerSummary } from "@/lib/message-feed";
 import { areMessageBubblePropsEqual } from "@/components/chat/message-bubble-equality";
+import { getCollapsedMessageContent } from "@/components/chat/message-content";
 import { MemberAvatar } from "@/components/members/member-avatar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { badgeToneProps, messageStatusBadgeProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn, formatTime } from "@/lib/utils";
@@ -42,6 +44,10 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
       ? badgeToneProps("correction")
       : badgeToneProps("paper");
   const statusBadge = messageStatusBadgeProps(message.status);
+  const initialPreview = getCollapsedMessageContent(message.content);
+  const [expanded, setExpanded] = useState(!initialPreview.collapsed);
+  const displayContent = expanded ? message.content : initialPreview.preview;
+  const showExpandToggle = initialPreview.collapsed;
 
   return (
     <Card
@@ -87,7 +93,20 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
             </div>
           </div>
         </header>
-        <p className="m-0 whitespace-pre-wrap text-sm leading-6">{message.content}</p>
+        <div className="space-y-2">
+          <p className="m-0 whitespace-pre-wrap text-sm leading-6">{displayContent}</p>
+          {showExpandToggle ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-auto px-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground"
+              onClick={() => setExpanded((value) => !value)}
+            >
+              {expanded ? "Collapse message" : "Show full message"}
+            </Button>
+          ) : null}
+        </div>
 
         {recipientHandles.length > 0 || handlerSummaries.length > 0 || mentionedHandles.length > 0 ? (
           <div className="flex flex-col gap-2">
@@ -106,12 +125,7 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
               <footer className="flex flex-wrap items-center gap-2 text-sm">
                 <span className="text-[0.7rem] font-medium uppercase tracking-[0.16em] text-muted-foreground">Handled by</span>
                 {handlerSummaries.map((handler) => {
-                  const handlerBadge =
-                    handler.status === "completed"
-                      ? badgeToneProps("blueprint")
-                      : handler.status === "interrupted"
-                        ? badgeToneProps("correction")
-                        : badgeToneProps("postit");
+                  const handlerBadge = badgeToneProps("blueprint");
 
                   return (
                     <Badge
@@ -121,7 +135,6 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
                       title={handler.title}
                     >
                       @{handler.handle}
-                      <span className="opacity-70">{handler.status}</span>
                     </Badge>
                   );
                 })}

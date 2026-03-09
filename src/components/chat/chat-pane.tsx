@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 
-import type { ChatStatus } from "ai";
 import { Bot, Info, Sparkles } from "lucide-react";
 
 import type { ChatMessage, Room, TeamMember, TeamTemplate, WorkspaceSnapshot } from "@/domain/model";
@@ -207,14 +206,14 @@ export function ChatPane(props: {
           <p className="m-0 text-2xl font-semibold tracking-tight">Room transcript</p>
           <div className="flex items-center gap-3">
             <p className="m-0 text-sm text-muted-foreground">
-              {describeStreamingState(roomChat.chat.status, roomChat.roomStatus?.memberHandle, roomChat.roomStatus?.summary)}
+              {describeStreamingState(roomChat.activeStreamSummary)}
             </p>
             <RoomInfoPopover room={room} template={template} members={members} />
           </div>
         </div>
         <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
           {roomChat.messages.map((message) => {
-            const bubble = toBubbleModel(message, room.id, snapshot.currentUserName, roomChat.roomStatus);
+            const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
             const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
 
             return (
@@ -242,10 +241,10 @@ export function ChatPane(props: {
 
       <ChatComposer
         connected={connected}
-        error={error ?? roomChat.chat.error?.message}
+        error={error}
         members={members}
         onSend={roomChat.sendMessage}
-        sending={roomChat.chat.status === "streaming" || roomChat.chat.status === "submitted"}
+        sending={roomChat.hasActiveStreams}
       />
     </main>
   );
@@ -291,27 +290,19 @@ function RoomInfoPopover(props: {
         </PopoverHeader>
         <div className="space-y-2 text-sm text-muted-foreground">
           <p className="m-0">首条问题会把 room 主题初始化为：{summarizePrompt(room.topic, 80)}。</p>
-          <p className="m-0">后台 runtime 会自动驱动 {members.length} 个成员 turn，并保留被打断前的 draft。</p>
+          <p className="m-0">后台 runtime 会自动驱动 {members.length} 个成员 turn；内部执行细节只放在成员 Trace，群聊只显示真实发出的消息。</p>
         </div>
       </PopoverContent>
     </Popover>
   );
 }
 
-function describeStreamingState(status: ChatStatus, memberHandle?: string, summary?: string): string {
-  if (status === "streaming" || status === "submitted") {
-    if (memberHandle && summary) {
-      return `@${memberHandle} 正在处理: ${summary}`;
-    }
-
-    if (memberHandle) {
-      return `@${memberHandle} 正在处理当前消息。`;
-    }
-
-    return "当前消息正在流式返回。";
+function describeStreamingState(activeStreamSummary?: string): string {
+  if (activeStreamSummary) {
+    return activeStreamSummary;
   }
 
-  return "中途 draft 会保留在消息流里，不会被打断后抹掉。";
+  return "成员内部推理只显示为处理状态；只有显式发送到 room 或 direct 的消息才会出现在消息流里。";
 }
 
 function inferMessageStatus(message: WorkspaceUIMessage): ChatMessage["status"] {

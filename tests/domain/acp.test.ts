@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CODEX_ACP_DEFAULT_MODE,
+  CODEX_ACP_MODE_ENV_KEY,
   CODEX_ACP_NPX_ARGS,
   CODEX_ACP_NPX_COMMAND,
   createCodexAcpProvider,
@@ -15,6 +17,7 @@ describe("acp providers", () => {
     expect(provider.kind).toBe("codex-acp");
     expect(provider.command).toBe(CODEX_ACP_NPX_COMMAND);
     expect(provider.args).toEqual(CODEX_ACP_NPX_ARGS);
+    expect(provider.env[CODEX_ACP_MODE_ENV_KEY]).toBe(CODEX_ACP_DEFAULT_MODE);
     expect(provider.supportsInterrupt).toBe(true);
   });
 

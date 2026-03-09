@@ -1,9 +1,12 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { ProviderBinding, TeamMember, TeamMemberBlueprint, TeamTemplate, WorkspaceSnapshot } from "../domain/model";
-import { getErrorCode } from "./error-utils";
-import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND, createCodexAcpProvider } from "../lib/acp";
+import type { ChatMessage, ProviderBinding, TeamMember, TeamMemberBlueprint, TeamTemplate, WorkspaceSnapshot } from "../domain/model";
+import { getErrorCode, type RuntimeError } from "./error-utils";
+import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND, createCodexAcpProvider, mergeCodexAcpEnv } from "../lib/acp";
+import type { DiagnosticsLogger } from "./diagnostics";
+import { summarizeWorkspaceSnapshot } from "./diagnostics";
+import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
 
 interface PersistedWorkspaceState {
   savedAt: string;
@@ -50,6 +53,7 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
       return {
         ...provider,
         args: [CODEX_ACP_NPX_ARGS[0], ...normalizeCodexArgs(provider.args.slice(1))],
+        env: mergeCodexAcpEnv(provider.env),
       };
     }
 
@@ -61,6 +65,7 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
       ...provider,
       command: CODEX_ACP_NPX_COMMAND,
       args: [...CODEX_ACP_NPX_ARGS, ...normalizeCodexArgs(provider.args)],
+      env: mergeCodexAcpEnv(provider.env),
     };
   };
 
@@ -77,6 +82,13 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
     provider: normalizeProvider(member.provider),
   });
 
+  const normalizeMessage = (message: ChatMessage): ChatMessage => ({
+    ...message,
+    visibility:
+      message.visibility
+      ?? (message.author.kind === "member" && message.taskId ? "internal" : "public"),
+  });
+
   const normalizedMessageOrderByRoom = Object.fromEntries(
     Object.entries(snapshot.messageOrderByRoom).map(([roomId, messageIds]) => [
       roomId,
@@ -88,9 +100,11 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
     Object.entries(snapshot.watchers).map(([watcherId, watcher]) => {
       const roomMessageIds = normalizedMessageOrderByRoom[watcher.roomId] ?? [];
       const lastConsumedMessageId =
-        watcher.lastConsumedMessageId && roomMessageIds.includes(watcher.lastConsumedMessageId)
-          ? watcher.lastConsumedMessageId
-          : undefined;
+        watcher.lastConsumedMessageId === undefined
+          ? undefined
+          : roomMessageIds.includes(watcher.lastConsumedMessageId)
+            ? watcher.lastConsumedMessageId
+            : roomMessageIds[roomMessageIds.length - 1];
 
       return [
         watcherId,
@@ -110,6 +124,9 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
     members: Object.fromEntries(
       Object.entries(snapshot.members).map(([memberId, member]) => [memberId, normalizeMember(member)]),
     ),
+    messages: Object.fromEntries(
+      Object.entries(snapshot.messages).map(([messageId, message]) => [messageId, normalizeMessage(message)]),
+    ),
     messageOrderByRoom: normalizedMessageOrderByRoom,
     watchers: normalizedWatchers,
     taskTraces: snapshot.taskTraces ?? {},
@@ -119,19 +136,30 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
 
 export class WorkspacePersistence {
   private readonly filePath: string;
+  private readonly logger?: DiagnosticsLogger;
   private pendingWrite: Promise<void> = Promise.resolve();
 
-  constructor(filePath: string) {
+  constructor(filePath: string, logger?: DiagnosticsLogger) {
     this.filePath = filePath;
+    this.logger = logger;
   }
 
   async load(): Promise<WorkspaceSnapshot | undefined> {
     try {
       const raw = await readFile(this.filePath, "utf8");
       const parsed = JSON.parse(raw) as PersistedWorkspaceState;
-      return normalizeWorkspaceSnapshot(parsed.snapshot);
+      const normalized = compactWorkspaceSnapshot(normalizeWorkspaceSnapshot(parsed.snapshot));
+      this.logger?.info("state-loaded", {
+        filePath: this.filePath,
+        bytes: raw.length,
+        ...summarizeWorkspaceSnapshot(normalized),
+      });
+      return normalized;
     } catch (error) {
-      if (getErrorCode(error) === "ENOENT") {
+      if (getErrorCode(error as RuntimeError) === "ENOENT") {
+        this.logger?.info("state-missing", {
+          filePath: this.filePath,
+        });
         return undefined;
       }
       throw error;
@@ -139,11 +167,12 @@ export class WorkspacePersistence {
   }
 
   async save(snapshot: WorkspaceSnapshot): Promise<void> {
+    const compactedSnapshot = compactWorkspaceSnapshot(snapshot);
     const directory = path.dirname(this.filePath);
     const payload = JSON.stringify(
       {
         savedAt: new Date().toISOString(),
-        snapshot,
+        snapshot: compactedSnapshot,
       } satisfies PersistedWorkspaceState,
       null,
       2,
@@ -154,6 +183,11 @@ export class WorkspacePersistence {
       await mkdir(directory, { recursive: true });
       await writeFile(tempPath, payload, "utf8");
       await rename(tempPath, this.filePath);
+      this.logger?.info("state-saved", {
+        filePath: this.filePath,
+        bytes: payload.length,
+        ...summarizeWorkspaceSnapshot(compactedSnapshot),
+      });
     });
 
     await this.pendingWrite;

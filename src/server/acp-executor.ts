@@ -6,13 +6,15 @@ import { streamText, tool } from "ai";
 import { z } from "zod";
 
 import type { RoomId, TeamMember } from "../domain/model";
+import { CODEX_ACP_MODE_ENV_KEY, ensureCodexAcpSessionMode } from "../lib/acp";
+import { isJsonObject, type JsonValue } from "../lib/json";
 import type { ExecutionRequest, ExecutorCallbacks, MemberExecutor } from "./executor";
-import { getErrorMessage } from "./error-utils";
+import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { TerminalRegistry } from "./terminal-registry";
 
 export interface MemberToolHost {
-  sendGroupMessage(input: { roomId: RoomId; memberId: string; content: string }): Promise<void>;
-  sendDirectMessage(input: { roomId: RoomId; memberId: string; targetHandle: string; content: string }): Promise<void>;
+  sendGroupMessage(input: { roomId: RoomId; memberId: string; taskId: string; content: string }): Promise<void>;
+  sendDirectMessage(input: { roomId: RoomId; memberId: string; taskId: string; targetHandle: string; content: string }): Promise<void>;
   runWatcher(input: { watcherId: string }): Promise<void>;
   inspectRoomState(input: { roomId: RoomId }): Promise<string>;
 }
@@ -33,21 +35,30 @@ function isInsideRoot(rootPath: string, targetPath: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function summarizeRawChunk(rawValue: unknown): string | undefined {
+function summarizeRawChunk(rawValue: JsonValue | object | undefined): string | undefined {
   if (typeof rawValue !== "string") {
     return undefined;
   }
 
   try {
-    const parsed = JSON.parse(rawValue) as { type?: string; entries?: unknown[]; path?: string; terminalId?: string; toolCallId?: string };
+    const parsed = JSON.parse(rawValue) as JsonValue;
+    if (!isJsonObject(parsed)) {
+      return undefined;
+    }
 
-    switch (parsed.type) {
+    const type = typeof parsed.type === "string" ? parsed.type : undefined;
+    const entriesCount = Array.isArray(parsed.entries) ? parsed.entries.length : 0;
+    const path = typeof parsed.path === "string" ? parsed.path : undefined;
+    const terminalId = typeof parsed.terminalId === "string" ? parsed.terminalId : undefined;
+    const toolCallId = typeof parsed.toolCallId === "string" ? parsed.toolCallId : undefined;
+
+    switch (type) {
       case "plan":
-        return `Plan updated (${parsed.entries?.length ?? 0} step(s))`;
+        return `Plan updated (${entriesCount} step(s))`;
       case "diff":
-        return `Diff ready for ${parsed.path ?? "unknown file"}`;
+        return `Diff ready for ${path ?? "pending file"}`;
       case "terminal":
-        return `Terminal update ${parsed.terminalId ?? parsed.toolCallId ?? ""}`.trim();
+        return `Terminal update ${terminalId ?? toolCallId ?? ""}`.trim();
       default:
         return undefined;
     }
@@ -56,7 +67,7 @@ function summarizeRawChunk(rawValue: unknown): string | undefined {
   }
 }
 
-function summarizeToolChunk(input: unknown): string {
+function summarizeToolChunk(input: { toolName?: string } | object | string | number | boolean | null | undefined): string {
   if (!input || typeof input !== "object") {
     return ACP_PROVIDER_AGENT_DYNAMIC_TOOL_NAME;
   }
@@ -74,6 +85,7 @@ export class AcpMemberExecutor implements MemberExecutor {
   private readonly host: MemberToolHost;
   private readonly terminalRegistry = new TerminalRegistry();
   private readonly provider;
+  private codexSessionPrepared = false;
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
 
@@ -103,6 +115,7 @@ export class AcpMemberExecutor implements MemberExecutor {
     const tools = this.createWorkspaceTools(request);
     const currentTurn = (async () => {
       try {
+        await this.prepareProviderSession(tools);
         const result = streamText({
           abortSignal: abortController.signal,
           includeRawChunks: true,
@@ -116,7 +129,9 @@ export class AcpMemberExecutor implements MemberExecutor {
                 await callbacks.onDraft(finalContent);
                 return;
               case "tool-call":
-                await callbacks.onStatus(`${summarizeToolChunk(chunk.input)} (called)`);
+                await callbacks.onStatus(
+                  `${summarizeToolChunk(chunk.input as { toolName?: string } | object | string | number | boolean | null | undefined)} (called)`,
+                );
                 return;
               case "tool-result":
                 await callbacks.onStatus(`${chunk.toolName} (completed)`);
@@ -127,7 +142,7 @@ export class AcpMemberExecutor implements MemberExecutor {
                 }
                 return;
               case "raw": {
-                const summary = summarizeRawChunk(chunk.rawValue);
+                const summary = summarizeRawChunk(chunk.rawValue as JsonValue | object | undefined);
                 if (summary) {
                   await callbacks.onStatus(summary);
                 }
@@ -150,7 +165,7 @@ export class AcpMemberExecutor implements MemberExecutor {
           return;
         }
 
-        await callbacks.onError(getErrorMessage(error));
+        await callbacks.onError(getErrorMessage(error as RuntimeError));
       } finally {
         if (this.currentAbortController === abortController) {
           this.currentAbortController = undefined;
@@ -199,6 +214,7 @@ export class AcpMemberExecutor implements MemberExecutor {
           await this.host.sendGroupMessage({
             roomId: request.room.id,
             memberId: request.member.id,
+            taskId: request.task.id,
             content,
           });
           return "group message sent";
@@ -214,6 +230,7 @@ export class AcpMemberExecutor implements MemberExecutor {
           await this.host.sendDirectMessage({
             roomId: request.room.id,
             memberId: request.member.id,
+            taskId: request.task.id,
             targetHandle,
             content,
           });
@@ -301,5 +318,17 @@ export class AcpMemberExecutor implements MemberExecutor {
       throw new Error(`Path "${filePath}" is outside the workspace root`);
     }
     return resolvedPath;
+  }
+
+  private async prepareProviderSession(tools: ReturnType<AcpMemberExecutor["createWorkspaceTools"]>): Promise<void> {
+    if (this.member.provider.kind !== "codex-acp" || this.codexSessionPrepared) {
+      return;
+    }
+
+    await ensureCodexAcpSessionMode(this.provider, {
+      mode: this.member.provider.env[CODEX_ACP_MODE_ENV_KEY],
+      tools,
+    });
+    this.codexSessionPrepared = true;
   }
 }

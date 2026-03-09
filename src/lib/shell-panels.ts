@@ -1,3 +1,5 @@
+import { isJsonObject, type JsonValue } from "@/lib/json";
+
 export interface ShellPanelsState {
   leftCollapsed: boolean;
   leftWidth: number;
@@ -17,18 +19,14 @@ export function clampLeftPanelWidth(value: number): number {
   return Math.min(MAX_LEFT_PANEL_WIDTH, Math.max(MIN_LEFT_PANEL_WIDTH, Math.round(value)));
 }
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 export function parseShellPanelsState(rawValue: string | null | undefined): ShellPanelsState {
   if (!rawValue) {
     return DEFAULT_SHELL_PANELS_STATE;
   }
 
   try {
-    const parsed: unknown = JSON.parse(rawValue);
-    if (!isObjectRecord(parsed)) {
+    const parsed = JSON.parse(rawValue) as JsonValue;
+    if (!isJsonObject(parsed)) {
       return DEFAULT_SHELL_PANELS_STATE;
     }
 

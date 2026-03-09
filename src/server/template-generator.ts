@@ -4,10 +4,18 @@ import { generateText } from "ai";
 import { z } from "zod";
 
 import type { SkillDefinition, TeamMemberBlueprint, TeamTemplate } from "../domain/model";
-import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND, createCodexAcpProvider, createGenericAcpProvider } from "../lib/acp";
+import {
+  CODEX_ACP_MODE_ENV_KEY,
+  CODEX_ACP_NPX_ARGS,
+  CODEX_ACP_NPX_COMMAND,
+  createCodexAcpProvider,
+  createGenericAcpProvider,
+  ensureCodexAcpSessionMode,
+} from "../lib/acp";
+import { isJsonObject, jsonValueToString, type JsonValue } from "../lib/json";
 import { defaultTemplates } from "../lib/sample-data/templates";
 import { isCommandAvailable } from "./acp-session";
-import { getErrorMessage } from "./error-utils";
+import { getErrorMessage, type RuntimeError } from "./error-utils";
 
 const accentToneSchema = z.enum(["paper", "postit", "blueprint", "correction"]);
 
@@ -262,7 +270,7 @@ function sanitizeDraft(draft: TemplateDraft, brief: string): TeamTemplate {
 function parseArgsConfig(env: Record<string, string | undefined>): string[] {
   const json = env.OA_TEMPLATE_ACP_ARGS_JSON?.trim();
   if (json) {
-    const parsed = JSON.parse(json) as unknown;
+    const parsed = JSON.parse(json) as JsonValue;
     if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")) {
       return parsed;
     }
@@ -298,7 +306,7 @@ function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string)
         clearTimeout(timer);
         resolve(value);
       },
-      (error: unknown) => {
+      (error: RuntimeError) => {
         clearTimeout(timer);
         reject(error instanceof Error ? error : new Error(getErrorMessage(error)));
       },
@@ -319,19 +327,23 @@ function resolveTemplateAcpCommand(env: Record<string, string | undefined>): { c
     : { command, args: [] };
 }
 
+function isCodexAcpCommand(command: string, args: string[]): boolean {
+  return command === "codex-acp" || (command === CODEX_ACP_NPX_COMMAND && args[0] === CODEX_ACP_NPX_ARGS[0]);
+}
+
 function parseEnvJson(env: Record<string, string | undefined>): Record<string, string> {
   const json = env.OA_TEMPLATE_ACP_ENV_JSON?.trim();
   if (!json) {
     return {};
   }
 
-  const parsed = JSON.parse(json) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const parsed = JSON.parse(json) as JsonValue;
+  if (!isJsonObject(parsed)) {
     throw new Error("OA_TEMPLATE_ACP_ENV_JSON must be a JSON object");
   }
 
   return Object.fromEntries(
-    Object.entries(parsed).map(([key, value]) => [key, String(value)]),
+    Object.entries(parsed).map(([key, value]) => [key, jsonValueToString(value)]),
   );
 }
 
@@ -368,6 +380,13 @@ class AcpTemplateGenerationTransport implements TemplateGenerationTransport {
     });
 
     try {
+      if (isCodexAcpCommand(templateAcp.command, templateAcp.args)) {
+        await ensureCodexAcpSessionMode(provider, {
+          mode: this.env.OA_TEMPLATE_ACP_MODE?.trim() || this.env[CODEX_ACP_MODE_ENV_KEY]?.trim(),
+          tools: provider.tools,
+        });
+      }
+
       const result = await withTimeout(
         generateText({
           model: provider.languageModel(),

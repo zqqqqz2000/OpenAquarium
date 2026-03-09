@@ -12,7 +12,7 @@ import {
   completeMemberTask,
   createProjectWithRoom,
   extractMentionMemberIds,
-  postMemberDraft,
+  postMemberMessage,
   postUserMessage,
   runWatcher,
   toggleMemberMonitor,
@@ -20,23 +20,6 @@ import {
   updateMemberPrompt,
 } from "@/domain/workspace";
 import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
-
-function buildSyntheticDraft(snapshot: WorkspaceSnapshot, taskId: TaskId): string {
-  const task = snapshot.tasks[taskId];
-  const member = snapshot.members[task.memberId];
-  const sourceMessage = snapshot.messages[task.sourceMessageId];
-  const skillNames = member.skills.map((skill) => skill.name).slice(0, 2).join("、");
-
-  if (sourceMessage.transport === "watch-digest") {
-    return `收到 watcher 增量。我会根据 ${skillNames || "当前能力"} 回看这批消息，并只在发现新信息时出声。`;
-  }
-
-  if (sourceMessage.transport === "direct") {
-    return `收到私信。我先按 ${skillNames || "当前能力"} 处理这个点，再决定是否回群里同步。`;
-  }
-
-  return `收到群消息。我会按 ${skillNames || "当前能力"} 先给出一版可执行方向，然后视情况 @其他成员。`;
-}
 
 function buildSyntheticFinal(snapshot: WorkspaceSnapshot, taskId: TaskId): string {
   const task = snapshot.tasks[taskId];
@@ -55,21 +38,9 @@ function buildSyntheticFinal(snapshot: WorkspaceSnapshot, taskId: TaskId): strin
 }
 
 function primeNewTasks(previous: WorkspaceSnapshot, next: WorkspaceSnapshot, seedContext: ReturnType<typeof createRuntimeContext>): WorkspaceSnapshot {
-  let current = next;
-  const newTaskIds = Object.keys(current.tasks).filter((taskId) => !previous.tasks[taskId]);
-
-  newTaskIds.forEach((taskId) => {
-    current = postMemberDraft(
-      current,
-      {
-        taskId,
-        content: buildSyntheticDraft(current, taskId),
-      },
-      seedContext,
-    );
-  });
-
-  return current;
+  void previous;
+  void seedContext;
+  return next;
 }
 
 export interface WorkspaceStoreState {
@@ -155,23 +126,22 @@ export function createWorkspaceStore(initialSnapshot = createDefaultWorkspaceSna
       }
 
       const task = previous.tasks[taskId];
-      const next = !task.draftMessageId
-        ? postMemberDraft(
+      const next = completeMemberTask(
+        postMemberMessage(
           previous,
           {
+            roomId: task.roomId,
+            memberId,
             taskId,
-            content: buildSyntheticDraft(previous, taskId),
+            content: buildSyntheticFinal(previous, taskId),
           },
           context,
-        )
-        : completeMemberTask(
-          previous,
-          {
-            taskId,
-            finalContent: buildSyntheticFinal(previous, taskId),
-          },
-          context,
-        );
+        ),
+        {
+          taskId,
+        },
+        context,
+      );
 
       set({ snapshot: next });
     },

@@ -1,4 +1,5 @@
 import type { ChatMessage, MemberTask, Room, TaskStatus, TeamMember, WorkspaceSnapshot } from "@/domain/model";
+import { isVisibleRoomMessage } from "@/lib/message-visibility";
 
 export type FeedTone = "paper" | "postit" | "blueprint" | "correction";
 
@@ -119,6 +120,7 @@ export function getMemberHistory(snapshot: WorkspaceSnapshot, room: Room, member
 
   return (snapshot.messageOrderByRoom[room.id] ?? [])
     .map((messageId) => snapshot.messages[messageId])
+    .filter((message): message is ChatMessage => Boolean(message) && isVisibleRoomMessage(message))
     .map((message) => {
       const contextBadges: ContextBadge[] = [];
       const ownHandlers = handlerBySourceMessageId.get(message.id) ?? [];

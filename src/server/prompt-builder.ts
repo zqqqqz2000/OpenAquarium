@@ -86,6 +86,8 @@ export function buildTaskPrompt(args: {
     "2. A group message that includes @handle will interrupt that member and deliver the message.",
     "3. Do not assume hidden roles. The prompt and skills define each member's current job.",
     "4. Keep room messages concise and actionable.",
+    "5. Do not paste your reasoning, tool narration, or step-by-step plan into room messages.",
+    "6. The final task completion text is private trace output, not a room reply. Only text sent via the room/DM commands is user-visible.",
     "",
     "[Available Commands]",
     directCommands,

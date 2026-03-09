@@ -55,19 +55,23 @@ export function ChatComposer(props: {
         <Textarea
           className="min-h-24"
           placeholder={directMember ? `私发给 @${directMember.handle}，发送后会打断对方当前任务。` : "在群里说点什么，或者直接 @member 指定接收者。"}
-          disabled={!connected || sending}
+          disabled={!connected}
           value={text}
           onChange={(event) => setText(event.currentTarget.value)}
         />
         <div className="flex items-center justify-between gap-3">
           <div className="space-y-1">
             <p className="m-0 text-sm text-muted-foreground">
-              {connected ? "群聊里直接 `@member`，或先点头像切到私聊目标。" : "Runtime offline 时发送会被禁用；先启动 `bun run server`。"}
+              {connected
+                ? sending
+                  ? "当前仍有 member 在流式处理中；继续发送会按路由复用或打断对应 member 的当前流。"
+                  : "群聊里直接 `@member`，或先点头像切到私聊目标。"
+                : "Runtime offline 时发送会被禁用；先启动 `bun run server`。"}
             </p>
             {sendError || error ? <p className="m-0 text-xs text-destructive">{sendError ?? error}</p> : null}
           </div>
           <Button
-            disabled={text.trim().length === 0 || !connected || sending}
+            disabled={text.trim().length === 0 || !connected}
             onClick={() => {
               const nextText = text;
               const nextDirectMemberId = directMemberId;
@@ -82,7 +86,7 @@ export function ChatComposer(props: {
             }}
           >
             <Send size={18} />
-            {sending ? "Sending…" : "Send"}
+            {sending ? "Send anyway" : "Send"}
           </Button>
         </div>
       </CardContent>

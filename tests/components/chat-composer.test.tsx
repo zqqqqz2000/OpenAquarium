@@ -44,4 +44,24 @@ describe("ChatComposer", () => {
     expect(textbox).toHaveValue("这条消息不该在失败后消失。");
     expect(screen.getByText("Failed to fetch")).toBeInTheDocument();
   });
+
+  it("keeps the composer enabled while other member streams are still active", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const onSend = vi.fn();
+
+    render(<ChatComposer connected error={undefined} members={members} onSend={onSend} sending />);
+
+    const textbox = screen.getByRole("textbox");
+    const button = screen.getByRole("button", { name: /Send anyway/i });
+
+    expect(textbox).toBeEnabled();
+    expect(button).toBeDisabled();
+
+    await user.type(textbox, "继续发给别的 member。");
+
+    expect(button).toBeEnabled();
+  });
 });

@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { createDiagnosticsLogger } from "./diagnostics";
 import { startWorkspaceHttpServer } from "./http-server";
 import { WorkspaceRuntime } from "./runtime";
 
@@ -7,17 +8,26 @@ async function main(): Promise<void> {
   const workspaceRoot = process.cwd();
   const port = Number(process.env.OA_SERVER_PORT ?? "4301");
   const stateFilePath = process.env.OA_STATE_FILE ?? path.join(workspaceRoot, ".openaquarium", "state.json");
+  const logger = createDiagnosticsLogger({
+    workspaceRoot,
+  });
   const runtime = await WorkspaceRuntime.create({
     workspaceRoot,
     stateFilePath,
+    logger,
   });
   const server = await startWorkspaceHttpServer({
     runtime,
     port,
+    logger,
   });
   let isShuttingDown = false;
 
   console.log(`OpenAquarium server listening on http://127.0.0.1:${port}`);
+  logger.info("server-listening", {
+    port,
+    stateFilePath,
+  });
 
   const shutdown = async (): Promise<void> => {
     if (isShuttingDown) {

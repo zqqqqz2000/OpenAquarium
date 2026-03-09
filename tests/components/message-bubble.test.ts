@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MessageBubbleProps } from "@/components/chat/message-bubble";
+import { MESSAGE_BUBBLE_PREVIEW_CHAR_LIMIT, getCollapsedMessageContent } from "@/components/chat/message-content";
 import { areMessageBubblePropsEqual } from "@/components/chat/message-bubble-equality";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { getMessageHandlers, getMessageMentionHandles, getMessageRecipientHandles } from "@/lib/message-feed";
@@ -62,5 +63,13 @@ describe("MessageBubble memo comparison", () => {
     };
 
     expect(areMessageBubblePropsEqual(previous, next)).toBe(false);
+  });
+
+  it("collapses oversized message bodies for transcript previews", () => {
+    const collapsed = getCollapsedMessageContent("x".repeat(MESSAGE_BUBBLE_PREVIEW_CHAR_LIMIT + 25));
+
+    expect(collapsed.collapsed).toBe(true);
+    expect(collapsed.preview).toContain("[message collapsed]");
+    expect(collapsed.preview.length).toBeLessThan(MESSAGE_BUBBLE_PREVIEW_CHAR_LIMIT + 40);
   });
 });

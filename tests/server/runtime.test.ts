@@ -4,6 +4,9 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createRuntimeContext } from "@/domain/identity";
+import { createProjectWithRoom, createWorkspaceSnapshot } from "@/domain/workspace";
+import { defaultTemplates } from "@/lib/sample-data/templates";
 import type { ExecutorCallbacks, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 import { WorkspacePersistence } from "@/server/persistence";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
@@ -50,18 +53,18 @@ describe("WorkspaceRuntime", () => {
     runtimes.length = 0;
   });
 
-  it("routes a member's @mention reply into another member task", async () => {
+  it("routes an explicit member @mention into another member task without publishing internal task output", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-"));
     const executorFactory: MemberExecutorFactory = ({ member }) =>
       new FakeExecutor(async (_request, callbacks) => {
         if (member.handle === "lead") {
           await callbacks.onDraft("我先分派给 builder。");
-          await callbacks.onComplete("@builder 先把 ACP runtime 和 CLI 接起来。", "end_turn");
+          await callbacks.onComplete("lead internal plan", "end_turn");
           return;
         }
 
         if (member.handle === "builder") {
-          await callbacks.onComplete("builder 已收到，并开始实现 runtime。", "end_turn");
+          await callbacks.onComplete("builder internal result", "end_turn");
           return;
         }
 
@@ -84,17 +87,42 @@ describe("WorkspaceRuntime", () => {
     await waitFor(() => {
       const snapshot = runtime.getSnapshot();
       const roomId = snapshot.selection.roomId!;
-      const messages = (snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId].content);
-      expect(messages.some((message) => message.includes("@builder"))).toBe(true);
-      expect(messages.some((message) => message.includes("builder 已收到"))).toBe(true);
+      const lead = snapshot.rooms[roomId].memberIds
+        .map((memberId) => snapshot.members[memberId])
+        .find((member) => member.handle === "lead")!;
+      const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
+
+      expect(leadTask.status).toBe("completed");
     });
 
-    const snapshot = runtime.getSnapshot();
+    let snapshot = runtime.getSnapshot();
     const roomId = snapshot.selection.roomId!;
     const lead = snapshot.rooms[roomId].memberIds
       .map((memberId) => snapshot.members[memberId])
       .find((member) => member.handle === "lead")!;
     const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
+
+    await runtime.sendMemberMessage({
+      roomId,
+      memberId: lead.id,
+      taskId: leadTask.id,
+      content: "@builder 先把 ACP runtime 和 CLI 接起来。",
+    });
+
+    await waitFor(() => {
+      const current = runtime.getSnapshot();
+      const builder = current.rooms[roomId].memberIds
+        .map((memberId) => current.members[memberId])
+        .find((member) => member.handle === "builder")!;
+      const builderTask = Object.values(current.tasks).find((task) => task.roomId === roomId && task.memberId === builder.id)!;
+      expect(builderTask.status).toBe("completed");
+    });
+
+    snapshot = runtime.getSnapshot();
+    const messages = (snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId].content);
+    expect(messages.some((message) => message.includes("@builder"))).toBe(true);
+    expect(messages.some((message) => message.includes("lead internal plan"))).toBe(false);
+    expect(messages.some((message) => message.includes("builder internal result"))).toBe(false);
     const leadTraceKinds = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map(
       (traceId) => snapshot.taskTraces[traceId]?.kind,
     );
@@ -169,7 +197,7 @@ describe("WorkspaceRuntime", () => {
     });
   });
 
-  it("records ACP status in trace without rewriting the streaming draft body", async () => {
+  it("records internal draft/status in trace without publishing them into the room transcript", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-status-"));
     let allowCompletion: (() => void) | undefined;
     const completionGate = new Promise<void>((resolve) => {
@@ -187,7 +215,9 @@ describe("WorkspaceRuntime", () => {
           }
 
           await callbacks.onDraft("正在整理上下文");
+          await callbacks.onDraft("正在整理上下文，并补充最新事实");
           await callbacks.onStatus("Run room state (in_progress)");
+          await callbacks.onStatus("Inspect room state (completed)");
           await completionGate;
           await callbacks.onComplete("整理完成", "end_turn");
         }),
@@ -207,11 +237,13 @@ describe("WorkspaceRuntime", () => {
         .map((memberId) => snapshot.members[memberId])
         .find((member) => member.handle === "lead")!;
       const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
-      const draftMessageId = leadTask.draftMessageId;
+      const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map((traceId) => snapshot.taskTraces[traceId]);
 
-      expect(draftMessageId).toBeDefined();
-      expect(snapshot.messages[draftMessageId!]?.content).toBe("正在整理上下文");
-      expect((snapshot.taskTraceOrderByTask[leadTask.id] ?? []).some((traceId) => snapshot.taskTraces[traceId]?.kind === "status")).toBe(true);
+      expect((snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId].author.kind)).toEqual(["user"]);
+      expect(leadTraceEntries.filter((entry) => entry?.kind === "draft")).toHaveLength(1);
+      expect(leadTraceEntries.filter((entry) => entry?.kind === "status")).toHaveLength(1);
+      expect(leadTraceEntries.find((entry) => entry?.kind === "draft")?.content).toBe("正在整理上下文，并补充最新事实");
+      expect(leadTraceEntries.find((entry) => entry?.kind === "status")?.content).toBe("Inspect room state (completed)");
     });
 
     allowCompletion?.();
@@ -225,7 +257,8 @@ describe("WorkspaceRuntime", () => {
       const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
 
       expect(leadTask.status).toBe("completed");
-      expect(snapshot.messages[leadTask.draftMessageId!]?.content).toBe("整理完成");
+      expect((snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId].author.kind)).toEqual(["user"]);
+      expect((snapshot.taskTraceOrderByTask[leadTask.id] ?? []).some((traceId) => snapshot.taskTraces[traceId]?.kind === "completed")).toBe(true);
     });
   });
 
@@ -277,5 +310,87 @@ describe("WorkspaceRuntime", () => {
 
     expect(second.projectId).not.toBe(first.projectId);
     expect(second.roomId).not.toBe(first.roomId);
+  });
+
+  it("expires stale running tasks on startup instead of dispatching them again", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-stale-"));
+    const stateFilePath = path.join(workspaceRoot, ".openaquarium", "state.json");
+    const persistence = new WorkspacePersistence(stateFilePath);
+    const staleSnapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "Stale",
+        firstPrompt: "请回复我",
+        templateId: "template-product-pod",
+      },
+      createRuntimeContext(0, "2026-03-09T07:30:00.000Z"),
+    );
+    const staleRoomId = staleSnapshot.selection.roomId!;
+    const staleLead = staleSnapshot.rooms[staleRoomId].memberIds
+      .map((memberId) => staleSnapshot.members[memberId])
+      .find((member) => member.handle === "lead")!;
+    await persistence.save(staleSnapshot);
+
+    let executeCount = 0;
+    const runtime = await WorkspaceRuntime.create({
+      workspaceRoot,
+      stateFilePath,
+      executorFactory: () =>
+        new FakeExecutor(() => {
+          executeCount += 1;
+          return Promise.resolve();
+        }),
+    });
+    runtimes.push(runtime);
+
+    const snapshot = runtime.getSnapshot();
+    const runningTasks = Object.values(snapshot.tasks).filter((task) => task.status === "running");
+    const staleTask = Object.values(snapshot.tasks).find((task) => task.roomId === staleRoomId && task.memberId === staleLead.id);
+
+    expect(runningTasks).toHaveLength(0);
+    expect(executeCount).toBe(0);
+    expect(staleTask?.status).toBe("completed");
+    expect((snapshot.taskTraceOrderByTask[staleTask!.id] ?? []).some((traceId) => snapshot.taskTraces[traceId]?.kind === "error")).toBe(true);
+  });
+
+  it("defers watcher runs while the room already has a running task", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-watcher-backoff-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          if (member.handle === "lead") {
+            await new Promise<void>(() => undefined);
+            return;
+          }
+
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const { roomId } = await runtime.createProject({
+      projectName: "Watcher Backoff",
+      firstPrompt: "先让 lead 挂起一会儿",
+      templateId: "template-product-pod",
+    });
+    const watcherId = runtime.getSnapshot().rooms[roomId]?.watcherIds[0];
+
+    expect(watcherId).toBeDefined();
+    if (!watcherId) {
+      throw new Error("Expected watcher id");
+    }
+
+    await runtime.runWatcherNow(watcherId);
+
+    const snapshot = runtime.getSnapshot();
+    const digestMessages = (snapshot.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => snapshot.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(digestMessages).toHaveLength(0);
+    expect(snapshot.watchers[watcherId]?.lastConsumedMessageId).toBeUndefined();
   });
 });

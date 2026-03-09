@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { CODEX_ACP_DEFAULT_MODE, CODEX_ACP_MODE_ENV_KEY } from "@/lib/acp";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { WorkspacePersistence } from "@/server/persistence";
 
@@ -52,7 +53,9 @@ describe("WorkspacePersistence", () => {
 
     expect(loaded?.templates["template-product-pod"].members[0]?.provider.command).toBe("npx");
     expect(loaded?.templates["template-product-pod"].members[0]?.provider.args[0]).toBe("@zed-industries/codex-acp");
+    expect(loaded?.templates["template-product-pod"].members[0]?.provider.env[CODEX_ACP_MODE_ENV_KEY]).toBe(CODEX_ACP_DEFAULT_MODE);
     expect(loaded?.members[memberId]?.provider.command).toBe("npx");
     expect(loaded?.members[memberId]?.provider.args).toEqual(["@zed-industries/codex-acp"]);
+    expect(loaded?.members[memberId]?.provider.env[CODEX_ACP_MODE_ENV_KEY]).toBe(CODEX_ACP_DEFAULT_MODE);
   });
 });

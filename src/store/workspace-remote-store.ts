@@ -19,8 +19,34 @@ function mergeIncomingSnapshot(current: WorkspaceSnapshot, incoming: WorkspaceSn
   };
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+type RemoteStoreError = Error | { message?: string } | string | number | boolean | null | undefined;
+
+function getErrorMessage(error: RemoteStoreError): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (typeof error === "object" && error !== null && typeof error.message === "string") {
+    return error.message;
+  }
+
+  if (typeof error === "number" || typeof error === "boolean") {
+    return String(error);
+  }
+
+  if (error === null) {
+    return "null";
+  }
+
+  if (typeof error === "undefined") {
+    return "undefined";
+  }
+
+  return JSON.stringify(error);
 }
 
 export interface WorkspaceRemoteStoreState {
@@ -83,7 +109,7 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
       set({ error: undefined });
       return result;
     } catch (error) {
-      const message = getErrorMessage(error);
+      const message = getErrorMessage(error as RemoteStoreError);
       set({ error: message });
       throw error;
     }
@@ -103,9 +129,10 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
           error: undefined,
         }));
       } catch (error) {
+        const message = getErrorMessage(error as RemoteStoreError);
         set({
           loading: false,
-          error: (error as Error).message,
+          error: message,
         });
       }
     },

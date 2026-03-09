@@ -4,7 +4,7 @@ import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { createWorkspaceStore } from "@/store/workspace-store";
 
 describe("workspace store", () => {
-  it("primes new direct-message tasks with a visible streaming draft", () => {
+  it("creates a direct-message task without leaking internal drafts into the room transcript", () => {
     const store = createWorkspaceStore(createSeedWorkspace());
     const before = store.getState().snapshot;
     const builder = Object.values(before.members).find((member) => member.handle === "builder")!;
@@ -17,11 +17,10 @@ describe("workspace store", () => {
 
     expect(after.members[builder.id].activeTaskId).toBeDefined();
     expect(after.tasks[after.members[builder.id].activeTaskId!].title).toBe("Respond to direct message");
-    expect(lastMessage.author.id).toBe(builder.id);
-    expect(lastMessage.status).toBe("streaming");
+    expect(lastMessage.author.kind).toBe("user");
   });
 
-  it("advances a running member from draft to completed reply", () => {
+  it("advances a running member by publishing a public reply and completing the task", () => {
     const store = createWorkspaceStore(createSeedWorkspace());
     store.getState().createProject({
       projectName: "Advance Check",
@@ -45,6 +44,7 @@ describe("workspace store", () => {
     expect(after.members[lead.id].status).toBe("idle");
     expect(completedTask.draftMessageId).toBeDefined();
     expect(after.messages[completedTask.draftMessageId!].status).toBe("completed");
+    expect(after.messages[completedTask.draftMessageId!].author.id).toBe(lead.id);
   });
 
   it("creates a project and returns its selected route identifiers", () => {

@@ -8,6 +8,7 @@
     "dev": "vite",
     "server": "tsx ./src/server/index.ts",
     "dev:server": "tsx watch ./src/server/index.ts",
+    "cleanup:state": "node --import tsx ./src/server/cleanup-state.ts",
     "cli": "bun ./src/cli/main.ts",
     "build": "tsc --noEmit -p tsconfig.app.json && vite build",
     "preview": "vite preview",
