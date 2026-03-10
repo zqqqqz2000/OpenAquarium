@@ -10,6 +10,7 @@ import { MemberAvatar } from "@/components/members/member-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
 import { badgeToneProps, messageStatusBadgeProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn, formatTime } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ export interface MessageBubbleProps {
   message: ChatMessage;
   authorMember?: TeamMember;
   mentionedHandles?: string[];
+  quotedHandles?: string[];
   recipientHandles?: string[];
   handlerSummaries?: MessageHandlerSummary[];
   contextBadges?: ContextBadge[];
@@ -28,6 +30,7 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
     message,
     authorMember,
     mentionedHandles = [],
+    quotedHandles = [],
     recipientHandles = [],
     handlerSummaries = [],
     contextBadges = [],
@@ -48,14 +51,19 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
   const [expanded, setExpanded] = useState(!initialPreview.collapsed);
   const displayContent = expanded ? message.content : initialPreview.preview;
   const showExpandToggle = initialPreview.collapsed;
+  const authorRoleLabel = authorMember ? getMemberRoleLabel(authorMember.handle) : message.author.label;
+  const authorName = authorMember?.name;
+  const authorRolePalette = authorMember ? getMemberRolePalette(authorMember.handle) : undefined;
   const highlightedHandles = useMemo(
-    () =>
-      new Set([
+    () => ({
+      mentionHandles: new Set([
         ...mentionedHandles,
         ...recipientHandles.filter((handle) => handle !== message.author.label),
         ...handlerSummaries.map((handler) => handler.handle),
       ]),
-    [handlerSummaries, mentionedHandles, message.author.label, recipientHandles],
+      quoteHandles: new Set(quotedHandles),
+    }),
+    [handlerSummaries, mentionedHandles, message.author.label, quotedHandles, recipientHandles],
   );
 
   return (
@@ -78,7 +86,10 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
             )}
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                <span className="truncate">{message.author.label}</span>
+                <span className="truncate" style={authorRolePalette ? { color: authorRolePalette.background } : undefined}>
+                  {authorRoleLabel}
+                </span>
+                {authorName ? <span className="truncate text-xs text-muted-foreground">{authorName}</span> : null}
                 <Badge variant={transportBadge.variant} className={cn("gap-1 px-2 py-0.5 text-[10px]", transportBadge.className)}>
                   {transportIcon}
                   {transportLabel}
@@ -123,14 +134,32 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
 
 export const MessageBubble = memo(MessageBubbleComponent, areMessageBubblePropsEqual);
 
-function renderHighlightedMessage(content: string, handles: ReadonlySet<string>) {
-  return content.split(/(@[A-Za-z0-9_-]+)/g).map((segment, index) => {
-    const match = /^@([A-Za-z0-9_-]+)$/.exec(segment);
-    if (match && handles.has(match[1] ?? "")) {
+function renderHighlightedMessage(
+  content: string,
+  handles: {
+    mentionHandles: ReadonlySet<string>;
+    quoteHandles: ReadonlySet<string>;
+  },
+) {
+  return content.split(/(@[\p{L}\p{N}_-]+|"[\p{L}\p{N}_-]+)/gu).map((segment, index) => {
+    const mentionMatch = /^@([\p{L}\p{N}_-]+)$/u.exec(segment);
+    if (mentionMatch && handles.mentionHandles.has(mentionMatch[1] ?? "")) {
       return (
         <span
           key={`${segment}-${index}`}
           className="rounded-md bg-[var(--tone-postit-badge)] px-1 py-0.5 text-[var(--tone-postit-foreground)]"
+        >
+          {segment}
+        </span>
+      );
+    }
+
+    const quoteMatch = /^"([\p{L}\p{N}_-]+)$/u.exec(segment);
+    if (quoteMatch && handles.quoteHandles.has(quoteMatch[1] ?? "")) {
+      return (
+        <span
+          key={`${segment}-${index}`}
+          className="rounded-md bg-[var(--tone-paper-badge)] px-1 py-0.5 text-[var(--tone-paper-foreground)]"
         >
           {segment}
         </span>

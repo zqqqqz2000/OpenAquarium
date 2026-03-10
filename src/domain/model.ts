@@ -94,6 +94,7 @@ export interface TeamMember {
   acceptsDirectMessages: boolean;
   isEntryMember: boolean;
   status: MemberStatus;
+  providerSessionId?: string;
   activeTaskId?: TaskId;
 }
 
@@ -122,6 +123,7 @@ export interface ChatMessage {
   status: MessageStatus;
   visibility?: MessageVisibility;
   mentionedMemberIds: MemberId[];
+  quotedMemberIds?: MemberId[];
   recipientMemberIds: MemberId[];
   recipientUser?: boolean;
   taskId?: TaskId;
@@ -189,6 +191,7 @@ export interface PostUserMessageInput {
   roomId: RoomId;
   content: string;
   mentionedMemberIds?: MemberId[];
+  quotedMemberIds?: MemberId[];
   directMemberId?: MemberId;
 }
 
@@ -197,6 +200,7 @@ export interface PostMemberMessageInput {
   memberId: MemberId;
   content: string;
   mentionedMemberIds?: MemberId[];
+  quotedMemberIds?: MemberId[];
   directMemberId?: MemberId;
   directToUser?: boolean;
   taskId?: TaskId;

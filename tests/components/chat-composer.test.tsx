@@ -106,10 +106,52 @@ describe("ChatComposer", () => {
     expect(screen.getByText("Mention member")).toBeInTheDocument();
     expect(screen.getByText("@research")).toBeInTheDocument();
     expect(screen.queryByText("Quick direct targets")).not.toBeInTheDocument();
+    expect(screen.getByText("Mention member").parentElement?.className).toContain("bottom-[calc(100%+0.5rem)]");
 
     await user.keyboard("{Enter}");
 
     expect(textbox).toHaveValue("请 @research ");
+  });
+
+  it("offers quote completion with the quote trigger", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(<ChatComposer connected error={undefined} members={members} onSend={vi.fn()} />);
+
+    const textbox = screen.getByRole("textbox");
+    await user.type(textbox, "参考一下 \"re");
+
+    expect(screen.getByText("Quote member")).toBeInTheDocument();
+    expect(screen.getByText("\"research")).toBeInTheDocument();
+
+    await user.keyboard("{Enter}");
+
+    expect(textbox).toHaveValue("参考一下 \"research ");
+  });
+
+  it("sends on Enter and keeps Shift+Enter for newlines", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const onSend = vi.fn();
+
+    render(<ChatComposer connected error={undefined} members={members} onSend={onSend} />);
+
+    const textbox = screen.getByRole("textbox");
+    await user.type(textbox, "第一行");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+
+    expect(textbox).toHaveValue("第一行\n");
+
+    await user.type(textbox, "第二行");
+    await user.keyboard("{Enter}");
+
+    expect(onSend).toHaveBeenCalledWith("第一行\n第二行", undefined);
+    expect(textbox).toHaveValue("");
   });
 
   it("keeps the composer enabled while other member streams are still active", async () => {

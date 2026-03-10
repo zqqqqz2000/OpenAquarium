@@ -20,6 +20,7 @@ export interface MemberToolHost {
   sendDirectMessage(input: { roomId: RoomId; memberId: string; taskId: string; targetHandle: string; content: string }): Promise<void>;
   runWatcher(input: { watcherId: string }): Promise<void>;
   inspectRoomState(input: { roomId: RoomId }): Promise<string>;
+  persistMemberSession?(input: { memberId: string; sessionId?: string }): Promise<void>;
 }
 
 class TimeoutError extends Error {
@@ -149,7 +150,7 @@ export class AcpMemberExecutor implements MemberExecutor {
   private readonly host: MemberToolHost;
   private readonly terminalRegistry = new TerminalRegistry();
   private provider: ReturnType<typeof createACPProvider>;
-  private providerTurnBound = false;
+  private providerSessionId?: string;
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
 
@@ -157,15 +158,12 @@ export class AcpMemberExecutor implements MemberExecutor {
     this.workspaceRoot = args.workspaceRoot;
     this.member = args.member;
     this.host = args.host;
+    this.providerSessionId = args.member.providerSessionId;
     this.provider = this.createProvider();
   }
 
   async execute(request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
     await this.cancel();
-
-    if (this.member.provider.kind === "codex-acp" && this.providerTurnBound) {
-      await this.resetProvider();
-    }
 
     const abortController = new AbortController();
     this.currentAbortController = abortController;
@@ -182,6 +180,7 @@ export class AcpMemberExecutor implements MemberExecutor {
     const currentTurn = (async () => {
       try {
         await this.prepareProviderSession(tools);
+        await this.persistSessionIdIfNeeded();
         idleTimeout.touch();
         const result = streamText({
           abortSignal: abortController.signal,
@@ -292,7 +291,7 @@ export class AcpMemberExecutor implements MemberExecutor {
 
     return acpTools({
       oa_send_group_message: tool({
-        description: "Send a message into the current room as this member. Prefer this tool over shelling out. Only leading @handle mentions are treated as actual routing targets.",
+        description: "Send a message into the current room as this member. Prefer this tool over shelling out. Any @handle mention in the message routes work to that teammate.",
         inputSchema: z.object({
           content: z.string().min(1),
         }),
@@ -412,6 +411,7 @@ export class AcpMemberExecutor implements MemberExecutor {
       command: spawnCommand.command,
       args: spawnCommand.args,
       env: this.member.provider.env,
+      existingSessionId: this.providerSessionId,
       session: {
         cwd: this.member.provider.workingDirectory ?? this.workspaceRoot,
         mcpServers: [],
@@ -423,8 +423,12 @@ export class AcpMemberExecutor implements MemberExecutor {
   private async resetProvider(): Promise<void> {
     this.provider.cleanup();
     await this.terminalRegistry.disposeAll();
+    this.providerSessionId = undefined;
+    await this.host.persistMemberSession?.({
+      memberId: this.member.id,
+      sessionId: undefined,
+    });
     this.provider = this.createProvider();
-    this.providerTurnBound = false;
   }
 
   private async prepareProviderSession(tools: ReturnType<AcpMemberExecutor["createWorkspaceTools"]>): Promise<void> {
@@ -436,7 +440,19 @@ export class AcpMemberExecutor implements MemberExecutor {
       mode: this.member.provider.env[CODEX_ACP_MODE_ENV_KEY],
       tools,
     });
-    this.providerTurnBound = true;
+  }
+
+  private async persistSessionIdIfNeeded(): Promise<void> {
+    const sessionId = this.provider.getSessionId() ?? undefined;
+    if (!sessionId || sessionId === this.providerSessionId) {
+      return;
+    }
+
+    this.providerSessionId = sessionId;
+    await this.host.persistMemberSession?.({
+      memberId: this.member.id,
+      sessionId,
+    });
   }
 }
 

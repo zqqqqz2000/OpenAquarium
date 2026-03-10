@@ -89,6 +89,35 @@ describe("ChatPane", () => {
     expect(screen.getByRole("textbox")).toHaveFocus();
   });
 
+  it("emphasizes member roles over display names in the sidebar", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const template = snapshot.templates[room.templateId];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          template={template}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getAllByText("@lead").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Lead Koi").length).toBeGreaterThan(0);
+  });
+
   it("scrolls the transcript to the newest message", () => {
     const scrollCalls: Array<ScrollToOptions | [number, number]> = [];
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {

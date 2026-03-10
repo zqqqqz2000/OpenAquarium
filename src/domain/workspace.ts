@@ -323,6 +323,7 @@ function instantiateMember(
     observeAllRoomMessages: blueprint.observeAllRoomMessages ?? false,
     acceptsDirectMessages: blueprint.acceptsDirectMessages ?? true,
     isEntryMember: blueprint.isEntryMember ?? false,
+    providerSessionId: undefined,
     status: "idle",
   };
 }
@@ -476,7 +477,8 @@ export function postUserMessage(
     transport: input.directMemberId ? "direct" : "group",
     status: "sent",
     visibility: "public",
-    mentionedMemberIds: input.mentionedMemberIds ?? [],
+    mentionedMemberIds: input.mentionedMemberIds ?? extractMentionMemberIds(snapshot, input.roomId, trimmedContent),
+    quotedMemberIds: input.quotedMemberIds ?? extractQuotedMemberIds(snapshot, input.roomId, trimmedContent),
     recipientMemberIds: input.directMemberId ? [input.directMemberId] : [],
   };
 
@@ -516,6 +518,7 @@ export function postMemberMessage(
     status: "completed",
     visibility: "public",
     mentionedMemberIds: isDirectMessage ? [] : input.mentionedMemberIds ?? extractMentionMemberIds(snapshot, input.roomId, content),
+    quotedMemberIds: isDirectMessage ? [] : input.quotedMemberIds ?? extractQuotedMemberIds(snapshot, input.roomId, content),
     recipientMemberIds,
     recipientUser: input.directToUser ? true : undefined,
     taskId: input.taskId,
@@ -592,6 +595,7 @@ export function completeMemberTask(
       status: "completed",
       visibility: "public",
       mentionedMemberIds: extractMentionMemberIds(snapshot, task.roomId, input.finalContent),
+      quotedMemberIds: extractQuotedMemberIds(snapshot, task.roomId, input.finalContent),
       recipientMemberIds: [],
       taskId: task.id,
     };
@@ -856,8 +860,12 @@ function formatDigestLine(snapshot: WorkspaceSnapshot, messageId: MessageId): st
     message.mentionedMemberIds.length > 0
       ? ` @${message.mentionedMemberIds.map((memberId) => snapshot.members[memberId]?.handle ?? memberId).join(", @")}`
       : "";
+  const quoteSuffix =
+    (message.quotedMemberIds?.length ?? 0) > 0
+      ? ` "${message.quotedMemberIds?.map((memberId) => snapshot.members[memberId]?.handle ?? memberId).join(', "')}`
+      : "";
 
-  return `[${stamp}] ${message.author.label}: ${message.content}${mentionSuffix}`;
+  return `[${stamp}] ${message.author.label}: ${message.content}${mentionSuffix}${quoteSuffix}`;
 }
 
 function normalizeWatcherMessageContent(content: string): string {
@@ -975,6 +983,7 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
     status: "sent",
     visibility: "public",
     mentionedMemberIds: [],
+    quotedMemberIds: [],
     recipientMemberIds: [watcher.memberId],
   };
 
@@ -992,46 +1001,58 @@ export function extractMentionMemberIds(snapshot: WorkspaceSnapshot, roomId: str
     return [];
   }
 
-  const handles = [...content.matchAll(/@([\p{L}\p{N}_-]+)/gu)].map((match) => match[1].toLowerCase());
+  const handles = extractTaggedHandles(snapshot, roomId, content, "@");
 
   if (handles.length === 0) {
     return [];
   }
 
-  return room.memberIds.filter((memberId) => handles.includes(snapshot.members[memberId]?.handle.toLowerCase()));
+  return handles;
+}
+
+export function extractQuotedMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {
+  return extractTaggedHandles(snapshot, roomId, content, "\"");
 }
 
 export function extractAddressedMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {
+  return extractMentionMemberIds(snapshot, roomId, content);
+}
+
+function extractTaggedHandles(
+  snapshot: WorkspaceSnapshot,
+  roomId: string,
+  content: string,
+  trigger: "@" | "\"",
+): MemberId[] {
   const room = snapshot.rooms[roomId];
 
   if (!room) {
     return [];
   }
 
-  const handles: string[] = [];
-  let remaining = content.trimStart();
+  const seenHandles = new Set<string>();
+  const memberIdByHandle = new Map(
+    room.memberIds.map((memberId) => [snapshot.members[memberId]?.handle.toLowerCase(), memberId] as const),
+  );
+  const handles: MemberId[] = [];
+  const pattern = trigger === "@"
+    ? /@([\p{L}\p{N}_-]+)/gu
+    : /"([\p{L}\p{N}_-]+)/gu;
 
-  while (remaining.length > 0) {
-    const match = remaining.match(/^@([\p{L}\p{N}_-]+)(?:[\s,，、:：;；]+|$)/u);
-    if (!match) {
-      break;
-    }
-
+  for (const match of content.matchAll(pattern)) {
     const handle = match[1]?.toLowerCase();
-    if (!handle) {
-      break;
+    if (!handle || seenHandles.has(handle)) {
+      continue;
     }
 
-    handles.push(handle);
-    remaining = remaining.slice(match[0].length).trimStart();
+    const memberId = memberIdByHandle.get(handle);
+    if (!memberId) {
+      continue;
+    }
+
+    seenHandles.add(handle);
+    handles.push(memberId);
   }
 
-  if (handles.length === 0) {
-    return [];
-  }
-
-  return room.memberIds.filter((memberId) => {
-    const handle = snapshot.members[memberId]?.handle.toLowerCase();
-    return handle ? handles.includes(handle) : false;
-  });
+  return handles;
 }

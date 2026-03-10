@@ -80,6 +80,7 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
   const normalizeMember = (member: TeamMember): TeamMember => ({
     ...member,
     provider: normalizeProvider(member.provider),
+    providerSessionId: member.providerSessionId,
   });
 
   const normalizeMessage = (message: ChatMessage): ChatMessage => ({
@@ -87,6 +88,7 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
     visibility:
       message.visibility
       ?? (message.author.kind === "member" && message.taskId ? "internal" : "public"),
+    quotedMemberIds: message.quotedMemberIds ?? [],
   });
 
   const normalizedMessageOrderByRoom = Object.fromEntries(

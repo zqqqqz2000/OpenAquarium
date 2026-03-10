@@ -31,6 +31,7 @@ import { buildTaskPrompt } from "./prompt-builder";
 import { WorkspacePersistence } from "./persistence";
 import { generateTemplateFromBrief } from "./template-generator";
 import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
+import { getRoomTranscriptFilePath, syncRoomTranscriptFiles } from "./room-transcript-files";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
 
@@ -172,6 +173,9 @@ export class WorkspaceRuntime {
               await this.runWatcherNow(input.watcherId);
             },
             inspectRoomState: (input) => Promise.resolve(this.describeRoomState(input.roomId)),
+            persistMemberSession: async (input) => {
+              await this.persistMemberProviderSession(input.memberId, input.sessionId);
+            },
           },
         }));
     this.templateGenerator = args.templateGenerator ?? ((brief, generatorArgs) =>
@@ -206,6 +210,11 @@ export class WorkspaceRuntime {
     runtime.logger?.info("runtime-created", summarizeWorkspaceSnapshot(initialSnapshot));
     await runtime.expireStaleRunningTasks();
     const bootSnapshot = runtime.getSnapshot();
+    await syncRoomTranscriptFiles({
+      workspaceRoot: args.workspaceRoot,
+      previous: createWorkspaceSnapshot(cloneTemplates(bootSnapshot), bootSnapshot.currentUserName),
+      next: bootSnapshot,
+    });
     runtime.syncWatchers();
     runtime.dispatchNewTasks(
       createWorkspaceSnapshot(cloneTemplates(bootSnapshot), bootSnapshot.currentUserName),
@@ -278,35 +287,56 @@ export class WorkspaceRuntime {
       this.context,
     );
     const nextTaskIds = Object.keys(next.tasks).filter((taskId) => !previous.tasks[taskId] && next.tasks[taskId]?.status === "running");
-    const primaryTaskId = nextTaskIds[0];
 
-    if (!primaryTaskId) {
+    if (nextTaskIds.length === 0) {
       await this.applySnapshot(previous, next);
       return;
     }
 
-    const task = next.tasks[primaryTaskId];
-    const member = next.members[task.memberId];
-    const route: TaskStreamRoute = {
-      taskId: task.id,
-      memberId: member.id,
-      memberName: member.name,
-      memberHandle: member.handle,
-    };
+    const routes = nextTaskIds
+      .map((taskId) => {
+        const task = next.tasks[taskId];
+        const member = task ? next.members[task.memberId] : undefined;
+        if (!task || !member) {
+          return undefined;
+        }
 
-    await callbacks.onTaskAccepted?.(route);
+        return {
+          taskId: task.id,
+          memberId: member.id,
+          memberName: member.name,
+          memberHandle: member.handle,
+        } satisfies TaskStreamRoute;
+      })
+      .filter((route): route is TaskStreamRoute => route !== undefined);
 
-    const completion = new Promise<void>((resolve) => {
-      this.taskObservers.set(primaryTaskId, {
-        route,
-        callbacks,
-        resolve,
-      });
-    });
+    if (routes.length === 0) {
+      await this.applySnapshot(previous, next);
+      return;
+    }
+
+    for (const route of routes) {
+      await callbacks.onTaskAccepted?.(route);
+    }
+
+    const completion = Promise.all(
+      routes.map(
+        (route) =>
+          new Promise<void>((resolve) => {
+            this.taskObservers.set(route.taskId, {
+              route,
+              callbacks,
+              resolve,
+            });
+          }),
+      ),
+    );
 
     await this.applySnapshot(previous, next);
     await completion.finally(() => {
-      this.taskObservers.delete(primaryTaskId);
+      routes.forEach((route) => {
+        this.taskObservers.delete(route.taskId);
+      });
     });
   }
 
@@ -431,6 +461,11 @@ export class WorkspaceRuntime {
   }
 
   private async applySnapshot(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): Promise<void> {
+    await syncRoomTranscriptFiles({
+      workspaceRoot: this.workspaceRoot,
+      previous,
+      next,
+    });
     this.snapshot = compactWorkspaceSnapshot(next);
     await this.persistImmediately(this.snapshot);
     this.logger?.info("snapshot-applied", summarizeWorkspaceSnapshot(this.snapshot));
@@ -518,6 +553,7 @@ export class WorkspaceRuntime {
         member,
         task,
         snapshot: this.snapshot,
+        transcriptFilePath: getRoomTranscriptFilePath(this.workspaceRoot, room),
       });
       this.snapshot = compactWorkspaceSnapshot(appendTaskTrace(
         this.snapshot,
@@ -775,6 +811,25 @@ export class WorkspaceRuntime {
     });
     this.executors.set(memberId, executor);
     return executor;
+  }
+
+  private async persistMemberProviderSession(memberId: string, sessionId?: string): Promise<void> {
+    const currentMember = this.snapshot.members[memberId];
+    if (!currentMember || currentMember.providerSessionId === sessionId) {
+      return;
+    }
+
+    this.snapshot = {
+      ...this.snapshot,
+      members: {
+        ...this.snapshot.members,
+        [memberId]: {
+          ...currentMember,
+          providerSessionId: sessionId,
+        },
+      },
+    };
+    await this.persistImmediately(this.snapshot);
   }
 
   private syncWatchers(): void {

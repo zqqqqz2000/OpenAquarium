@@ -4,6 +4,7 @@ import type { TeamMember, WatchSubscription } from "@/domain/model";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
 import { badgeToneProps } from "@/lib/ui-tone";
 
 export function MemberHoverPreview(props: {
@@ -13,6 +14,8 @@ export function MemberHoverPreview(props: {
 }) {
   const { member, watcher, children } = props;
   const toneBadge = badgeToneProps(member.accentTone);
+  const roleLabel = getMemberRoleLabel(member.handle);
+  const rolePalette = getMemberRolePalette(member.handle);
 
   return (
     <HoverCard openDelay={120}>
@@ -21,8 +24,10 @@ export function MemberHoverPreview(props: {
         <Card>
           <CardContent className="flex flex-col gap-3 p-4">
             <div>
-              <p className="m-0 text-lg font-semibold tracking-tight">{member.name}</p>
-              <p className="m-0 text-sm text-muted-foreground">@{member.handle}</p>
+              <p className="m-0 text-lg font-semibold tracking-tight" style={{ color: rolePalette.background }}>
+                {roleLabel}
+              </p>
+              <p className="m-0 text-sm text-muted-foreground">{member.name}</p>
             </div>
             <p className="m-0 text-sm leading-6 text-muted-foreground">{member.summary}</p>
             <div className="flex flex-wrap gap-2">

@@ -9,6 +9,7 @@ import { createProjectWithRoom, createWorkspaceSnapshot, postUserMessage } from 
 import { defaultTemplates } from "@/lib/sample-data/templates";
 import type { ExecutorCallbacks, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 import { WorkspacePersistence } from "@/server/persistence";
+import { getRoomTranscriptFilePath } from "@/server/room-transcript-files";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
 
 class FakeExecutor implements MemberExecutor {
@@ -165,6 +166,47 @@ describe("WorkspaceRuntime", () => {
     });
   });
 
+  it("materializes room transcript files on startup from persisted state", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-transcript-"));
+    const stateFilePath = path.join(workspaceRoot, ".openaquarium", "state.json");
+    const persistence = new WorkspacePersistence(stateFilePath);
+    const context = createRuntimeContext(1200, "2026-03-10T12:30:00.000Z");
+    let snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "Transcript Boot",
+        templateId: "template-product-pod",
+      },
+      context,
+    );
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: snapshot.selection.roomId!,
+        content: "把这条历史消息写入 transcript 文件。",
+      },
+      context,
+    );
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    await persistence.save(snapshot);
+
+    const runtime = await WorkspaceRuntime.create({
+      workspaceRoot,
+      stateFilePath,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const transcriptPath = getRoomTranscriptFilePath(workspaceRoot, room);
+    const transcript = await readFile(transcriptPath, "utf8");
+
+    expect(transcript).toContain("把这条历史消息写入 transcript 文件。");
+    expect(transcript).toContain(`# ${room.name}`);
+  });
+
   it("captures an error trace when execution crashes before ACP completes", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-crash-"));
     const runtime = new WorkspaceRuntime({
@@ -259,6 +301,57 @@ describe("WorkspaceRuntime", () => {
       expect((snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId].author.kind)).toEqual(["user"]);
       expect((snapshot.taskTraceOrderByTask[leadTask.id] ?? []).some((traceId) => snapshot.taskTraces[traceId]?.kind === "completed")).toBe(true);
     });
+  });
+
+  it("streams multi-member user messages until every mentioned task settles", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-multi-route-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          await new Promise((resolve) => setTimeout(resolve, member.handle === "research" ? 30 : 10));
+          await callbacks.onStatus(`${member.handle} running`);
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Multi Route",
+      templateId: "template-product-pod",
+    });
+
+    const acceptedHandles: string[] = [];
+    const completedHandles: string[] = [];
+    await runtime.streamUserMessage(
+      {
+        roomId: created.roomId,
+        content: "先让 @research 补事实，再让 @builder 搭骨架。",
+      },
+      {
+        onTaskAccepted(route) {
+          acceptedHandles.push(route.memberHandle);
+        },
+        onComplete(route) {
+          completedHandles.push(route.memberHandle);
+        },
+      },
+    );
+
+    expect(acceptedHandles).toEqual(["research", "builder"]);
+    expect(completedHandles.sort()).toEqual(["builder", "research"]);
+
+    const snapshot = runtime.getSnapshot();
+    const roomTasks = Object.values(snapshot.tasks).filter((task) => task.roomId === created.roomId);
+    const routedHandles = roomTasks
+      .filter((task) => ["research", "builder"].includes(snapshot.members[task.memberId].handle))
+      .map((task) => snapshot.members[task.memberId].handle)
+      .sort();
+
+    expect(routedHandles).toEqual(["builder", "research"]);
+    expect(roomTasks.every((task) => task.status !== "running")).toBe(true);
   });
 
   it("continues id allocation after restart instead of colliding with persisted state", async () => {

@@ -439,9 +439,24 @@ export async function startWorkspaceHttpServer(args: {
                   });
                 },
                 onComplete(event) {
-                  void event;
+                  writer.write({
+                    type: "data-taskSettled",
+                    transient: true,
+                    data: {
+                      taskId: event.taskId,
+                      memberId: event.memberId,
+                    },
+                  });
                 },
-                onError() {
+                onError(event) {
+                  writer.write({
+                    type: "data-taskSettled",
+                    transient: true,
+                    data: {
+                      taskId: event.taskId,
+                      memberId: event.memberId,
+                    },
+                  });
                   writer.write({
                     type: "data-notification",
                     transient: true,

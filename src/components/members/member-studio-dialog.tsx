@@ -259,6 +259,7 @@ export function MemberStudioDialog(props: {
                             message={entry.message}
                             authorMember={historyAuthor}
                             mentionedHandles={entry.mentionedHandles}
+                            quotedHandles={entry.quotedHandles}
                             recipientHandles={entry.recipientHandles}
                             handlerSummaries={entry.handlers}
                             contextBadges={entry.contextBadges}

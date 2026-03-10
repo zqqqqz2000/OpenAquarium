@@ -12,6 +12,7 @@ import { getMemberActivitySummary, getWatcherForMember } from "@/components/memb
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
 import { useRoomChat } from "@/lib/chat/use-room-chat";
 import { getUIMessageText, type WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
 import type { MessageHandlerSummary } from "@/lib/message-feed";
@@ -178,6 +179,7 @@ export function ChatPane(props: {
                     message={bubble.message}
                     authorMember={authorMember}
                     mentionedHandles={bubble.mentionedHandles}
+                    quotedHandles={bubble.quotedHandles}
                     recipientHandles={bubble.recipientHandles}
                     handlerSummaries={bubble.handlerSummaries}
                     onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
@@ -327,6 +329,8 @@ function RoomMembersSidebar(props: {
                 const activeTask = activity.activeTask;
                 const statusBadge = memberStatusBadgeProps(member.status);
                 const watcher = getWatcherForMember(room, snapshot, member.id);
+                const roleLabel = getMemberRoleLabel(member.handle);
+                const rolePalette = getMemberRolePalette(member.handle);
 
                 return (
                   <MemberHoverPreview key={member.id} member={member} watcher={watcher}>
@@ -341,7 +345,9 @@ function RoomMembersSidebar(props: {
                         <div className="min-w-0 flex-1 space-y-3">
                           <div className="space-y-1">
                             <div className="flex flex-wrap items-center gap-2">
-                              <p className="m-0 text-base font-semibold tracking-tight">{member.name}</p>
+                              <p className="m-0 text-base font-semibold tracking-tight" style={{ color: rolePalette.background }}>
+                                {roleLabel}
+                              </p>
                               {member.observeAllRoomMessages ? (
                                 <span
                                   className="inline-flex size-2 rounded-full bg-[color:var(--tone-blueprint-foreground)]"
@@ -351,7 +357,7 @@ function RoomMembersSidebar(props: {
                               {member.isEntryMember ? <Badge variant="outline">Entry</Badge> : null}
                               {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
                             </div>
-                            <p className="m-0 text-sm text-muted-foreground">@{member.handle}</p>
+                            <p className="m-0 text-sm text-muted-foreground">{member.name}</p>
                           </div>
                           <div className="space-y-2">
                             <p className="m-0 text-sm leading-6 text-foreground/90">
@@ -423,6 +429,7 @@ function toBubbleModel(
   message: ChatMessage;
   authorMemberId?: string;
   mentionedHandles: string[];
+  quotedHandles: string[];
   recipientHandles: string[];
   handlerSummaries: MessageHandlerSummary[];
 } {
@@ -446,11 +453,13 @@ function toBubbleModel(
       transport: message.metadata?.transport ?? "group",
       status,
       mentionedMemberIds: [],
+      quotedMemberIds: [],
       recipientMemberIds: [],
       taskId: message.metadata?.handlerSummaries?.[0]?.taskId,
     },
     authorMemberId: message.metadata?.memberId ?? (message.role === "assistant" ? activeRoute?.memberId : undefined),
     mentionedHandles: message.metadata?.mentionedHandles ?? [],
+    quotedHandles: message.metadata?.quotedHandles ?? [],
     recipientHandles: message.metadata?.recipientHandles ?? [],
     handlerSummaries: message.metadata?.handlerSummaries ?? [],
   };

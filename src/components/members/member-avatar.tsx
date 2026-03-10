@@ -2,8 +2,8 @@ import { Bot, Eye, Radio } from "lucide-react";
 
 import type { TeamMember } from "@/domain/model";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { getMemberRoleLabel, getMemberRoleMonogram, getMemberRolePalette } from "@/lib/member-display";
 import { cn } from "@/lib/utils";
-import { surfaceToneClass } from "@/lib/ui-tone";
 
 export function MemberAvatar(props: {
   member: TeamMember;
@@ -12,11 +12,9 @@ export function MemberAvatar(props: {
   onClick?: () => void;
 }) {
   const { member, active = false, compact = false, onClick } = props;
-  const initials = member.name
-    .split(" ")
-    .map((segment) => segment[0])
-    .join("")
-    .slice(0, 2);
+  const roleLabel = getMemberRoleLabel(member.handle);
+  const roleMonogram = getMemberRoleMonogram(member.handle);
+  const rolePalette = getMemberRolePalette(member.handle);
   const Root = onClick ? "button" : "div";
 
   return (
@@ -26,7 +24,7 @@ export function MemberAvatar(props: {
         compact ? "rounded-none" : "w-full rounded-none",
         onClick && "cursor-pointer",
       )}
-      aria-label={onClick ? member.name : undefined}
+      aria-label={onClick ? `${roleLabel} ${member.name}` : undefined}
       onClick={onClick}
       {...(onClick ? { type: "button" as const } : {})}
     >
@@ -34,22 +32,23 @@ export function MemberAvatar(props: {
         className={cn(
           "shrink-0 ring-1 ring-border",
           compact ? "size-12" : "size-14",
-          surfaceToneClass(member.accentTone),
           active && "ring-2 ring-ring/50 ring-offset-2 ring-offset-background",
         )}
       >
-        <AvatarFallback className="bg-transparent text-sm font-semibold text-foreground">
-          {initials || <Bot size={20} strokeWidth={2.2} />}
+        <AvatarFallback className="text-sm font-semibold" style={{ backgroundColor: rolePalette.background, color: rolePalette.foreground }}>
+          {roleMonogram || <Bot size={20} strokeWidth={2.2} />}
         </AvatarFallback>
       </Avatar>
       {!compact ? (
         <span className="min-w-0">
           <span className="flex items-center gap-2 text-base font-semibold">
-            {member.name}
+            <span className="truncate" style={{ color: rolePalette.background }}>
+              {roleLabel}
+            </span>
             {member.status === "running" ? <Radio size={16} className="text-[color:var(--tone-blueprint-foreground)]" /> : null}
             {member.observeAllRoomMessages ? <Eye size={16} className="text-[color:var(--tone-blueprint-foreground)]" /> : null}
           </span>
-          <span className="block text-sm text-muted-foreground">@{member.handle}</span>
+          <span className="block text-sm text-muted-foreground">{member.name}</span>
         </span>
       ) : null}
     </Root>

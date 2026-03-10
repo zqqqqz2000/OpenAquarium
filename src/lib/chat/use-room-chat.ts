@@ -171,6 +171,19 @@ export function useRoomChat(args: {
             return;
           }
 
+          if (part.type === "data-taskSettled") {
+            const data = part.data as WorkspaceMessageDataParts["taskSettled"];
+            updateMemberChatState(data.memberId, (current) =>
+              current.route?.taskId === data.taskId
+                ? {
+                    ...current,
+                    route: undefined,
+                  }
+                : current,
+            );
+            return;
+          }
+
           if (part.type === "data-notification") {
             const data = part.data as WorkspaceMessageDataParts["notification"];
             if (data.level !== "error") {
@@ -187,12 +200,6 @@ export function useRoomChat(args: {
                 : current.route,
             }));
           }
-        },
-        onFinish() {
-          updateMemberChatState(member.id, (current) => ({
-            ...current,
-            route: undefined,
-          }));
         },
       });
 

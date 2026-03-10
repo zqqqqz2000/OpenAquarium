@@ -83,7 +83,7 @@ export function ChatComposer(props: {
 
     const trailingText = text.slice(visibleMentionMatch.end);
     const needsSpace = trailingText.length === 0 || !trailingText.startsWith(" ");
-    const insertedMention = `@${member.handle}${needsSpace ? " " : ""}`;
+    const insertedMention = `${visibleMentionMatch.trigger}${member.handle}${needsSpace ? " " : ""}`;
     const nextText = `${text.slice(0, visibleMentionMatch.start)}${insertedMention}${trailingText}`;
     const nextCaretPosition = visibleMentionMatch.start + insertedMention.length;
 
@@ -100,14 +100,22 @@ export function ChatComposer(props: {
   const submitLabel = sending ? "Send anyway" : "Send";
   const submitMessage = (): void => {
     const nextText = text;
+
+    if (nextText.trim().length === 0 || !connected) {
+      return;
+    }
+
     const nextDirectMemberId = resolvedDirectMemberId;
     setText("");
+    setCaretPosition(0);
     if (allowTargetSelection) {
       setDirectMemberId(undefined);
     }
     setSendError(undefined);
+    setDismissedMentionKey(undefined);
     void Promise.resolve(onSend(nextText, nextDirectMemberId)).catch((caughtError) => {
       setText(nextText);
+      setCaretPosition(nextText.length);
       if (allowTargetSelection) {
         setDirectMemberId(nextDirectMemberId);
       }
@@ -125,7 +133,7 @@ export function ChatComposer(props: {
               "min-h-20 resize-none border-0 bg-transparent px-0 py-0 text-[1.05rem] leading-7 shadow-none ring-0 focus-visible:border-transparent focus-visible:ring-0",
               textareaClassName,
             )}
-            placeholder={directMember ? `私发给 @${directMember.handle}，发送后会打断对方当前任务。` : "在群里说点什么。输入 @ 可提及成员。"}
+            placeholder={directMember ? `私发给 @${directMember.handle}，发送后会打断对方当前任务。` : "在群里说点什么。输入 @ 派单，输入 \" 只引用成员。"}
             disabled={!connected}
             value={text}
             onChange={(event) => {
@@ -143,41 +151,49 @@ export function ChatComposer(props: {
               setCaretPosition(event.currentTarget.selectionStart ?? event.currentTarget.value.length);
             }}
             onKeyDown={(event) => {
-              if (!visibleMentionMatch || visibleMentionMatch.matches.length === 0) {
-                return;
-              }
+              const composing = event.nativeEvent.isComposing;
 
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setActiveMentionIndex((current) => (current + 1) % visibleMentionMatch.matches.length);
-                return;
-              }
-
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setActiveMentionIndex((current) => (current - 1 + visibleMentionMatch.matches.length) % visibleMentionMatch.matches.length);
-                return;
-              }
-
-              if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
-                event.preventDefault();
-                const selectedMember = visibleMentionMatch.matches[activeMentionIndex];
-
-                if (selectedMember) {
-                  applyMention(selectedMember);
+              if (visibleMentionMatch && visibleMentionMatch.matches.length > 0) {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setActiveMentionIndex((current) => (current + 1) % visibleMentionMatch.matches.length);
+                  return;
                 }
-                return;
+
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setActiveMentionIndex((current) => (current - 1 + visibleMentionMatch.matches.length) % visibleMentionMatch.matches.length);
+                  return;
+                }
+
+                if (((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") && !composing) {
+                  event.preventDefault();
+                  const selectedMember = visibleMentionMatch.matches[activeMentionIndex];
+
+                  if (selectedMember) {
+                    applyMention(selectedMember);
+                  }
+                  return;
+                }
+
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setDismissedMentionKey(visibleMentionMatch.key);
+                  return;
+                }
               }
 
-              if (event.key === "Escape") {
+              if (event.key === "Enter" && !event.shiftKey && !composing) {
                 event.preventDefault();
-                setDismissedMentionKey(visibleMentionMatch.key);
+                submitMessage();
               }
             }}
           />
           {visibleMentionMatch && visibleMentionMatch.matches.length > 0 ? (
-            <div className="absolute top-[calc(100%+0.5rem)] left-0 z-30 w-[min(24rem,calc(100vw-4rem))] rounded-2xl border border-border/70 bg-background/95 p-2 shadow-lg">
-              <p className="m-0 px-2 pb-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Mention member</p>
+            <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-30 max-h-[min(18rem,40vh)] w-[min(24rem,calc(100vw-4rem))] overflow-y-auto rounded-2xl border border-border/70 bg-background/95 p-2 shadow-lg">
+              <p className="m-0 px-2 pb-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                {visibleMentionMatch.trigger === "@" ? "Mention member" : "Quote member"}
+              </p>
               <div className="flex flex-col gap-1">
                 {visibleMentionMatch.matches.map((member, index) => (
                   <button
@@ -193,7 +209,7 @@ export function ChatComposer(props: {
                     }}
                   >
                     <span className="min-w-0">
-                      <span className="block text-sm font-medium">@{member.handle}</span>
+                      <span className="block text-sm font-medium">{visibleMentionMatch.trigger}{member.handle}</span>
                       <span className="block truncate text-xs text-muted-foreground">{member.name}</span>
                     </span>
                     {member.isEntryMember ? <Badge variant="outline">Entry</Badge> : null}
@@ -252,20 +268,22 @@ interface MentionMatch {
   key: string;
   start: number;
   end: number;
+  trigger: "@" | "\"";
   matches: TeamMember[];
 }
 
 function resolveMentionMatch(text: string, caretPosition: number, members: TeamMember[]): MentionMatch | undefined {
   const textBeforeCaret = text.slice(0, caretPosition);
-  const match = /(?:^|\s)@([^\s@]*)$/u.exec(textBeforeCaret);
+  const match = /(?:^|\s)([@"])([^\s@"]*)$/u.exec(textBeforeCaret);
 
   if (!match) {
     return undefined;
   }
 
   const matchedText = match[0];
-  const query = match[1]?.toLowerCase() ?? "";
-  const mentionStart = (match.index ?? 0) + matchedText.lastIndexOf("@");
+  const trigger = match[1] === "\"" ? "\"" : "@";
+  const query = match[2]?.toLowerCase() ?? "";
+  const mentionStart = (match.index ?? 0) + matchedText.lastIndexOf(trigger);
   const matches = members.filter((member) => {
     const handle = member.handle.toLowerCase();
     const name = member.name.toLowerCase();
@@ -281,6 +299,7 @@ function resolveMentionMatch(text: string, caretPosition: number, members: TeamM
     key: `${mentionStart}:${caretPosition}:${query}`,
     start: mentionStart,
     end: caretPosition,
+    trigger,
     matches,
   };
 }

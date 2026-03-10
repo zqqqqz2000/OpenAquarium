@@ -9,6 +9,7 @@ export interface MemberSessionMessageEntry {
   createdAt: string;
   message: MemberHistoryEntry["message"];
   mentionedHandles: string[];
+  quotedHandles: string[];
   recipientHandles: string[];
   handlerSummaries: MessageHandlerSummary[];
   contextBadges: ContextBadge[];
@@ -47,6 +48,7 @@ export function getMemberSessionEntries(snapshot: WorkspaceSnapshot, room: Room,
     createdAt: entry.message.createdAt,
     message: entry.message,
     mentionedHandles: entry.mentionedHandles,
+    quotedHandles: entry.quotedHandles,
     recipientHandles: entry.recipientHandles,
     handlerSummaries: entry.handlers,
     contextBadges: entry.contextBadges,

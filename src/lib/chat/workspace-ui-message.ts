@@ -3,7 +3,13 @@ import type { UIMessage } from "ai";
 import type { ChatMessage, Room, WorkspaceSnapshot } from "@/domain/model";
 import type { JsonValue } from "@/lib/json";
 import { isVisibleMainRoomMessage } from "@/lib/message-visibility";
-import { getMessageHandlers, getMessageMentionHandles, getMessageRecipientHandles, type MessageHandlerSummary } from "@/lib/message-feed";
+import {
+  getMessageHandlers,
+  getMessageMentionHandles,
+  getMessageQuotedHandles,
+  getMessageRecipientHandles,
+  type MessageHandlerSummary,
+} from "@/lib/message-feed";
 
 export interface WorkspaceMessageMetadata {
   roomId: string;
@@ -16,6 +22,7 @@ export interface WorkspaceMessageMetadata {
   transport?: ChatMessage["transport"];
   status?: ChatMessage["status"];
   mentionedHandles?: string[];
+  quotedHandles?: string[];
   recipientHandles?: string[];
   handlerSummaries?: MessageHandlerSummary[];
 }
@@ -31,6 +38,10 @@ export interface WorkspaceMessageDataParts extends Record<string, JsonValue | ob
     taskId: string;
     memberId: string;
     summary: string;
+  };
+  taskSettled: {
+    taskId: string;
+    memberId: string;
   };
   notification: {
     level: "info" | "error";
@@ -72,6 +83,7 @@ export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: R
       transport: message.transport,
       status: message.status,
       mentionedHandles: getMessageMentionHandles(snapshot, message),
+      quotedHandles: getMessageQuotedHandles(snapshot, message),
       recipientHandles: getMessageRecipientHandles(snapshot, room, message),
       handlerSummaries,
     },

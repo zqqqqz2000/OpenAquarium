@@ -8,6 +8,7 @@ import {
   createWorkspaceSnapshot,
   extractAddressedMemberIds,
   extractMentionMemberIds,
+  extractQuotedMemberIds,
   postMemberDraft,
   postMemberMessage,
   postUserMessage,
@@ -139,7 +140,19 @@ describe("workspace domain", () => {
     expect(handles).toEqual(["builder", "scribe"]);
   });
 
-  it("only treats leading mentions as routed recipients", () => {
+  it("extracts quoted handles without routing them", () => {
+    const context = createRuntimeContext();
+    const snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const quoteIds = extractQuotedMemberIds(snapshot, roomId, "\"builder 作为参考，\"scribe 负责记录。");
+    const handles = quoteIds.map((memberId) => snapshot.members[memberId].handle).sort();
+
+    expect(handles).toEqual(["builder", "scribe"]);
+    expect(extractAddressedMemberIds(snapshot, roomId, "\"builder 作为参考")).toEqual([]);
+  });
+
+  it("treats every mentioned member as a routed recipient", () => {
     const context = createRuntimeContext();
     const snapshot = createStartedProjectSnapshot(context);
 
@@ -147,10 +160,10 @@ describe("workspace domain", () => {
     const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@builder @research 先同步一下，再提到 @scribe 作为引用。");
     const addressedHandles = addressedIds.map((memberId) => snapshot.members[memberId].handle);
 
-    expect(addressedHandles).toEqual(["research", "builder"]);
+    expect(addressedHandles).toEqual(["builder", "research", "scribe"]);
   });
 
-  it("does not route member tasks from inline mentions that are not at the start of the message", () => {
+  it("routes member tasks from inline mentions anywhere in the message body", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);
 
@@ -170,9 +183,12 @@ describe("workspace domain", () => {
       context,
     );
 
-    const teammateTasks = Object.values(snapshot.tasks).filter((task) => task.roomId === roomId && task.memberId !== lead.id);
+    const teammateHandles = Object.values(snapshot.tasks)
+      .filter((task) => task.roomId === roomId && task.memberId !== lead.id)
+      .map((task) => snapshot.members[task.memberId].handle)
+      .sort();
 
-    expect(teammateTasks).toHaveLength(0);
+    expect(teammateHandles).toEqual(["builder", "research"]);
   });
 
   it("stores member-to-user directs without routing a new teammate task", () => {

@@ -22,6 +22,7 @@ export interface ContextBadge {
 export interface MemberHistoryEntry {
   message: ChatMessage;
   mentionedHandles: string[];
+  quotedHandles: string[];
   recipientHandles: string[];
   handlers: MessageHandlerSummary[];
   contextBadges: ContextBadge[];
@@ -66,6 +67,12 @@ function buildContextBadge(id: string, label: string, tone: FeedTone): ContextBa
 export function getMessageMentionHandles(snapshot: WorkspaceSnapshot, message: ChatMessage): string[] {
   return uniqueHandles(
     message.mentionedMemberIds.map((memberId) => snapshot.members[memberId]?.handle).filter((handle): handle is string => Boolean(handle)),
+  );
+}
+
+export function getMessageQuotedHandles(snapshot: WorkspaceSnapshot, message: ChatMessage): string[] {
+  return uniqueHandles(
+    (message.quotedMemberIds ?? []).map((memberId) => snapshot.members[memberId]?.handle).filter((handle): handle is string => Boolean(handle)),
   );
 }
 
@@ -135,6 +142,7 @@ export function getMemberHistory(snapshot: WorkspaceSnapshot, room: Room, member
       const ownHandlers = handlerBySourceMessageId.get(message.id) ?? [];
       const ownDraftHandler = ownTaskByDraftMessageId.get(message.id);
       const mentioned = message.mentionedMemberIds.includes(member.id);
+      const quoted = (message.quotedMemberIds ?? []).includes(member.id);
       const directed = message.recipientMemberIds.includes(member.id);
       const authoredByMember = message.author.kind === "member" && message.author.id === member.id;
 
@@ -150,6 +158,10 @@ export function getMemberHistory(snapshot: WorkspaceSnapshot, room: Room, member
 
       if (mentioned) {
         contextBadges.push(buildContextBadge("mentioned", "Mentioned", "postit"));
+      }
+
+      if (quoted) {
+        contextBadges.push(buildContextBadge("quoted", "Quoted", "paper"));
       }
 
       if (authoredByMember) {
@@ -169,6 +181,7 @@ export function getMemberHistory(snapshot: WorkspaceSnapshot, room: Room, member
       return {
         message,
         mentionedHandles: getMessageMentionHandles(snapshot, message),
+        quotedHandles: getMessageQuotedHandles(snapshot, message),
         recipientHandles: getMessageRecipientHandles(snapshot, room, message),
         handlers: ownHandlers.length > 0 ? ownHandlers : ownDraftHandler ? [ownDraftHandler] : [],
         contextBadges: [...new Map(contextBadges.map((badge) => [badge.id, badge])).values()],

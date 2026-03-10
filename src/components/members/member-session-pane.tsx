@@ -212,6 +212,7 @@ export function MemberSessionPane(props: {
                     message={entry.message}
                     authorMember={entry.message.author.kind === "member" ? snapshot.members[entry.message.author.id] : undefined}
                     mentionedHandles={entry.mentionedHandles}
+                    quotedHandles={entry.quotedHandles}
                     recipientHandles={entry.recipientHandles}
                     handlerSummaries={entry.handlerSummaries}
                     contextBadges={entry.contextBadges}

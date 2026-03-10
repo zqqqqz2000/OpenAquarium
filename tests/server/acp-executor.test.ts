@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCodexAcpProvider, createGenericAcpProvider } from "@/lib/acp";
 
-const { cleanupMock, initSessionMock, languageModelMock, setModeMock, streamTextMock } = vi.hoisted(() => ({
+const { cleanupMock, getSessionIdMock, initSessionMock, languageModelMock, setModeMock, streamTextMock } = vi.hoisted(() => ({
   initSessionMock: vi.fn(),
   setModeMock: vi.fn(),
   cleanupMock: vi.fn(),
+  getSessionIdMock: vi.fn(() => "session_1"),
   languageModelMock: vi.fn(() => ({ provider: "mock" })),
   streamTextMock: vi.fn(),
 }));
@@ -17,6 +18,7 @@ vi.mock("@mcpc-tech/acp-ai-provider", () => ({
     initSession: initSessionMock,
     setMode: setModeMock,
     cleanup: cleanupMock,
+    getSessionId: getSessionIdMock,
     languageModel: languageModelMock,
   })),
 }));
@@ -108,6 +110,8 @@ describe("AcpMemberExecutor", () => {
     setModeMock.mockReset();
     setModeMock.mockResolvedValue(undefined);
     cleanupMock.mockReset();
+    getSessionIdMock.mockReset();
+    getSessionIdMock.mockReturnValue("session_1");
     languageModelMock.mockClear();
     streamTextMock.mockReset();
     streamTextMock.mockReturnValue({
@@ -144,7 +148,7 @@ describe("AcpMemberExecutor", () => {
     expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
 
-  it("re-initializes codex session tools for each new turn", async () => {
+  it("reuses the same codex session across turns", async () => {
     const request = createRequest();
     const executor = new AcpMemberExecutor({
       workspaceRoot: process.cwd(),
@@ -181,7 +185,7 @@ describe("AcpMemberExecutor", () => {
     );
 
     expect(initSessionMock).toHaveBeenCalledTimes(2);
-    expect(cleanupMock).toHaveBeenCalledTimes(1);
+    expect(cleanupMock).not.toHaveBeenCalled();
   });
 
   it("leaves generic ACP sessions unchanged", async () => {

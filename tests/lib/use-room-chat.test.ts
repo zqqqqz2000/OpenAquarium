@@ -21,7 +21,7 @@ describe("useRoomChat helpers", () => {
     ).toBe(builder?.id);
   });
 
-  it("routes only the leading addressed member, matching domain routing", () => {
+  it("uses the first mentioned member as the primary stream target", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const membersById = Object.fromEntries(room.memberIds.map((memberId) => [memberId, snapshot.members[memberId]]));
@@ -54,10 +54,11 @@ describe("useRoomChat helpers", () => {
     ).toBe(room.entryMemberId);
   });
 
-  it("ignores inline mentions that are not at the start of the message", () => {
+  it("uses inline mentions when selecting the primary stream target", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const membersById = Object.fromEntries(room.memberIds.map((memberId) => [memberId, snapshot.members[memberId]]));
+    const research = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "research");
 
     expect(
       resolvePrimaryMemberId({
@@ -66,7 +67,7 @@ describe("useRoomChat helpers", () => {
         membersById,
         content: "先接住这条消息，再让 @research 后续补事实。",
       }),
-    ).toBe(room.entryMemberId);
+    ).toBe(research?.id);
   });
 
   it("summarizes one or many active member streams", () => {

@@ -47,6 +47,7 @@ function equalMessage(left: ChatMessage, right: ChatMessage): boolean {
     left.status === right.status &&
     left.taskId === right.taskId &&
     equalStringArray(left.mentionedMemberIds, right.mentionedMemberIds) &&
+    equalStringArray(left.quotedMemberIds ?? [], right.quotedMemberIds ?? []) &&
     equalStringArray(left.recipientMemberIds, right.recipientMemberIds)
   );
 }
@@ -74,6 +75,7 @@ export function areMessageBubblePropsEqual(previous: MessageBubbleProps, next: M
     equalMessage(previous.message, next.message) &&
     equalAuthorMember(previous.authorMember, next.authorMember) &&
     equalStringArray(previous.mentionedHandles ?? [], next.mentionedHandles ?? []) &&
+    equalStringArray(previous.quotedHandles ?? [], next.quotedHandles ?? []) &&
     equalStringArray(previous.recipientHandles ?? [], next.recipientHandles ?? []) &&
     equalHandlerSummaries(previous.handlerSummaries ?? [], next.handlerSummaries ?? []) &&
     equalContextBadges(previous.contextBadges ?? [], next.contextBadges ?? [])
