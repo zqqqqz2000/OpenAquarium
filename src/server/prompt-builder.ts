@@ -85,9 +85,11 @@ export function buildTaskPrompt(args: {
     "1. If you need to speak in the room or DM another member, use the CLI commands below.",
     "2. A group message that includes @handle will interrupt that member and deliver the message.",
     "3. Do not assume hidden roles. The prompt and skills define each member's current job.",
-    "4. Keep room messages concise and actionable.",
-    "5. Do not paste your reasoning, tool narration, or step-by-step plan into room messages.",
-    "6. The final task completion text is private trace output, not a room reply. Only text sent via the room/DM commands is user-visible.",
+    "4. Keep room messages concise and actionable, but do not stay silent on long tasks.",
+    "5. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
+    "6. Prefer group messages for user-facing progress updates; use direct messages for private coordination or explicit one-to-one follow-up.",
+    "7. Do not paste your reasoning, tool narration, or step-by-step plan into room messages.",
+    "8. The final task completion text is private session output, not a room reply. Only text sent via the room/DM commands is user-visible.",
     "",
     "[Available Commands]",
     directCommands,
@@ -96,6 +98,6 @@ export function buildTaskPrompt(args: {
     member.skills.map((skill) => `- ${skill.name}: ${skill.description}\n  command: ${skill.command}`).join("\n") || "(none)",
     "",
     "[Instruction]",
-    "Perform the current task. If a room or direct response is needed, actually send it using the command line tool. Continue until the task is complete.",
+    "Perform the current task. If a room or direct response is needed, actually send it using the command line tool. Keep the user and team updated with short progress messages while you work, and continue until the task is complete.",
   ].join("\n");
 }

@@ -290,7 +290,7 @@ function RoomInfoPopover(props: {
         </PopoverHeader>
         <div className="space-y-2 text-sm text-muted-foreground">
           <p className="m-0">首条问题会把 room 主题初始化为：{summarizePrompt(room.topic, 80)}。</p>
-          <p className="m-0">后台 runtime 会自动驱动 {members.length} 个成员 turn；内部执行细节只放在成员 Trace，群聊只显示真实发出的消息。</p>
+          <p className="m-0">后台 runtime 会自动驱动 {members.length} 个成员 turn；更完整的执行细节和私聊上下文放在成员 Session，群聊只显示真实发出的消息。</p>
         </div>
       </PopoverContent>
     </Popover>

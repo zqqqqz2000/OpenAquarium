@@ -24,6 +24,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const updateMemberConfig = useWorkspaceStore((state) => state.updateMemberConfig);
   const setEntryMember = useWorkspaceStore((state) => state.setEntryMember);
   const upsertWatcher = useWorkspaceStore((state) => state.upsertWatcher);
+  const sendUserMessage = useWorkspaceStore((state) => state.sendUserMessage);
   const { leftCollapsed, leftWidth, toggleLeftCollapsed, setLeftWidth } = useShellPanels();
 
   useEffect(() => {
@@ -141,12 +142,15 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
         snapshot={snapshot}
         room={room}
         member={routedMember}
+        connected={connected}
+        error={error}
         onClose={closeMemberStudio}
         onToggleMonitor={(targetMemberId) => void toggleMemberMonitoring(targetMemberId)}
         onSaveConfig={(input) => void updateMemberConfig(input)}
         onSetEntryMember={(targetMemberId) => void setEntryMember(targetMemberId)}
         onSaveWatcher={(input) => void upsertWatcher(input)}
         onRunWatcher={(watcherId) => void runWatcher(watcherId)}
+        onSendDirectMessage={(content, directMemberId) => void sendUserMessage(content, directMemberId)}
       />
     </>
   );

@@ -140,6 +140,7 @@ function buildTemplateGenerationPrompt(brief: string, references: TeamTemplate[]
     "",
     "[Guidance]",
     "- Keep prompts specific and operational.",
+    "- Make each member prompt tell the model to publish brief visible progress updates during longer tasks so the user is not left waiting in silence.",
     "- Use a mix of entry, implementation, research, QA, recorder, incident, or data roles as appropriate to the brief.",
     "- Make skills complementary; do not duplicate every member.",
     "- Prefer 3 to 5 members unless the brief is clearly small or clearly broad.",

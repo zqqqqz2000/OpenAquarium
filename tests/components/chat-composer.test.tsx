@@ -27,6 +27,38 @@ describe("ChatComposer", () => {
     expect(screen.getByText("Group message")).toBeInTheDocument();
   });
 
+  it("locks the composer to a single direct target when fixedDirectMemberId is provided", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const lead = members.find((member) => member.handle === "lead");
+    const onSend = vi.fn();
+
+    if (!lead) {
+      throw new Error("Expected a lead member");
+    }
+
+    render(
+      <ChatComposer
+        connected
+        error={undefined}
+        members={members}
+        onSend={onSend}
+        fixedDirectMemberId={lead.id}
+      />,
+    );
+
+    expect(screen.getByText("DM @lead")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Clear target/i })).not.toBeInTheDocument();
+
+    const textbox = screen.getByRole("textbox");
+    await user.type(textbox, "只发给当前 member。");
+    await user.click(screen.getByRole("button", { name: /Send/i }));
+
+    expect(onSend).toHaveBeenCalledWith("只发给当前 member。", lead.id);
+  });
+
   it("keeps the draft and shows an error when sending fails", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();

@@ -115,13 +115,14 @@ describe("MemberStudioDialog", () => {
     expect(screen.getByText("先整理需求边界，然后 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。")).toBeInTheDocument();
   });
 
-  it("shows raw task traces including the prompt transcript", async () => {
+  it("shows the member session timeline and lets the user send a direct message", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
     const lead = members.find((member) => member.handle === "lead")!;
     const leadTask = Object.values(snapshot.tasks).find((task) => task.memberId === lead.id)!;
+    const onSendDirectMessage = vi.fn();
     snapshot.taskTraces.trace_0100 = {
       id: "trace_0100",
       taskId: leadTask.id,
@@ -145,13 +146,20 @@ describe("MemberStudioDialog", () => {
         onSetEntryMember={vi.fn()}
         onSaveWatcher={vi.fn()}
         onRunWatcher={vi.fn()}
+        onSendDirectMessage={onSendDirectMessage}
       />,
     );
 
-    await user.click(screen.getByRole("tab", { name: "Trace" }));
+    await user.click(screen.getByRole("tab", { name: "Session" }));
 
-    expect(screen.getByText("Execution trace")).toBeInTheDocument();
+    expect(screen.getByText("Member session")).toBeInTheDocument();
     expect(screen.getByText("Task prompt")).toBeInTheDocument();
     expect(screen.getByText(/原始上下文消息/)).toBeInTheDocument();
+    expect(screen.getByText("DM @lead")).toBeInTheDocument();
+
+    await user.type(screen.getByRole("textbox"), "先同步一个当前进度。");
+    await user.click(screen.getByRole("button", { name: /Send/i }));
+
+    expect(onSendDirectMessage).toHaveBeenCalledWith("先同步一个当前进度。", lead.id);
   });
 });

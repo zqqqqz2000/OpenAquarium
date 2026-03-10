@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Send, X } from "lucide-react";
 
@@ -16,16 +16,23 @@ export function ChatComposer(props: {
   members: TeamMember[];
   onSend: (content: string, directMemberId?: string) => void | Promise<void>;
   sending?: boolean;
+  fixedDirectMemberId?: string;
 }) {
-  const { connected, error, members, onSend, sending = false } = props;
+  const { connected, error, members, onSend, sending = false, fixedDirectMemberId } = props;
   const [text, setText] = useState("");
-  const [directMemberId, setDirectMemberId] = useState<string | undefined>();
+  const [directMemberId, setDirectMemberId] = useState<string | undefined>(fixedDirectMemberId);
   const [sendError, setSendError] = useState<string | undefined>();
+  const resolvedDirectMemberId = fixedDirectMemberId ?? directMemberId;
   const directMember = useMemo(
-    () => members.find((member) => member.id === directMemberId),
-    [directMemberId, members],
+    () => members.find((member) => member.id === resolvedDirectMemberId),
+    [members, resolvedDirectMemberId],
   );
   const channelBadge = badgeToneProps(directMember ? "correction" : "blueprint");
+  const allowTargetSelection = fixedDirectMemberId === undefined;
+
+  useEffect(() => {
+    setDirectMemberId(fixedDirectMemberId);
+  }, [fixedDirectMemberId]);
 
   return (
     <Card className="border border-border shadow-sm">
@@ -34,24 +41,26 @@ export function ChatComposer(props: {
           <Badge variant={channelBadge.variant} className={channelBadge.className}>
             {directMember ? `DM @${directMember.handle}` : "Group message"}
           </Badge>
-          {directMember ? (
+          {allowTargetSelection && directMember ? (
             <Button size="sm" variant="secondary" onClick={() => setDirectMemberId(undefined)}>
               <X size={16} />
               Clear target
             </Button>
           ) : null}
         </div>
-        <div className="flex flex-wrap gap-3">
-          {members.map((member) => (
-            <MemberAvatar
-              key={member.id}
-              member={member}
-              compact
-              active={member.id === directMemberId}
-              onClick={() => setDirectMemberId((current) => (current === member.id ? undefined : member.id))}
-            />
-          ))}
-        </div>
+        {allowTargetSelection ? (
+          <div className="flex flex-wrap gap-3">
+            {members.map((member) => (
+              <MemberAvatar
+                key={member.id}
+                member={member}
+                compact
+                active={member.id === directMemberId}
+                onClick={() => setDirectMemberId((current) => (current === member.id ? undefined : member.id))}
+              />
+            ))}
+          </div>
+        ) : null}
         <Textarea
           className="min-h-24"
           placeholder={directMember ? `私发给 @${directMember.handle}，发送后会打断对方当前任务。` : "在群里说点什么，或者直接 @member 指定接收者。"}
@@ -65,7 +74,9 @@ export function ChatComposer(props: {
               {connected
                 ? sending
                   ? "当前仍有 member 在流式处理中；继续发送会按路由复用或打断对应 member 的当前流。"
-                  : "群聊里直接 `@member`，或先点头像切到私聊目标。"
+                  : allowTargetSelection
+                    ? "群聊里直接 `@member`，或先点头像切到私聊目标。"
+                    : `这是和 @${directMember?.handle ?? "member"} 的一对一会话；发送后会直接进入对方的 direct inbox。`
                 : "Runtime offline 时发送会被禁用；先启动 `bun run server`。"}
             </p>
             {sendError || error ? <p className="m-0 text-xs text-destructive">{sendError ?? error}</p> : null}
@@ -74,13 +85,17 @@ export function ChatComposer(props: {
             disabled={text.trim().length === 0 || !connected}
             onClick={() => {
               const nextText = text;
-              const nextDirectMemberId = directMemberId;
+              const nextDirectMemberId = resolvedDirectMemberId;
               setText("");
-              setDirectMemberId(undefined);
+              if (allowTargetSelection) {
+                setDirectMemberId(undefined);
+              }
               setSendError(undefined);
               void Promise.resolve(onSend(nextText, nextDirectMemberId)).catch((caughtError) => {
                 setText(nextText);
-                setDirectMemberId(nextDirectMemberId);
+                if (allowTargetSelection) {
+                  setDirectMemberId(nextDirectMemberId);
+                }
                 setSendError(caughtError instanceof Error ? caughtError.message : String(caughtError));
               });
             }}

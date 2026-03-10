@@ -396,7 +396,15 @@ export async function startWorkspaceHttpServer(args: {
                   void event;
                 },
                 onStatus(event) {
-                  void event;
+                  writer.write({
+                    type: "data-taskStatus",
+                    transient: true,
+                    data: {
+                      taskId: event.taskId,
+                      memberId: event.memberId,
+                      summary: event.summary,
+                    },
+                  });
                 },
                 onComplete(event) {
                   void event;
@@ -407,7 +415,7 @@ export async function startWorkspaceHttpServer(args: {
                     transient: true,
                     data: {
                       level: "error",
-                      message: "当前成员执行失败，请打开成员 Trace 查看详情。",
+                      message: "当前成员执行失败，请打开成员 Session 查看详情。",
                     },
                   });
                 },
