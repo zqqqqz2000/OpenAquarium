@@ -203,13 +203,20 @@ export function MemberStudioDialog(props: {
             </Card>
 
             {activeTask ? (
-              <Card className={surfaceToneClass("correction")}>
-                <CardContent className="flex flex-col gap-2 p-4">
+              <Card className={cn(surfaceToneClass("correction"), "max-h-[min(20rem,38vh)]")} data-testid="current-task-card">
+                <CardContent className="flex min-h-0 flex-col gap-2 overflow-hidden p-4">
                   <p className="m-0 text-base font-semibold tracking-tight">Current task</p>
                   <p className="m-0 text-sm">{activeTask.title}</p>
                   <p className="m-0 text-sm text-muted-foreground">status: {activeTask.status}</p>
                   <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">source message</p>
-                  <p className="m-0 text-sm">{snapshot.messages[activeTask.sourceMessageId]?.content}</p>
+                  <div
+                    className="min-h-0 overflow-y-auto rounded-lg border border-border/50 bg-background/55 p-3"
+                    data-testid="current-task-source-message"
+                  >
+                    <p className="m-0 whitespace-pre-wrap break-words text-sm">
+                      {snapshot.messages[activeTask.sourceMessageId]?.content}
+                    </p>
+                  </div>
                 </CardContent>
               </Card>
             ) : null}

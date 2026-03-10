@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
+import { createRuntimeContext } from "@/domain/identity";
+import { postUserMessage } from "@/domain/workspace";
 import type { UpdateMemberConfigInput } from "@/domain/model";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
@@ -119,6 +121,48 @@ describe("MemberStudioDialog", () => {
         element?.textContent?.includes("@builder @research 先整理需求边界，然后由 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。") ?? false,
       ).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("caps the current task card height and scrolls long source messages", () => {
+    const context = createRuntimeContext(900, "2026-03-10T08:30:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "lead 再接一条长上下文任务",
+      },
+      context,
+    );
+    const lead = snapshot.members[room.entryMemberId];
+    const leadTask = lead.activeTaskId ? snapshot.tasks[lead.activeTaskId] : undefined;
+    if (!leadTask) {
+      throw new Error("Expected an active task for the lead member");
+    }
+    const sourceMessage = snapshot.messages[leadTask.sourceMessageId];
+
+    snapshot.messages[leadTask.sourceMessageId] = {
+      ...sourceMessage,
+      content: `${sourceMessage.content}\n${"补充上下文 ".repeat(120)}`,
+    };
+
+    render(
+      <MemberStudioDialog
+        snapshot={snapshot}
+        room={room}
+        member={lead}
+        onClose={vi.fn()}
+        onToggleMonitor={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSetEntryMember={vi.fn()}
+        onSaveWatcher={vi.fn()}
+        onRunWatcher={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("current-task-card")).toHaveClass("max-h-[min(20rem,38vh)]");
+    expect(screen.getByTestId("current-task-source-message")).toHaveClass("overflow-y-auto");
   });
 
   it("shows the member session timeline and lets the user send a direct message", async () => {
