@@ -8,7 +8,7 @@ import { MessageBubble } from "@/components/chat/message-bubble";
 import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import { MemberAvatar } from "@/components/members/member-avatar";
 import { MemberHoverPreview } from "@/components/members/member-hover-preview";
-import { getWatcherForMember } from "@/components/members/member-utils";
+import { getMemberActivitySummary, getWatcherForMember } from "@/components/members/member-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -354,7 +354,8 @@ function RoomMembersSidebar(props: {
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
             <div className="flex flex-col gap-3">
               {members.map((member) => {
-                const activeTask = member.activeTaskId ? snapshot.tasks[member.activeTaskId] : undefined;
+                const activity = getMemberActivitySummary(snapshot, member);
+                const activeTask = activity.activeTask;
                 const statusBadge = memberStatusBadgeProps(member.status);
                 const watcher = getWatcherForMember(room, snapshot, member.id);
 
@@ -383,9 +384,21 @@ function RoomMembersSidebar(props: {
                             </div>
                             <p className="m-0 text-sm text-muted-foreground">@{member.handle}</p>
                           </div>
-                          <p className="m-0 text-sm leading-6 text-muted-foreground">
-                            {activeTask ? activeTask.title : summarizePrompt(member.summary, 120)}
-                          </p>
+                          <div className="space-y-2">
+                            <p className="m-0 text-sm leading-6 text-foreground/90">
+                              {activeTask ? activeTask.title : summarizePrompt(member.summary, 120)}
+                            </p>
+                            {activeTask ? (
+                              <>
+                                <p className="m-0 text-xs leading-5 text-muted-foreground">{activity.statusLine}</p>
+                                {activity.sourcePreview ? (
+                                  <p className="m-0 text-xs leading-5 text-muted-foreground">
+                                    Source: {summarizePrompt(activity.sourcePreview, 96)}
+                                  </p>
+                                ) : null}
+                              </>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center justify-between gap-3 border-t border-border/70 pt-3">
@@ -394,7 +407,7 @@ function RoomMembersSidebar(props: {
                             {member.status}
                           </Badge>
                           <p className="m-0 text-xs text-muted-foreground">
-                            {activeTask ? "处理中" : member.acceptsDirectMessages ? "Direct open" : "Direct closed"}
+                            {activeTask ? "Open Session for full timeline" : activity.statusLine}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
@@ -423,7 +436,7 @@ function RoomInfoPopover(props: {
   template?: TeamTemplate;
   members: TeamMember[];
 }) {
-  const { room, template, members } = props;
+  const { room, template } = props;
 
   return (
     <Popover>

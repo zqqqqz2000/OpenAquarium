@@ -123,6 +123,7 @@ export interface ChatMessage {
   visibility?: MessageVisibility;
   mentionedMemberIds: MemberId[];
   recipientMemberIds: MemberId[];
+  recipientUser?: boolean;
   taskId?: TaskId;
 }
 
@@ -199,6 +200,7 @@ export interface PostMemberMessageInput {
   content: string;
   mentionedMemberIds?: MemberId[];
   directMemberId?: MemberId;
+  directToUser?: boolean;
   taskId?: TaskId;
 }
 

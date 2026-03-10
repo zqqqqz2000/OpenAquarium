@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 
 import type { WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
 import { extractLastUserText } from "@/lib/chat/workspace-ui-message";
+import { resolveDirectTarget } from "@/lib/direct-target";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
 import type { WorkspaceRuntime } from "./runtime";
@@ -126,18 +127,23 @@ export async function handleWorkspaceJsonApiRequest(args: {
       memberId: string;
       content: string;
       directMemberId?: string;
+      directToUser?: boolean;
       targetHandle?: string;
       taskId?: string;
     };
-    const room = runtime.getSnapshot().rooms[parsedBody.roomId];
-    const directMemberId =
-      parsedBody.directMemberId ??
-      room?.memberIds
-        .map((memberId) => runtime.getSnapshot().members[memberId])
-        .find((member) => member.handle === parsedBody.targetHandle?.replace(/^@/u, ""))?.id;
+    const target =
+      parsedBody.directMemberId || parsedBody.directToUser
+        ? {
+            directMemberId: parsedBody.directMemberId,
+            directToUser: parsedBody.directToUser,
+          }
+        : resolveDirectTarget(runtime.getSnapshot(), parsedBody.roomId, parsedBody.targetHandle);
+    if (parsedBody.targetHandle && !target.directMemberId && !target.directToUser) {
+      throw new Error(`Unknown direct target "${parsedBody.targetHandle}" in room "${parsedBody.roomId}"`);
+    }
     const snapshot = await runtime.sendMemberMessage({
       ...parsedBody,
-      directMemberId,
+      ...target,
     });
     return {
       statusCode: 200,
@@ -454,18 +460,23 @@ export async function startWorkspaceHttpServer(args: {
           memberId: string;
           content: string;
           directMemberId?: string;
+          directToUser?: boolean;
           targetHandle?: string;
           taskId?: string;
         }>(request);
-        const room = args.runtime.getSnapshot().rooms[body.roomId];
-        const directMemberId =
-          body.directMemberId ??
-          room?.memberIds
-            .map((memberId) => args.runtime.getSnapshot().members[memberId])
-            .find((member) => member.handle === body.targetHandle?.replace(/^@/u, ""))?.id;
+        const target =
+          body.directMemberId || body.directToUser
+            ? {
+                directMemberId: body.directMemberId,
+                directToUser: body.directToUser,
+              }
+            : resolveDirectTarget(args.runtime.getSnapshot(), body.roomId, body.targetHandle);
+        if (body.targetHandle && !target.directMemberId && !target.directToUser) {
+          throw new Error(`Unknown direct target "${body.targetHandle}" in room "${body.roomId}"`);
+        }
         const snapshot = await args.runtime.sendMemberMessage({
           ...body,
-          directMemberId,
+          ...target,
         });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;

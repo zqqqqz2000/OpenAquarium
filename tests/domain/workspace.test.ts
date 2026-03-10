@@ -6,6 +6,7 @@ import {
   completeMemberTask,
   createProjectWithRoom,
   createWorkspaceSnapshot,
+  extractAddressedMemberIds,
   extractMentionMemberIds,
   postMemberDraft,
   postMemberMessage,
@@ -99,6 +100,97 @@ describe("workspace domain", () => {
     const handles = mentionIds.map((memberId) => snapshot.members[memberId].handle).sort();
 
     expect(handles).toEqual(["builder", "scribe"]);
+  });
+
+  it("only treats leading mentions as routed recipients", () => {
+    const context = createRuntimeContext();
+    const snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "ACP Lab",
+        firstPrompt: "实现一个可中断的 agent team",
+        templateId: "template-product-pod",
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId!;
+    const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@builder @research 先同步一下，再提到 @scribe 作为引用。");
+    const addressedHandles = addressedIds.map((memberId) => snapshot.members[memberId].handle);
+
+    expect(addressedHandles).toEqual(["research", "builder"]);
+  });
+
+  it("does not route member tasks from inline mentions that are not at the start of the message", () => {
+    const context = createRuntimeContext();
+    let snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "ACP Lab",
+        firstPrompt: "实现一个可中断的 agent team",
+        templateId: "template-product-pod",
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId!;
+    const lead = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.isEntryMember)!;
+
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: lead.id,
+        taskId: lead.activeTaskId,
+        content: "我负责接住需求，@research 负责调研，@builder 负责实现。",
+      },
+      context,
+    );
+
+    const teammateTasks = Object.values(snapshot.tasks).filter((task) => task.roomId === roomId && task.memberId !== lead.id);
+
+    expect(teammateTasks).toHaveLength(0);
+  });
+
+  it("stores member-to-user directs without routing a new teammate task", () => {
+    const context = createRuntimeContext();
+    let snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "ACP Lab",
+        firstPrompt: "实现一个可中断的 agent team",
+        templateId: "template-product-pod",
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId!;
+    const lead = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.isEntryMember)!;
+
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: lead.id,
+        taskId: lead.activeTaskId,
+        content: "DM-OK",
+        directToUser: true,
+      },
+      context,
+    );
+
+    const lastMessageId = snapshot.messageOrderByRoom[roomId]?.at(-1);
+    const lastMessage = lastMessageId ? snapshot.messages[lastMessageId] : undefined;
+
+    expect(lastMessage?.transport).toBe("direct");
+    expect(lastMessage?.recipientUser).toBe(true);
+    expect(
+      Object.values(snapshot.tasks).filter((task) => task.roomId === roomId && task.sourceMessageId === lastMessage?.id),
+    ).toHaveLength(0);
   });
 
   it("establishes a watcher baseline before sending digests for new room activity", () => {

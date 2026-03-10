@@ -266,8 +266,12 @@ function resolveRecipients(snapshot: WorkspaceSnapshot, message: ChatMessage): M
     });
   }
 
-  const mentioned = message.mentionedMemberIds.filter((memberId) => room.memberIds.includes(memberId));
-  return mentioned.length > 0 ? [...new Set(mentioned)] : message.author.kind === "user" ? [room.entryMemberId] : [];
+  const addressedMemberIds = extractAddressedMemberIds(snapshot, message.roomId, message.content);
+  if (message.author.kind === "user") {
+    return addressedMemberIds.length > 0 ? addressedMemberIds : [room.entryMemberId];
+  }
+
+  return addressedMemberIds;
 }
 
 function routeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage, now: string, createId: MutationContext["createId"]): void {
@@ -485,17 +489,22 @@ export function postMemberMessage(
   }
 
   const now = context.now();
+  const isDirectMessage = Boolean(input.directMemberId || input.directToUser);
+  const content = input.content.trim();
+  const recipientMemberIds = input.directMemberId ? [input.directMemberId] : [];
+
   const message: ChatMessage = {
     id: context.createId("message"),
     roomId: input.roomId,
     author: buildMemberAuthor(member),
-    content: input.content.trim(),
+    content,
     createdAt: now,
-    transport: input.directMemberId ? "direct" : "group",
+    transport: isDirectMessage ? "direct" : "group",
     status: "completed",
     visibility: "public",
-    mentionedMemberIds: input.mentionedMemberIds ?? extractMentionMemberIds(snapshot, input.roomId, input.content),
-    recipientMemberIds: input.directMemberId ? [input.directMemberId] : [],
+    mentionedMemberIds: isDirectMessage ? [] : input.mentionedMemberIds ?? extractMentionMemberIds(snapshot, input.roomId, content),
+    recipientMemberIds,
+    recipientUser: input.directToUser ? true : undefined,
     taskId: input.taskId,
   };
 
@@ -977,4 +986,39 @@ export function extractMentionMemberIds(snapshot: WorkspaceSnapshot, roomId: str
   }
 
   return room.memberIds.filter((memberId) => handles.includes(snapshot.members[memberId]?.handle.toLowerCase()));
+}
+
+export function extractAddressedMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {
+  const room = snapshot.rooms[roomId];
+
+  if (!room) {
+    return [];
+  }
+
+  const handles: string[] = [];
+  let remaining = content.trimStart();
+
+  while (remaining.length > 0) {
+    const match = remaining.match(/^@([\p{L}\p{N}_-]+)(?:[\s,，、:：;；]+|$)/u);
+    if (!match) {
+      break;
+    }
+
+    const handle = match[1]?.toLowerCase();
+    if (!handle) {
+      break;
+    }
+
+    handles.push(handle);
+    remaining = remaining.slice(match[0].length).trimStart();
+  }
+
+  if (handles.length === 0) {
+    return [];
+  }
+
+  return room.memberIds.filter((memberId) => {
+    const handle = snapshot.members[memberId]?.handle.toLowerCase();
+    return handle ? handles.includes(handle) : false;
+  });
 }

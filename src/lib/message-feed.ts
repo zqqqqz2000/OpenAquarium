@@ -1,4 +1,5 @@
 import type { ChatMessage, MemberTask, Room, TaskStatus, TeamMember, WorkspaceSnapshot } from "@/domain/model";
+import { extractAddressedMemberIds } from "@/domain/workspace";
 import { isVisibleRoomMessage } from "@/lib/message-visibility";
 
 export type FeedTone = "paper" | "postit" | "blueprint" | "correction";
@@ -74,6 +75,10 @@ export function getMessageRecipientHandles(
   message: ChatMessage,
 ): string[] {
   if (message.transport === "direct" || message.transport === "watch-digest") {
+    if (message.recipientUser) {
+      return [snapshot.currentUserName];
+    }
+
     return uniqueHandles(
       message.recipientMemberIds
         .filter((memberId) => room.memberIds.includes(memberId))
@@ -82,9 +87,13 @@ export function getMessageRecipientHandles(
     );
   }
 
-  const mentionedHandles = getMessageMentionHandles(snapshot, message);
-  if (mentionedHandles.length > 0) {
-    return mentionedHandles;
+  const addressedHandles = uniqueHandles(
+    extractAddressedMemberIds(snapshot, room.id, message.content)
+      .map((memberId) => snapshot.members[memberId]?.handle)
+      .filter((handle): handle is string => Boolean(handle)),
+  );
+  if (addressedHandles.length > 0) {
+    return addressedHandles;
   }
 
   if (message.author.kind === "user") {

@@ -26,7 +26,7 @@ function simulateRoom(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
         roomId,
         memberId: lead.id,
         taskId: lead.activeTaskId,
-        content: "先整理需求边界，然后 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。",
+        content: "@builder @research 先整理需求边界，然后由 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。",
       },
       context,
     );

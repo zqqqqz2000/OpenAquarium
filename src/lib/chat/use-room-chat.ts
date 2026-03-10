@@ -3,6 +3,7 @@ import { DefaultChatTransport, type ChatStatus } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Room, TeamMember, WorkspaceSnapshot } from "@/domain/model";
+import { extractAddressedMemberIds } from "@/domain/workspace";
 import {
   mapRoomMessagesToUIMessages,
   type WorkspaceMessageDataParts,
@@ -34,17 +35,14 @@ function isBusyStatus(status: ChatStatus): boolean {
   return status === "submitted" || status === "streaming";
 }
 
-function extractMentionHandles(content: string): Set<string> {
-  return new Set([...content.matchAll(/@([\p{L}\p{N}_-]+)/gu)].map((match) => match[1]?.toLowerCase()).filter(Boolean));
-}
-
 export function resolvePrimaryMemberId(args: {
+  snapshot: WorkspaceSnapshot;
   room?: Room;
   membersById: Record<string, TeamMember>;
   content: string;
   directMemberId?: string;
 }): string | undefined {
-  const { room, membersById, content, directMemberId } = args;
+  const { snapshot, room, membersById, content, directMemberId } = args;
 
   if (!room) {
     return undefined;
@@ -54,13 +52,9 @@ export function resolvePrimaryMemberId(args: {
     return directMemberId;
   }
 
-  const mentionedHandles = extractMentionHandles(content);
-  const mentionedMemberId = room.memberIds.find((memberId) => {
-    const handle = membersById[memberId]?.handle.toLowerCase();
-    return handle ? mentionedHandles.has(handle) : false;
-  });
+  const addressedMemberId = extractAddressedMemberIds(snapshot, room.id, content).find((memberId) => Boolean(membersById[memberId]));
 
-  return mentionedMemberId ?? room.entryMemberId;
+  return addressedMemberId ?? room.entryMemberId;
 }
 
 export function describeActiveMemberStreams(activeRoutes: RoomChatStatus[]): string | undefined {
@@ -267,6 +261,7 @@ export function useRoomChat(args: {
       }
 
       const targetMemberId = resolvePrimaryMemberId({
+        snapshot,
         room,
         membersById: activeMembersById,
         content,

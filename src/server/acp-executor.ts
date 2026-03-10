@@ -149,7 +149,7 @@ export class AcpMemberExecutor implements MemberExecutor {
   private readonly host: MemberToolHost;
   private readonly terminalRegistry = new TerminalRegistry();
   private provider: ReturnType<typeof createACPProvider>;
-  private codexSessionPrepared = false;
+  private providerTurnBound = false;
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
 
@@ -162,6 +162,11 @@ export class AcpMemberExecutor implements MemberExecutor {
 
   async execute(request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
     await this.cancel();
+
+    if (this.member.provider.kind === "codex-acp" && this.providerTurnBound) {
+      await this.resetProvider();
+    }
+
     const abortController = new AbortController();
     this.currentAbortController = abortController;
 
@@ -287,7 +292,7 @@ export class AcpMemberExecutor implements MemberExecutor {
 
     return acpTools({
       oa_send_group_message: tool({
-        description: "Send a message into the current room as this member. Use @handle in the content to mention teammates.",
+        description: "Send a message into the current room as this member. Prefer this tool over shelling out. Only leading @handle mentions are treated as actual routing targets.",
         inputSchema: z.object({
           content: z.string().min(1),
         }),
@@ -302,9 +307,9 @@ export class AcpMemberExecutor implements MemberExecutor {
         },
       }),
       oa_send_direct_message: tool({
-        description: "Send a direct message from this member to another member handle in the same room.",
+        description: "Send a direct message from this member to another member handle in the same room, or to @user for a private reply to the human.",
         inputSchema: z.object({
-          targetHandle: z.string().min(1).describe("Target member handle, with or without leading @."),
+          targetHandle: z.string().min(1).describe("Target handle, with or without leading @. Use @user to reply privately to the human."),
           content: z.string().min(1),
         }),
         execute: async ({ targetHandle, content }) => {
@@ -419,11 +424,11 @@ export class AcpMemberExecutor implements MemberExecutor {
     this.provider.cleanup();
     await this.terminalRegistry.disposeAll();
     this.provider = this.createProvider();
-    this.codexSessionPrepared = false;
+    this.providerTurnBound = false;
   }
 
   private async prepareProviderSession(tools: ReturnType<AcpMemberExecutor["createWorkspaceTools"]>): Promise<void> {
-    if (this.member.provider.kind !== "codex-acp" || this.codexSessionPrepared) {
+    if (this.member.provider.kind !== "codex-acp") {
       return;
     }
 
@@ -431,7 +436,7 @@ export class AcpMemberExecutor implements MemberExecutor {
       mode: this.member.provider.env[CODEX_ACP_MODE_ENV_KEY],
       tools,
     });
-    this.codexSessionPrepared = true;
+    this.providerTurnBound = true;
   }
 }
 

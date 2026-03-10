@@ -32,6 +32,7 @@ import { WorkspacePersistence } from "./persistence";
 import { generateTemplateFromBrief } from "./template-generator";
 import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
+import { resolveDirectTarget } from "../lib/direct-target";
 
 type SnapshotListener = (snapshot: WorkspaceSnapshot) => void;
 type TemplateGenerator = (brief: string, args: { workspaceRoot: string; references: TeamTemplate[] }) => Promise<TeamTemplate>;
@@ -154,12 +155,16 @@ export class WorkspaceRuntime {
               });
             },
             sendDirectMessage: async (input) => {
-              const directMemberId = this.findMemberIdByHandle(input.roomId, input.targetHandle);
+              const target = resolveDirectTarget(this.snapshot, input.roomId, input.targetHandle);
+              if (!target.directMemberId && !target.directToUser) {
+                throw new Error(`Unknown direct target "${input.targetHandle}" in room "${input.roomId}"`);
+              }
+
               await this.sendMemberMessage({
                 roomId: input.roomId,
                 memberId: input.memberId,
                 content: input.content,
-                directMemberId,
+                ...target,
                 taskId: input.taskId,
               });
             },
@@ -383,18 +388,6 @@ export class WorkspaceRuntime {
     };
     await this.applySnapshot(previous, next);
     return nextTemplate;
-  }
-
-  private findMemberIdByHandle(roomId: string, handle: string): string {
-    const room = this.snapshot.rooms[roomId];
-    const normalizedHandle = handle.replace(/^@/u, "").trim();
-    const memberId = room?.memberIds.find((candidateId) => this.snapshot.members[candidateId]?.handle === normalizedHandle);
-
-    if (!memberId) {
-      throw new Error(`Unknown member handle "@${normalizedHandle}" in room "${roomId}"`);
-    }
-
-    return memberId;
   }
 
   private describeRoomState(roomId: string): string {

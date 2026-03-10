@@ -2,7 +2,7 @@ import type { UIMessage } from "ai";
 
 import type { ChatMessage, Room, WorkspaceSnapshot } from "@/domain/model";
 import type { JsonValue } from "@/lib/json";
-import { isVisibleRoomMessage } from "@/lib/message-visibility";
+import { isVisibleMainRoomMessage } from "@/lib/message-visibility";
 import { getMessageHandlers, getMessageMentionHandles, getMessageRecipientHandles, type MessageHandlerSummary } from "@/lib/message-feed";
 
 export interface WorkspaceMessageMetadata {
@@ -88,7 +88,7 @@ export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: R
 export function mapRoomMessagesToUIMessages(snapshot: WorkspaceSnapshot, room: Room): WorkspaceUIMessage[] {
   return (snapshot.messageOrderByRoom[room.id] ?? [])
     .map((messageId) => snapshot.messages[messageId])
-    .filter((message): message is ChatMessage => Boolean(message) && isVisibleRoomMessage(message))
+    .filter((message): message is ChatMessage => Boolean(message) && isVisibleMainRoomMessage(message))
     .map((message) => mapDomainMessageToUIMessage(snapshot, room, message));
 }
 

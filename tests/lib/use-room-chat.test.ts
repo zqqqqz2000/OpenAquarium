@@ -12,6 +12,7 @@ describe("useRoomChat helpers", () => {
 
     expect(
       resolvePrimaryMemberId({
+        snapshot,
         room,
         membersById,
         content: "先交给入口成员处理。",
@@ -20,21 +21,22 @@ describe("useRoomChat helpers", () => {
     ).toBe(builder?.id);
   });
 
-  it("routes mentions using room member order, matching domain routing", () => {
+  it("routes only the leading addressed member, matching domain routing", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const membersById = Object.fromEntries(room.memberIds.map((memberId) => [memberId, snapshot.members[memberId]]));
-    const firstMentionedByRoomOrder = room.memberIds
+    const firstAddressedMember = room.memberIds
       .map((memberId) => snapshot.members[memberId])
-      .find((member) => member.handle === "research");
+      .find((member) => member.handle === "scribe");
 
     expect(
       resolvePrimaryMemberId({
+        snapshot,
         room,
         membersById,
         content: "@scribe 先记录一下，然后 @research 再补充事实。",
       }),
-    ).toBe(firstMentionedByRoomOrder?.id);
+    ).toBe(firstAddressedMember?.id);
   });
 
   it("falls back to the entry member for plain group messages", () => {
@@ -44,9 +46,25 @@ describe("useRoomChat helpers", () => {
 
     expect(
       resolvePrimaryMemberId({
+        snapshot,
         room,
         membersById,
         content: "先接住这条消息。",
+      }),
+    ).toBe(room.entryMemberId);
+  });
+
+  it("ignores inline mentions that are not at the start of the message", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const membersById = Object.fromEntries(room.memberIds.map((memberId) => [memberId, snapshot.members[memberId]]));
+
+    expect(
+      resolvePrimaryMemberId({
+        snapshot,
+        room,
+        membersById,
+        content: "先接住这条消息，再让 @research 后续补事实。",
       }),
     ).toBe(room.entryMemberId);
   });

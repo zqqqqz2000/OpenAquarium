@@ -90,7 +90,7 @@ describe("MemberStudioDialog", () => {
       memberId: lead.id,
       kind: "completed",
       title: "Task completed (end_turn)",
-      content: "先整理需求边界，然后 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。",
+      content: "@builder @research 先整理需求边界，然后由 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。",
       createdAt: "2026-03-09T07:30:02.000Z",
     };
     snapshot.taskTraceOrderByTask[leadTask.id] = ["trace_0001", "trace_0002"];
@@ -114,7 +114,7 @@ describe("MemberStudioDialog", () => {
     expect(screen.getByText("Processing history")).toBeInTheDocument();
     expect(screen.getByText("Accepted")).toBeInTheDocument();
     expect(screen.getByText("Reply")).toBeInTheDocument();
-    expect(screen.getByText("先整理需求边界，然后 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。")).toBeInTheDocument();
+    expect(screen.getByText("@builder @research 先整理需求边界，然后由 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。")).toBeInTheDocument();
   });
 
   it("shows the member session timeline and lets the user send a direct message", async () => {

@@ -144,6 +144,46 @@ describe("AcpMemberExecutor", () => {
     expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
 
+  it("re-initializes codex session tools for each new turn", async () => {
+    const request = createRequest();
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: {
+        sendGroupMessage: () => Promise.resolve(),
+        sendDirectMessage: () => Promise.resolve(),
+        runWatcher: () => Promise.resolve(),
+        inspectRoomState: () => Promise.resolve("state"),
+      },
+    });
+
+    await executor.execute(request, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError: () => Promise.resolve(),
+    });
+
+    await executor.execute(
+      {
+        ...request,
+        task: {
+          ...request.task,
+          id: "task_2",
+        },
+      },
+      {
+        onDraft: () => Promise.resolve(),
+        onStatus: () => Promise.resolve(),
+        onComplete: () => Promise.resolve(),
+        onError: () => Promise.resolve(),
+      },
+    );
+
+    expect(initSessionMock).toHaveBeenCalledTimes(2);
+    expect(cleanupMock).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves generic ACP sessions unchanged", async () => {
     const provider = createGenericAcpProvider({
       label: "Claude Code",
