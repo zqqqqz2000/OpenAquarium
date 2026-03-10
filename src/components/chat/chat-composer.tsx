@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Send, X } from "lucide-react";
 
@@ -19,11 +19,14 @@ export function ChatComposer(props: {
   onSend: (content: string, directMemberId?: string) => void | Promise<void>;
   sending?: boolean;
   fixedDirectMemberId?: string;
+  preferredDirectMemberId?: string;
+  focusSignal?: number;
 }) {
-  const { className, connected, error, members, onSend, sending = false, fixedDirectMemberId } = props;
+  const { className, connected, error, members, onSend, sending = false, fixedDirectMemberId, preferredDirectMemberId, focusSignal } = props;
   const [text, setText] = useState("");
   const [directMemberId, setDirectMemberId] = useState<string | undefined>(fixedDirectMemberId);
   const [sendError, setSendError] = useState<string | undefined>();
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const resolvedDirectMemberId = fixedDirectMemberId ?? directMemberId;
   const directMember = useMemo(
     () => members.find((member) => member.id === resolvedDirectMemberId),
@@ -35,6 +38,22 @@ export function ChatComposer(props: {
   useEffect(() => {
     setDirectMemberId(fixedDirectMemberId);
   }, [fixedDirectMemberId]);
+
+  useEffect(() => {
+    if (fixedDirectMemberId !== undefined || preferredDirectMemberId === undefined) {
+      return;
+    }
+
+    setDirectMemberId(preferredDirectMemberId);
+  }, [fixedDirectMemberId, focusSignal, preferredDirectMemberId]);
+
+  useEffect(() => {
+    if (focusSignal === undefined) {
+      return;
+    }
+
+    textareaRef.current?.focus();
+  }, [focusSignal]);
 
   return (
     <Card className={cn("border border-border shadow-sm", className)}>
@@ -51,7 +70,9 @@ export function ChatComposer(props: {
           ) : null}
         </div>
         {allowTargetSelection ? (
-          <div className="flex flex-wrap gap-3">
+          <div className="space-y-2">
+            <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Quick direct targets</p>
+            <div className="flex flex-wrap gap-3">
             {members.map((member) => (
               <MemberAvatar
                 key={member.id}
@@ -61,9 +82,11 @@ export function ChatComposer(props: {
                 onClick={() => setDirectMemberId((current) => (current === member.id ? undefined : member.id))}
               />
             ))}
+            </div>
           </div>
         ) : null}
         <Textarea
+          ref={textareaRef}
           className="min-h-24"
           placeholder={directMember ? `私发给 @${directMember.handle}，发送后会打断对方当前任务。` : "在群里说点什么，或者直接 @member 指定接收者。"}
           disabled={!connected}

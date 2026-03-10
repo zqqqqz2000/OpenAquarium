@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { AlertCircle, CheckCircle2, Compass, LoaderCircle, MessageSquareDashed, Milestone, TriangleAlert, type LucideIcon } from "lucide-react";
+import { AlertCircle, ArrowDown, CheckCircle2, Compass, LoaderCircle, MessageSquareDashed, Milestone, TriangleAlert, type LucideIcon } from "lucide-react";
 
 import type { Room, TaskTraceKind, TeamMember, WorkspaceSnapshot } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
@@ -80,7 +80,7 @@ function SessionTraceBubble(props: { member: TeamMember; entry: MemberSessionTra
   const toneBadge = badgeToneProps(surfaceTone);
 
   return (
-    <div className="flex gap-3">
+    <div className="flex shrink-0 gap-3">
       <MemberAvatar member={member} compact />
       <Card className={cn("max-w-[min(100%,58rem)] border border-border shadow-sm", surfaceToneClass(surfaceTone))}>
         <CardContent className="flex flex-col gap-3 p-4">
@@ -139,6 +139,7 @@ export function MemberSessionPane(props: {
   const { snapshot, room, member, connected, error, onSendDirectMessage, onOpenMember } = props;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const previousMemberIdRef = useRef<string | undefined>(undefined);
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const sessionEntries = useMemo(
     () => getMemberSessionEntries(snapshot, room, member),
     [member, room, snapshot],
@@ -146,6 +147,27 @@ export function MemberSessionPane(props: {
   const activeTask = member.activeTaskId ? snapshot.tasks[member.activeTaskId] : undefined;
   const canSendDirectMessage = typeof onSendDirectMessage === "function";
   const latestEntryId = sessionEntries.at(-1)?.id;
+  const updateScrollState = (): void => {
+    const container = transcriptRef.current;
+    if (!container) {
+      return;
+    }
+
+    const bottomGap = container.scrollHeight - container.clientHeight - container.scrollTop;
+    setShowScrollToLatest(bottomGap > 32);
+  };
+  const scrollTimelineToLatest = (behavior: ScrollBehavior = "smooth"): void => {
+    const container = transcriptRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior,
+    });
+    setShowScrollToLatest(false);
+  };
 
   useEffect(() => {
     const container = transcriptRef.current;
@@ -155,11 +177,14 @@ export function MemberSessionPane(props: {
 
     const memberChanged = previousMemberIdRef.current !== member.id;
     previousMemberIdRef.current = member.id;
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior: memberChanged ? "auto" : "smooth",
-    });
-  }, [latestEntryId, member.id]);
+    if (memberChanged || !showScrollToLatest) {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: memberChanged ? "auto" : "smooth",
+      });
+    }
+    window.requestAnimationFrame(updateScrollState);
+  }, [latestEntryId, member.id, showScrollToLatest]);
 
   return (
     <Card className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -185,34 +210,42 @@ export function MemberSessionPane(props: {
           ) : null}
         </div>
 
-        <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-          <div className="flex flex-col gap-4">
-            {sessionEntries.map((entry) =>
-              entry.type === "message" ? (
-                <MessageBubble
-                  key={entry.id}
-                  message={entry.message}
-                  authorMember={entry.message.author.kind === "member" ? snapshot.members[entry.message.author.id] : undefined}
-                  mentionedHandles={entry.mentionedHandles}
-                  recipientHandles={entry.recipientHandles}
-                  handlerSummaries={entry.handlerSummaries}
-                  contextBadges={entry.contextBadges}
-                  onAuthorClick={entry.message.author.kind === "member" && onOpenMember ? () => onOpenMember(entry.message.author.id) : undefined}
-                />
-              ) : (
-                <SessionTraceBubble key={entry.id} member={member} entry={entry} />
-              ),
-            )}
-            {sessionEntries.length === 0 ? (
-              <Card className="border-dashed">
-                <CardContent className="p-5">
-                  <p className="m-0 text-sm text-muted-foreground">
-                    还没有 session 内容。下一次这个成员接到任务或收到私聊后，这里会出现完整时间线。
-                  </p>
-                </CardContent>
-              </Card>
-            ) : null}
+        <div className="relative min-h-0 flex-1">
+          <div ref={transcriptRef} className="h-full min-h-0 overflow-y-auto px-4 py-4" onScroll={updateScrollState}>
+            <div className="flex flex-col gap-4">
+              {sessionEntries.map((entry) =>
+                entry.type === "message" ? (
+                  <MessageBubble
+                    key={entry.id}
+                    message={entry.message}
+                    authorMember={entry.message.author.kind === "member" ? snapshot.members[entry.message.author.id] : undefined}
+                    mentionedHandles={entry.mentionedHandles}
+                    recipientHandles={entry.recipientHandles}
+                    handlerSummaries={entry.handlerSummaries}
+                    contextBadges={entry.contextBadges}
+                    onAuthorClick={entry.message.author.kind === "member" && onOpenMember ? () => onOpenMember(entry.message.author.id) : undefined}
+                  />
+                ) : (
+                  <SessionTraceBubble key={entry.id} member={member} entry={entry} />
+                ),
+              )}
+              {sessionEntries.length === 0 ? (
+                <Card className="border-dashed">
+                  <CardContent className="p-5">
+                    <p className="m-0 text-sm text-muted-foreground">
+                      还没有 session 内容。下一次这个成员接到任务或收到私聊后，这里会出现完整时间线。
+                    </p>
+                  </CardContent>
+                </Card>
+              ) : null}
+            </div>
           </div>
+          {showScrollToLatest ? (
+            <Button className="absolute right-4 bottom-4 shadow-lg" size="sm" type="button" onClick={() => scrollTimelineToLatest()}>
+              <ArrowDown size={16} />
+              Jump to latest
+            </Button>
+          ) : null}
         </div>
 
         <div className="shrink-0 border-t border-border px-4 py-4">

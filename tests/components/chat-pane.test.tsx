@@ -39,12 +39,51 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("Handled by").length).toBeGreaterThan(0);
     expect(screen.getAllByText("@lead").length).toBeGreaterThan(0);
     expect(screen.getAllByText("To").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Direct" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Session" }).length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Hide projects sidebar" }));
     await user.click(screen.getByRole("button", { name: "Hide members sidebar" }));
 
     expect(onToggleLeftSidebar).toHaveBeenCalledTimes(1);
     expect(onToggleRightSidebar).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the user target a member for direct messaging from the members sidebar", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const template = snapshot.templates[room.templateId];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          template={template}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const [, researchDirectButton] = screen.getAllByRole("button", { name: "Direct" });
+    if (!researchDirectButton) {
+      throw new Error("Expected a direct button for the research member");
+    }
+
+    await user.click(researchDirectButton);
+
+    expect(screen.getByText("DM @research")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveFocus();
   });
 
   it("scrolls the transcript to the newest message", () => {

@@ -52,7 +52,7 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
   return (
     <Card
       className={cn(
-        "relative max-w-[min(100%,58rem)] border border-border shadow-sm",
+        "relative shrink-0 max-w-[min(100%,58rem)] border border-border shadow-sm",
         isUser && cn("ml-auto", surfaceToneClass("blueprint")),
         isSystem && cn(surfaceToneClass("paper"), "border-l-4 border-l-[color:var(--tone-blueprint-border)]"),
       )}

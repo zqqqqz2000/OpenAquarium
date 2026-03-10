@@ -121,6 +121,14 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   return (
     <>
       <div className="room-grid" style={gridStyle}>
+        {!leftCollapsed ? (
+          <button
+            aria-label="Close projects sidebar"
+            className="absolute inset-y-0 right-0 z-10 hidden bg-background/48 backdrop-blur-sm max-[860px]:block left-[min(21rem,82vw)]"
+            type="button"
+            onClick={toggleLeftCollapsed}
+          />
+        ) : null}
         <Sidebar
           collapsed={leftCollapsed}
           projects={projects}

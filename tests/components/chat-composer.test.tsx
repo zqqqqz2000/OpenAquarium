@@ -96,4 +96,32 @@ describe("ChatComposer", () => {
 
     expect(button).toBeEnabled();
   });
+
+  it("can receive a preferred direct target and focus signal from the parent view", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const research = members.find((member) => member.handle === "research");
+    const onSend = vi.fn();
+
+    if (!research) {
+      throw new Error("Expected a research member");
+    }
+
+    const { rerender } = render(<ChatComposer connected error={undefined} members={members} onSend={onSend} />);
+
+    rerender(
+      <ChatComposer
+        connected
+        error={undefined}
+        members={members}
+        onSend={onSend}
+        preferredDirectMemberId={research.id}
+        focusSignal={1}
+      />,
+    );
+
+    expect(screen.getByText("DM @research")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveFocus();
+  });
 });

@@ -13,7 +13,18 @@ function getInitialShellPanelsState(): ShellPanelsState {
     return DEFAULT_SHELL_PANELS_STATE;
   }
 
-  return parseShellPanelsState(window.localStorage.getItem(SHELL_PANELS_STORAGE_KEY));
+  const persisted = window.localStorage.getItem(SHELL_PANELS_STORAGE_KEY);
+  if (!persisted) {
+    return window.innerWidth <= 860
+      ? {
+          ...DEFAULT_SHELL_PANELS_STATE,
+          leftCollapsed: true,
+          rightCollapsed: true,
+        }
+      : DEFAULT_SHELL_PANELS_STATE;
+  }
+
+  return parseShellPanelsState(persisted);
 }
 
 export function useShellPanels() {

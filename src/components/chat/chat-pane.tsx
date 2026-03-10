@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { Bot, Info, Sparkles, Users } from "lucide-react";
+import { ArrowDown, Bot, Info, Sparkles, Users } from "lucide-react";
 
 import type { ChatMessage, Room, TeamMember, TeamTemplate, WorkspaceSnapshot } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
@@ -56,6 +56,9 @@ export function ChatPane(props: {
   } = props;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const previousLayoutKeyRef = useRef<string | undefined>(undefined);
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+  const [composerDirectMemberId, setComposerDirectMemberId] = useState<string | undefined>(undefined);
+  const [composerFocusSignal, setComposerFocusSignal] = useState(0);
   const roomChat = useRoomChat({
     room,
     members,
@@ -64,6 +67,29 @@ export function ChatPane(props: {
   const roomId = room?.id;
   const latestMessageId = roomChat.messages.at(-1)?.id;
   const layoutKey = `${roomId ?? "no-room"}:${leftSidebarCollapsed ? "left-closed" : "left-open"}:${rightSidebarCollapsed ? "right-closed" : "right-open"}`;
+  const composerTargetMemberId =
+    composerDirectMemberId && members.some((member) => member.id === composerDirectMemberId) ? composerDirectMemberId : undefined;
+  const updateScrollState = (): void => {
+    const container = transcriptRef.current;
+    if (!container) {
+      return;
+    }
+
+    const bottomGap = container.scrollHeight - container.clientHeight - container.scrollTop;
+    setShowScrollToLatest(bottomGap > 32);
+  };
+  const scrollTranscriptToLatest = (behavior: ScrollBehavior = "smooth"): void => {
+    const container = transcriptRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior,
+    });
+    setShowScrollToLatest(false);
+  };
 
   useEffect(() => {
     if (!roomId) {
@@ -77,11 +103,23 @@ export function ChatPane(props: {
 
     const layoutChanged = previousLayoutKeyRef.current !== layoutKey;
     previousLayoutKeyRef.current = layoutKey;
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior: layoutChanged ? "auto" : "smooth",
-    });
-  }, [layoutKey, latestMessageId, roomId]);
+    if (layoutChanged || !showScrollToLatest) {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: layoutChanged ? "auto" : "smooth",
+      });
+    }
+    window.requestAnimationFrame(updateScrollState);
+  }, [layoutKey, latestMessageId, roomId, showScrollToLatest]);
+
+  const handleDirectMessageMember = (memberId: string): void => {
+    setComposerDirectMemberId(memberId);
+    setComposerFocusSignal((current) => current + 1);
+
+    if (!rightSidebarCollapsed && window.matchMedia("(max-width: 1279px)").matches) {
+      onToggleRightSidebar();
+    }
+  };
 
   if (!room) {
     const readyBadge = badgeToneProps("paper");
@@ -147,6 +185,14 @@ export function ChatPane(props: {
           !rightSidebarCollapsed && "xl:grid-cols-[minmax(0,1fr)_minmax(21rem,25rem)] xl:gap-5",
         )}
       >
+        {!rightSidebarCollapsed ? (
+          <button
+            aria-label="Close members sidebar"
+            className="absolute inset-y-0 left-0 z-10 bg-background/48 backdrop-blur-sm xl:hidden right-[min(23rem,84vw)]"
+            type="button"
+            onClick={onToggleRightSidebar}
+          />
+        ) : null}
         <section className="flex h-full min-h-0 min-w-0 flex-col gap-4">
           <Card className="shrink-0 border border-border shadow-sm">
             <CardContent className="flex flex-col gap-4 p-5">
@@ -179,33 +225,47 @@ export function ChatPane(props: {
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant="outline">{roomChat.messages.length} messages</Badge>
+                  <Badge variant="secondary">newest at bottom</Badge>
                   <RoomInfoPopover room={room} template={template} members={members} />
                 </div>
               </div>
-              <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
-                {roomChat.messages.map((message) => {
-                  const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
-                  const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
+              <div className="relative min-h-0 flex-1">
+                <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4" onScroll={updateScrollState}>
+                  {roomChat.messages.map((message) => {
+                    const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
+                    const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
 
-                  return (
-                    <MessageBubble
-                      key={bubble.message.id}
-                      message={bubble.message}
-                      authorMember={authorMember}
-                      mentionedHandles={bubble.mentionedHandles}
-                      recipientHandles={bubble.recipientHandles}
-                      handlerSummaries={bubble.handlerSummaries}
-                      onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
-                    />
-                  );
-                })}
-                {roomChat.messages.length === 0 ? (
-                  <Card className="border border-border shadow-sm">
-                    <CardContent className="flex items-center gap-4 p-6">
-                      <Bot size={28} />
-                      <p className="m-0 text-sm text-muted-foreground">还没有消息。发第一句话，入口 member 会先接住。</p>
-                    </CardContent>
-                  </Card>
+                    return (
+                      <MessageBubble
+                        key={bubble.message.id}
+                        message={bubble.message}
+                        authorMember={authorMember}
+                        mentionedHandles={bubble.mentionedHandles}
+                        recipientHandles={bubble.recipientHandles}
+                        handlerSummaries={bubble.handlerSummaries}
+                        onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
+                      />
+                    );
+                  })}
+                  {roomChat.messages.length === 0 ? (
+                    <Card className="border border-border shadow-sm">
+                      <CardContent className="flex items-center gap-4 p-6">
+                        <Bot size={28} />
+                        <p className="m-0 text-sm text-muted-foreground">还没有消息。发第一句话，入口 member 会先接住。</p>
+                      </CardContent>
+                    </Card>
+                  ) : null}
+                </div>
+                {showScrollToLatest ? (
+                  <Button
+                    className="absolute right-5 bottom-4 shadow-lg"
+                    size="sm"
+                    type="button"
+                    onClick={() => scrollTranscriptToLatest()}
+                  >
+                    <ArrowDown size={16} />
+                    Jump to latest
+                  </Button>
                 ) : null}
               </div>
             </CardContent>
@@ -218,6 +278,8 @@ export function ChatPane(props: {
             members={members}
             onSend={roomChat.sendMessage}
             sending={roomChat.hasActiveStreams}
+            preferredDirectMemberId={composerTargetMemberId}
+            focusSignal={composerFocusSignal}
           />
         </section>
 
@@ -228,6 +290,7 @@ export function ChatPane(props: {
             members={members}
             selectedMemberId={selectedMemberId}
             onOpenMember={onOpenMember}
+            onDirectMessageMember={handleDirectMessageMember}
           />
         ) : null}
       </div>
@@ -259,11 +322,12 @@ function RoomMembersSidebar(props: {
   members: TeamMember[];
   selectedMemberId?: string;
   onOpenMember: (memberId: string) => void;
+  onDirectMessageMember: (memberId: string) => void;
 }) {
-  const { room, snapshot, members, selectedMemberId, onOpenMember } = props;
+  const { room, snapshot, members, selectedMemberId, onOpenMember, onDirectMessageMember } = props;
 
   return (
-    <aside className="absolute inset-y-0 right-0 z-20 w-[min(25rem,92vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
+    <aside className="absolute inset-y-0 right-0 z-20 w-[min(23rem,84vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
       <Card className="flex h-full min-h-0 flex-col border border-border shadow-sm">
         <CardContent className="flex h-full min-h-0 flex-col gap-0 p-0">
           <div className="shrink-0 border-b border-border px-5 py-4">
@@ -289,43 +353,53 @@ function RoomMembersSidebar(props: {
 
                 return (
                   <MemberHoverPreview key={member.id} member={member} watcher={watcher}>
-                    <button
+                    <div
                       className={cn(
-                        "flex w-full min-h-[138px] items-start gap-3 rounded-2xl border border-border bg-card px-4 py-4 text-left shadow-sm transition-colors hover:bg-muted/60",
+                        "flex min-h-[154px] flex-col gap-4 rounded-2xl border border-border bg-card px-4 py-4 text-left shadow-sm transition-colors hover:bg-muted/60",
                         member.id === selectedMemberId && "border-ring bg-accent/10 shadow-md",
                       )}
-                      type="button"
-                      onClick={() => onOpenMember(member.id)}
                     >
-                      <MemberAvatar member={member} compact active={member.id === selectedMemberId} />
-                      <div className="min-w-0 flex-1 space-y-3">
-                        <div className="space-y-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="m-0 text-base font-semibold tracking-tight">{member.name}</p>
-                            {member.observeAllRoomMessages ? (
-                              <span
-                                className="inline-flex size-2 rounded-full bg-[color:var(--tone-blueprint-foreground)]"
-                                aria-label="monitoring room"
-                              />
-                            ) : null}
-                            {member.isEntryMember ? <Badge variant="outline">Entry</Badge> : null}
-                            {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
+                      <div className="flex items-start gap-3">
+                        <MemberAvatar member={member} compact active={member.id === selectedMemberId} />
+                        <div className="min-w-0 flex-1 space-y-3">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="m-0 text-base font-semibold tracking-tight">{member.name}</p>
+                              {member.observeAllRoomMessages ? (
+                                <span
+                                  className="inline-flex size-2 rounded-full bg-[color:var(--tone-blueprint-foreground)]"
+                                  aria-label="monitoring room"
+                                />
+                              ) : null}
+                              {member.isEntryMember ? <Badge variant="outline">Entry</Badge> : null}
+                              {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
+                            </div>
+                            <p className="m-0 text-sm text-muted-foreground">@{member.handle}</p>
                           </div>
-                          <p className="m-0 text-sm text-muted-foreground">@{member.handle}</p>
+                          <p className="m-0 text-sm leading-6 text-muted-foreground">
+                            {activeTask ? activeTask.title : summarizePrompt(member.summary, 120)}
+                          </p>
                         </div>
-                        <p className="m-0 text-sm leading-6 text-muted-foreground">
-                          {activeTask ? activeTask.title : summarizePrompt(member.summary, 120)}
-                        </p>
                       </div>
-                      <div className="flex shrink-0 flex-col items-end gap-2 text-right">
-                        <Badge variant={statusBadge.variant} className={cn("px-2 py-0.5 text-[10px]", statusBadge.className)}>
-                          {member.status}
-                        </Badge>
-                        <p className="m-0 text-xs text-muted-foreground">
-                          {activeTask ? "处理中" : member.acceptsDirectMessages ? "Direct open" : "Direct closed"}
-                        </p>
+                      <div className="flex items-center justify-between gap-3 border-t border-border/70 pt-3">
+                        <div className="space-y-1">
+                          <Badge variant={statusBadge.variant} className={cn("px-2 py-0.5 text-[10px]", statusBadge.className)}>
+                            {member.status}
+                          </Badge>
+                          <p className="m-0 text-xs text-muted-foreground">
+                            {activeTask ? "处理中" : member.acceptsDirectMessages ? "Direct open" : "Direct closed"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" type="button" variant="outline" onClick={() => onDirectMessageMember(member.id)}>
+                            Direct
+                          </Button>
+                          <Button size="sm" type="button" onClick={() => onOpenMember(member.id)}>
+                            Session
+                          </Button>
+                        </div>
                       </div>
-                    </button>
+                    </div>
                   </MemberHoverPreview>
                 );
               })}
