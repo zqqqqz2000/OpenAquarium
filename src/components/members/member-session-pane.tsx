@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AlertCircle, CheckCircle2, Compass, LoaderCircle, MessageSquareDashed, Milestone, TriangleAlert, type LucideIcon } from "lucide-react";
 
@@ -137,70 +137,94 @@ export function MemberSessionPane(props: {
   onOpenMember?: (memberId: string) => void;
 }) {
   const { snapshot, room, member, connected, error, onSendDirectMessage, onOpenMember } = props;
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const previousMemberIdRef = useRef<string | undefined>(undefined);
   const sessionEntries = useMemo(
     () => getMemberSessionEntries(snapshot, room, member),
     [member, room, snapshot],
   );
   const activeTask = member.activeTaskId ? snapshot.tasks[member.activeTaskId] : undefined;
   const canSendDirectMessage = typeof onSendDirectMessage === "function";
+  const latestEntryId = sessionEntries.at(-1)?.id;
+
+  useEffect(() => {
+    const container = transcriptRef.current;
+    if (!container) {
+      return;
+    }
+
+    const memberChanged = previousMemberIdRef.current !== member.id;
+    previousMemberIdRef.current = member.id;
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: memberChanged ? "auto" : "smooth",
+    });
+  }, [latestEntryId, member.id]);
 
   return (
-    <Card>
-      <CardContent className="flex flex-col gap-4 p-4">
-        <div className="space-y-1">
-          <p className="m-0 text-lg font-semibold tracking-tight">Member session</p>
-          <p className="m-0 text-sm text-muted-foreground">
-            这里把私聊消息、成员可见的房间上下文、执行进度、原始 prompt 和完成结果混排成一条会话时间线。
-          </p>
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+      <CardContent className="flex h-full min-h-0 flex-col p-0">
+        <div className="shrink-0 space-y-4 border-b border-border px-4 py-4">
+          <div className="space-y-1">
+            <p className="m-0 text-lg font-semibold tracking-tight">Member session</p>
+            <p className="m-0 text-sm text-muted-foreground">
+              这里把私聊消息、成员可见的房间上下文、执行进度、原始 prompt 和完成结果混排成一条会话时间线。
+            </p>
+          </div>
+
+          {activeTask ? (
+            <div className="rounded-xl border border-border bg-muted/40 px-4 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="m-0 text-sm font-medium">Current focus</p>
+                  <p className="m-0 text-sm text-muted-foreground">{activeTask.title}</p>
+                </div>
+                <Badge variant="outline">{activeTask.status}</Badge>
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        {activeTask ? (
-          <div className="rounded-xl border border-border bg-muted/40 px-4 py-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="space-y-1">
-                <p className="m-0 text-sm font-medium">Current focus</p>
-                <p className="m-0 text-sm text-muted-foreground">{activeTask.title}</p>
-              </div>
-              <Badge variant="outline">{activeTask.status}</Badge>
-            </div>
+        <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          <div className="flex flex-col gap-4">
+            {sessionEntries.map((entry) =>
+              entry.type === "message" ? (
+                <MessageBubble
+                  key={entry.id}
+                  message={entry.message}
+                  authorMember={entry.message.author.kind === "member" ? snapshot.members[entry.message.author.id] : undefined}
+                  mentionedHandles={entry.mentionedHandles}
+                  recipientHandles={entry.recipientHandles}
+                  handlerSummaries={entry.handlerSummaries}
+                  contextBadges={entry.contextBadges}
+                  onAuthorClick={entry.message.author.kind === "member" && onOpenMember ? () => onOpenMember(entry.message.author.id) : undefined}
+                />
+              ) : (
+                <SessionTraceBubble key={entry.id} member={member} entry={entry} />
+              ),
+            )}
+            {sessionEntries.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="p-5">
+                  <p className="m-0 text-sm text-muted-foreground">
+                    还没有 session 内容。下一次这个成员接到任务或收到私聊后，这里会出现完整时间线。
+                  </p>
+                </CardContent>
+              </Card>
+            ) : null}
           </div>
-        ) : null}
+        </div>
 
-        <ChatComposer
-          connected={connected && canSendDirectMessage}
-          error={canSendDirectMessage ? error : "当前 session 不支持直接发消息。"}
-          members={[member]}
-          onSend={(content) => onSendDirectMessage?.(content)}
-          sending={member.status === "running"}
-          fixedDirectMemberId={member.id}
-        />
-
-        <div className="flex flex-col gap-4">
-          {sessionEntries.map((entry) =>
-            entry.type === "message" ? (
-              <MessageBubble
-                key={entry.id}
-                message={entry.message}
-                authorMember={entry.message.author.kind === "member" ? snapshot.members[entry.message.author.id] : undefined}
-                mentionedHandles={entry.mentionedHandles}
-                recipientHandles={entry.recipientHandles}
-                handlerSummaries={entry.handlerSummaries}
-                contextBadges={entry.contextBadges}
-                onAuthorClick={entry.message.author.kind === "member" && onOpenMember ? () => onOpenMember(entry.message.author.id) : undefined}
-              />
-            ) : (
-              <SessionTraceBubble key={entry.id} member={member} entry={entry} />
-            ),
-          )}
-          {sessionEntries.length === 0 ? (
-            <Card className="border-dashed">
-              <CardContent className="p-5">
-                <p className="m-0 text-sm text-muted-foreground">
-                  还没有 session 内容。下一次这个成员接到任务或收到私聊后，这里会出现完整时间线。
-                </p>
-              </CardContent>
-            </Card>
-          ) : null}
+        <div className="shrink-0 border-t border-border px-4 py-4">
+          <ChatComposer
+            className="border-none shadow-none"
+            connected={connected && canSendDirectMessage}
+            error={canSendDirectMessage ? error : "当前 session 不支持直接发消息。"}
+            members={[member]}
+            onSend={(content) => onSendDirectMessage?.(content)}
+            sending={member.status === "running"}
+            fixedDirectMemberId={member.id}
+          />
         </div>
       </CardContent>
     </Card>

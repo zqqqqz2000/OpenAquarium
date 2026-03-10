@@ -3,6 +3,7 @@ import { isJsonObject, type JsonValue } from "@/lib/json";
 export interface ShellPanelsState {
   leftCollapsed: boolean;
   leftWidth: number;
+  rightCollapsed: boolean;
 }
 
 export const SHELL_PANELS_STORAGE_KEY = "openaquarium-shell-panels";
@@ -10,6 +11,7 @@ export const SHELL_PANELS_STORAGE_KEY = "openaquarium-shell-panels";
 export const DEFAULT_SHELL_PANELS_STATE: ShellPanelsState = {
   leftCollapsed: false,
   leftWidth: 304,
+  rightCollapsed: false,
 };
 
 export const MIN_LEFT_PANEL_WIDTH = 248;
@@ -33,6 +35,7 @@ export function parseShellPanelsState(rawValue: string | null | undefined): Shel
     return {
       leftCollapsed: parsed.leftCollapsed === true,
       leftWidth: typeof parsed.leftWidth === "number" ? clampLeftPanelWidth(parsed.leftWidth) : DEFAULT_SHELL_PANELS_STATE.leftWidth,
+      rightCollapsed: parsed.rightCollapsed === true,
     };
   } catch {
     return DEFAULT_SHELL_PANELS_STATE;

@@ -163,12 +163,14 @@
   html,
   body,
   #root {
+    height: 100%;
     min-height: 100%;
   }
 
   body {
     @apply bg-background text-foreground;
     margin: 0;
+    overflow: hidden;
     background-image: var(--page-gradient);
   }
 
@@ -179,9 +181,17 @@
 
 .room-grid {
   display: grid;
-  min-height: 100vh;
+  position: relative;
+  height: 100dvh;
+  min-height: 100dvh;
   width: 100%;
+  overflow: hidden;
+  isolation: isolate;
   grid-template-columns: var(--oa-left-panel, minmax(17rem, 19rem)) minmax(0, 1fr);
+}
+
+.room-grid > * {
+  min-height: 0;
 }
 
 @media (max-width: 1200px) {

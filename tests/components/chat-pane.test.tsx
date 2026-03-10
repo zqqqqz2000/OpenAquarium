@@ -14,11 +14,13 @@ describe("ChatPane", () => {
     const template = snapshot.templates[room.templateId];
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
     const onToggleLeftSidebar = vi.fn();
+    const onToggleRightSidebar = vi.fn();
 
     render(
       <TooltipProvider>
         <ChatPane
           leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
           snapshot={snapshot}
           room={room}
           template={template}
@@ -28,6 +30,7 @@ describe("ChatPane", () => {
           onOpenMember={vi.fn()}
           error={undefined}
           onToggleLeftSidebar={onToggleLeftSidebar}
+          onToggleRightSidebar={onToggleRightSidebar}
         />
       </TooltipProvider>,
     );
@@ -38,8 +41,10 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("To").length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Hide projects sidebar" }));
+    await user.click(screen.getByRole("button", { name: "Hide members sidebar" }));
 
     expect(onToggleLeftSidebar).toHaveBeenCalledTimes(1);
+    expect(onToggleRightSidebar).toHaveBeenCalledTimes(1);
   });
 
   it("scrolls the transcript to the newest message", () => {
@@ -60,6 +65,7 @@ describe("ChatPane", () => {
       <TooltipProvider>
         <ChatPane
           leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
           snapshot={snapshot}
           room={room}
           template={template}
@@ -69,6 +75,7 @@ describe("ChatPane", () => {
           onOpenMember={vi.fn()}
           error={undefined}
           onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
         />
       </TooltipProvider>,
     );

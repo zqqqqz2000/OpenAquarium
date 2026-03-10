@@ -77,6 +77,7 @@ export function MemberStudioDialog(props: {
   const [configDrafts, setConfigDrafts] = useState<Record<string, MemberConfigDraft>>({});
   const [watcherDrafts, setWatcherDrafts] = useState<Record<string, WatcherDraft>>({});
   const [errorByMember, setErrorByMember] = useState<Record<string, string | undefined>>({});
+  const [activeTab, setActiveTab] = useState("session");
 
   if (!room || !member) {
     return null;
@@ -214,7 +215,7 @@ export function MemberStudioDialog(props: {
             ) : null}
           </div>
 
-          <Tabs defaultValue="session" className="flex min-h-0 flex-col gap-4 overflow-hidden">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-col gap-4 overflow-hidden">
             <TabsList variant="line" className="h-auto w-full flex-wrap justify-start rounded-none border-b bg-transparent p-0">
               {[
                 ["session", "Session"],
@@ -231,8 +232,8 @@ export function MemberStudioDialog(props: {
               ))}
             </TabsList>
 
-            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-              <TabsContent value="session" className="m-0">
+            <div className={activeTab === "session" ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-y-auto pr-1"}>
+              <TabsContent value="session" className="m-0 h-full">
                 <MemberSessionPane
                   snapshot={snapshot}
                   room={room}

@@ -26,10 +26,16 @@ export function useShellPanels() {
   return {
     leftCollapsed: panels.leftCollapsed,
     leftWidth: panels.leftWidth,
+    rightCollapsed: panels.rightCollapsed,
     toggleLeftCollapsed: () =>
       setPanels((current) => ({
         ...current,
         leftCollapsed: !current.leftCollapsed,
+      })),
+    toggleRightCollapsed: () =>
+      setPanels((current) => ({
+        ...current,
+        rightCollapsed: !current.rightCollapsed,
       })),
     setLeftWidth: (leftWidth: number) =>
       setPanels((current) => ({

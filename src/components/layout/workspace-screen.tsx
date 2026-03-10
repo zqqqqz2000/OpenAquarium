@@ -25,7 +25,14 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const setEntryMember = useWorkspaceStore((state) => state.setEntryMember);
   const upsertWatcher = useWorkspaceStore((state) => state.upsertWatcher);
   const sendUserMessage = useWorkspaceStore((state) => state.sendUserMessage);
-  const { leftCollapsed, leftWidth, toggleLeftCollapsed, setLeftWidth } = useShellPanels();
+  const {
+    leftCollapsed,
+    leftWidth,
+    rightCollapsed,
+    toggleLeftCollapsed,
+    toggleRightCollapsed,
+    setLeftWidth,
+  } = useShellPanels();
 
   useEffect(() => {
     if (projectId && roomId) {
@@ -105,6 +112,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const gridColumns = getRoomGridColumns({
     leftCollapsed,
     leftWidth,
+    rightCollapsed,
   });
   const gridStyle = {
     "--oa-left-panel": gridColumns.leftPanel,
@@ -127,6 +135,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
         />
         <ChatPane
           leftSidebarCollapsed={leftCollapsed}
+          rightSidebarCollapsed={rightCollapsed}
           snapshot={snapshot}
           room={room}
           template={template}
@@ -136,6 +145,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           error={error}
           onOpenMember={openMemberStudio}
           onToggleLeftSidebar={toggleLeftCollapsed}
+          onToggleRightSidebar={toggleRightCollapsed}
         />
       </div>
       <MemberStudioDialog

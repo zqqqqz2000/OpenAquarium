@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { Bot, Info, Sparkles } from "lucide-react";
+import { Bot, Info, Sparkles, Users } from "lucide-react";
 
 import type { ChatMessage, Room, TeamMember, TeamTemplate, WorkspaceSnapshot } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
@@ -28,6 +28,7 @@ import { cn, summarizePrompt } from "@/lib/utils";
 
 export function ChatPane(props: {
   leftSidebarCollapsed: boolean;
+  rightSidebarCollapsed: boolean;
   snapshot: WorkspaceSnapshot;
   room?: Room;
   template?: TeamTemplate;
@@ -37,9 +38,11 @@ export function ChatPane(props: {
   error?: string;
   onOpenMember: (memberId: string) => void;
   onToggleLeftSidebar: () => void;
+  onToggleRightSidebar: () => void;
 }) {
   const {
     leftSidebarCollapsed,
+    rightSidebarCollapsed,
     snapshot,
     room,
     template,
@@ -49,9 +52,10 @@ export function ChatPane(props: {
     error,
     onOpenMember,
     onToggleLeftSidebar,
+    onToggleRightSidebar,
   } = props;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
-  const previousRoomIdRef = useRef<string | undefined>(undefined);
+  const previousLayoutKeyRef = useRef<string | undefined>(undefined);
   const roomChat = useRoomChat({
     room,
     members,
@@ -59,6 +63,7 @@ export function ChatPane(props: {
   });
   const roomId = room?.id;
   const latestMessageId = roomChat.messages.at(-1)?.id;
+  const layoutKey = `${roomId ?? "no-room"}:${leftSidebarCollapsed ? "left-closed" : "left-open"}:${rightSidebarCollapsed ? "right-closed" : "right-open"}`;
 
   useEffect(() => {
     if (!roomId) {
@@ -70,13 +75,13 @@ export function ChatPane(props: {
       return;
     }
 
-    const roomChanged = previousRoomIdRef.current !== roomId;
-    previousRoomIdRef.current = roomId;
+    const layoutChanged = previousLayoutKeyRef.current !== layoutKey;
+    previousLayoutKeyRef.current = layoutKey;
     container.scrollTo({
       top: container.scrollHeight,
-      behavior: roomChanged ? "auto" : "smooth",
+      behavior: layoutChanged ? "auto" : "smooth",
     });
-  }, [latestMessageId, roomId]);
+  }, [layoutKey, latestMessageId, roomId]);
 
   if (!room) {
     const readyBadge = badgeToneProps("paper");
@@ -84,7 +89,7 @@ export function ChatPane(props: {
     const watcherBadge = badgeToneProps("correction");
 
     return (
-      <main className="flex min-h-screen min-w-0 flex-col gap-4 px-6 py-10">
+      <main className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden px-6 py-10">
         <ShellToolbar leftSidebarCollapsed={leftSidebarCollapsed} onToggleLeftSidebar={onToggleLeftSidebar} />
         <Card className="w-full max-w-2xl border border-border shadow-sm">
           <CardContent className="flex flex-col gap-4 p-8">
@@ -116,8 +121,13 @@ export function ChatPane(props: {
   const neutralBadge = badgeToneProps("paper");
 
   return (
-    <main className="flex min-h-screen min-w-0 flex-col gap-5 border-x border-border/70 bg-background/70 px-4 py-5 md:px-6">
-      <ShellToolbar leftSidebarCollapsed={leftSidebarCollapsed} onToggleLeftSidebar={onToggleLeftSidebar} />
+    <main className="flex h-full min-h-0 min-w-0 flex-col gap-5 overflow-hidden border-x border-border/70 bg-background/70 px-4 py-5 md:px-6">
+      <ShellToolbar
+        leftSidebarCollapsed={leftSidebarCollapsed}
+        onToggleLeftSidebar={onToggleLeftSidebar}
+        rightSidebarCollapsed={rightSidebarCollapsed}
+        onToggleRightSidebar={onToggleRightSidebar}
+      />
       {!connected || error ? (
         <Card className="border border-destructive/30 bg-destructive/5 shadow-sm">
           <CardContent className="flex flex-col gap-2 p-4">
@@ -131,121 +141,96 @@ export function ChatPane(props: {
           </CardContent>
         </Card>
       ) : null}
-      <Card className="border border-border shadow-sm">
-        <CardContent className="flex flex-col gap-4 p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="space-y-2">
-              <p className="m-0 text-3xl font-semibold tracking-tight">{room.name}</p>
-              <p className="m-0 max-w-3xl text-sm text-muted-foreground">{room.topic}</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge variant={templateBadge.variant} className={templateBadge.className}>
-                {template?.name ?? "Template"}
-              </Badge>
-              <Badge variant={neutralBadge.variant} className={neutralBadge.className}>
-                {members.length} members
-              </Badge>
-              <Badge variant={watcherBadge.variant} className={watcherBadge.className}>
-                {room.watcherIds.length} watchers
-              </Badge>
-            </div>
-          </div>
-          <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-            {members.map((member) => {
-              const activeTask = member.activeTaskId ? snapshot.tasks[member.activeTaskId] : undefined;
-              const statusBadge = memberStatusBadgeProps(member.status);
+      <div
+        className={cn(
+          "relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden",
+          !rightSidebarCollapsed && "xl:grid-cols-[minmax(0,1fr)_minmax(21rem,25rem)] xl:gap-5",
+        )}
+      >
+        <section className="flex h-full min-h-0 min-w-0 flex-col gap-4">
+          <Card className="shrink-0 border border-border shadow-sm">
+            <CardContent className="flex flex-col gap-4 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="space-y-2">
+                  <p className="m-0 text-3xl font-semibold tracking-tight">{room.name}</p>
+                  <p className="m-0 max-w-3xl text-sm text-muted-foreground">{room.topic}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant={templateBadge.variant} className={templateBadge.className}>
+                    {template?.name ?? "Template"}
+                  </Badge>
+                  <Badge variant={neutralBadge.variant} className={neutralBadge.className}>
+                    {members.length} members
+                  </Badge>
+                  <Badge variant={watcherBadge.variant} className={watcherBadge.className}>
+                    {room.watcherIds.length} watchers
+                  </Badge>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-              return (
-                <MemberHoverPreview
-                  key={member.id}
-                  member={member}
-                  watcher={getWatcherForMember(room, snapshot, member.id)}
-                >
-                  <button
-                    className={cn(
-                      "flex min-h-[122px] items-start gap-3 rounded-xl border border-border bg-card px-4 py-4 text-left shadow-sm transition-colors hover:bg-muted/60",
-                      member.id === selectedMemberId && "border-ring bg-accent/10 shadow-md",
-                    )}
-                    type="button"
-                    onClick={() => onOpenMember(member.id)}
-                  >
-                    <MemberAvatar member={member} compact />
-                    <div className="min-w-0 flex-1 space-y-2">
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="m-0 text-base font-semibold tracking-tight">{member.name}</p>
-                          {member.observeAllRoomMessages ? (
-                            <span
-                              className="inline-flex size-2 rounded-full bg-[color:var(--tone-blueprint-foreground)]"
-                              aria-label="monitoring room"
-                            />
-                          ) : null}
-                        </div>
-                        <p className="m-0 text-sm text-muted-foreground">@{member.handle}</p>
-                      </div>
-                      <p className="m-0 line-clamp-2 text-sm text-muted-foreground">
-                        {activeTask ? activeTask.title : member.summary}
-                      </p>
-                    </div>
-                    <div className="flex flex-col items-end gap-2 text-right">
-                      <Badge variant={statusBadge.variant} className={cn("px-2 py-0.5 text-[10px]", statusBadge.className)}>
-                        {member.status}
-                      </Badge>
-                      {member.isEntryMember ? <div className="text-xs font-medium text-muted-foreground">entry</div> : null}
-                    </div>
-                  </button>
-                </MemberHoverPreview>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
+          <Card className="min-h-0 flex-1 overflow-hidden border border-border shadow-sm">
+            <CardContent className="flex h-full min-h-0 flex-col p-0">
+              <div className="flex shrink-0 flex-wrap items-start justify-between gap-4 border-b border-border px-5 py-4">
+                <div className="space-y-1">
+                  <p className="m-0 text-2xl font-semibold tracking-tight">Room transcript</p>
+                  <p className="m-0 text-sm text-muted-foreground">{describeStreamingState(roomChat.activeStreamSummary)}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">{roomChat.messages.length} messages</Badge>
+                  <RoomInfoPopover room={room} template={template} members={members} />
+                </div>
+              </div>
+              <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
+                {roomChat.messages.map((message) => {
+                  const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
+                  const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
 
-      <section className="flex min-h-0 flex-1 flex-col gap-4">
-        <div className="flex items-center justify-between gap-3">
-          <p className="m-0 text-2xl font-semibold tracking-tight">Room transcript</p>
-          <div className="flex items-center gap-3">
-            <p className="m-0 text-sm text-muted-foreground">
-              {describeStreamingState(roomChat.activeStreamSummary)}
-            </p>
-            <RoomInfoPopover room={room} template={template} members={members} />
-          </div>
-        </div>
-        <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-          {roomChat.messages.map((message) => {
-            const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
-            const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
+                  return (
+                    <MessageBubble
+                      key={bubble.message.id}
+                      message={bubble.message}
+                      authorMember={authorMember}
+                      mentionedHandles={bubble.mentionedHandles}
+                      recipientHandles={bubble.recipientHandles}
+                      handlerSummaries={bubble.handlerSummaries}
+                      onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
+                    />
+                  );
+                })}
+                {roomChat.messages.length === 0 ? (
+                  <Card className="border border-border shadow-sm">
+                    <CardContent className="flex items-center gap-4 p-6">
+                      <Bot size={28} />
+                      <p className="m-0 text-sm text-muted-foreground">还没有消息。发第一句话，入口 member 会先接住。</p>
+                    </CardContent>
+                  </Card>
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
 
-            return (
-              <MessageBubble
-                key={bubble.message.id}
-                message={bubble.message}
-                authorMember={authorMember}
-                mentionedHandles={bubble.mentionedHandles}
-                recipientHandles={bubble.recipientHandles}
-                handlerSummaries={bubble.handlerSummaries}
-                onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
-              />
-            );
-          })}
-          {roomChat.messages.length === 0 ? (
-            <Card className="border border-border shadow-sm">
-              <CardContent className="flex items-center gap-4 p-6">
-                <Bot size={28} />
-                <p className="m-0 text-sm text-muted-foreground">还没有消息。发第一句话，入口 member 会先接住。</p>
-              </CardContent>
-            </Card>
-          ) : null}
-        </div>
-      </section>
+          <ChatComposer
+            className="shrink-0"
+            connected={connected}
+            error={error}
+            members={members}
+            onSend={roomChat.sendMessage}
+            sending={roomChat.hasActiveStreams}
+          />
+        </section>
 
-      <ChatComposer
-        connected={connected}
-        error={error}
-        members={members}
-        onSend={roomChat.sendMessage}
-        sending={roomChat.hasActiveStreams}
-      />
+        {!rightSidebarCollapsed ? (
+          <RoomMembersSidebar
+            room={room}
+            snapshot={snapshot}
+            members={members}
+            selectedMemberId={selectedMemberId}
+            onOpenMember={onOpenMember}
+          />
+        ) : null}
+      </div>
     </main>
   );
 }
@@ -253,13 +238,102 @@ export function ChatPane(props: {
 function ShellToolbar(props: {
   leftSidebarCollapsed: boolean;
   onToggleLeftSidebar: () => void;
+  rightSidebarCollapsed?: boolean;
+  onToggleRightSidebar?: () => void;
 }) {
-  const { leftSidebarCollapsed, onToggleLeftSidebar } = props;
+  const { leftSidebarCollapsed, onToggleLeftSidebar, rightSidebarCollapsed, onToggleRightSidebar } = props;
 
   return (
-    <div className="flex items-center justify-start gap-2">
+    <div className="flex items-center justify-between gap-3">
       <PanelToggleButton collapsed={leftSidebarCollapsed} side="left" onToggle={onToggleLeftSidebar} />
+      {typeof rightSidebarCollapsed === "boolean" && onToggleRightSidebar ? (
+        <PanelToggleButton collapsed={rightSidebarCollapsed} side="right" onToggle={onToggleRightSidebar} />
+      ) : null}
     </div>
+  );
+}
+
+function RoomMembersSidebar(props: {
+  room: Room;
+  snapshot: WorkspaceSnapshot;
+  members: TeamMember[];
+  selectedMemberId?: string;
+  onOpenMember: (memberId: string) => void;
+}) {
+  const { room, snapshot, members, selectedMemberId, onOpenMember } = props;
+
+  return (
+    <aside className="absolute inset-y-0 right-0 z-20 w-[min(25rem,92vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
+      <Card className="flex h-full min-h-0 flex-col border border-border shadow-sm">
+        <CardContent className="flex h-full min-h-0 flex-col gap-0 p-0">
+          <div className="shrink-0 border-b border-border px-5 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-1">
+                <p className="m-0 flex items-center gap-2 text-lg font-semibold tracking-tight">
+                  <Users size={18} />
+                  Members
+                </p>
+                <p className="m-0 text-sm text-muted-foreground">
+                  团队通常不大，右侧保留更多状态，便于快速切换到具体 member session。
+                </p>
+              </div>
+              <Badge variant="outline">{members.length}</Badge>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+            <div className="flex flex-col gap-3">
+              {members.map((member) => {
+                const activeTask = member.activeTaskId ? snapshot.tasks[member.activeTaskId] : undefined;
+                const statusBadge = memberStatusBadgeProps(member.status);
+                const watcher = getWatcherForMember(room, snapshot, member.id);
+
+                return (
+                  <MemberHoverPreview key={member.id} member={member} watcher={watcher}>
+                    <button
+                      className={cn(
+                        "flex w-full min-h-[138px] items-start gap-3 rounded-2xl border border-border bg-card px-4 py-4 text-left shadow-sm transition-colors hover:bg-muted/60",
+                        member.id === selectedMemberId && "border-ring bg-accent/10 shadow-md",
+                      )}
+                      type="button"
+                      onClick={() => onOpenMember(member.id)}
+                    >
+                      <MemberAvatar member={member} compact active={member.id === selectedMemberId} />
+                      <div className="min-w-0 flex-1 space-y-3">
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="m-0 text-base font-semibold tracking-tight">{member.name}</p>
+                            {member.observeAllRoomMessages ? (
+                              <span
+                                className="inline-flex size-2 rounded-full bg-[color:var(--tone-blueprint-foreground)]"
+                                aria-label="monitoring room"
+                              />
+                            ) : null}
+                            {member.isEntryMember ? <Badge variant="outline">Entry</Badge> : null}
+                            {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
+                          </div>
+                          <p className="m-0 text-sm text-muted-foreground">@{member.handle}</p>
+                        </div>
+                        <p className="m-0 text-sm leading-6 text-muted-foreground">
+                          {activeTask ? activeTask.title : summarizePrompt(member.summary, 120)}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-2 text-right">
+                        <Badge variant={statusBadge.variant} className={cn("px-2 py-0.5 text-[10px]", statusBadge.className)}>
+                          {member.status}
+                        </Badge>
+                        <p className="m-0 text-xs text-muted-foreground">
+                          {activeTask ? "处理中" : member.acceptsDirectMessages ? "Direct open" : "Direct closed"}
+                        </p>
+                      </div>
+                    </button>
+                  </MemberHoverPreview>
+                );
+              })}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </aside>
   );
 }
 

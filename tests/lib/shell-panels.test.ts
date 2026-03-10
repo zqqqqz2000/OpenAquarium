@@ -18,6 +18,7 @@ describe("shell panels", () => {
     const state = {
       leftCollapsed: true,
       leftWidth: 320,
+      rightCollapsed: true,
     };
 
     expect(parseShellPanelsState(serializeShellPanelsState(state))).toEqual(state);
@@ -28,6 +29,7 @@ describe("shell panels", () => {
       getRoomGridColumns({
         leftCollapsed: true,
         leftWidth: 304,
+        rightCollapsed: false,
       }),
     ).toEqual({
       leftPanel: "0rem",

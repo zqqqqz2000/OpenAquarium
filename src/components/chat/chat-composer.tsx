@@ -9,8 +9,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { MemberAvatar } from "@/components/members/member-avatar";
 import { badgeToneProps } from "@/lib/ui-tone";
+import { cn } from "@/lib/utils";
 
 export function ChatComposer(props: {
+  className?: string;
   connected: boolean;
   error?: string;
   members: TeamMember[];
@@ -18,7 +20,7 @@ export function ChatComposer(props: {
   sending?: boolean;
   fixedDirectMemberId?: string;
 }) {
-  const { connected, error, members, onSend, sending = false, fixedDirectMemberId } = props;
+  const { className, connected, error, members, onSend, sending = false, fixedDirectMemberId } = props;
   const [text, setText] = useState("");
   const [directMemberId, setDirectMemberId] = useState<string | undefined>(fixedDirectMemberId);
   const [sendError, setSendError] = useState<string | undefined>();
@@ -35,7 +37,7 @@ export function ChatComposer(props: {
   }, [fixedDirectMemberId]);
 
   return (
-    <Card className="border border-border shadow-sm">
+    <Card className={cn("border border-border shadow-sm", className)}>
       <CardContent className="flex flex-col gap-4 p-4 md:p-5">
         <div className="flex flex-wrap items-center gap-3">
           <Badge variant={channelBadge.variant} className={channelBadge.className}>

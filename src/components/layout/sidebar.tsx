@@ -33,7 +33,7 @@ export function Sidebar(props: {
   }
 
   return (
-    <aside className="relative flex min-h-screen min-w-0 flex-col gap-5 border-r border-border/60 px-4 py-5 md:px-5">
+    <aside className="relative z-20 flex h-full min-h-0 min-w-0 flex-col gap-5 overflow-y-auto border-r border-border/60 bg-background/96 px-4 py-5 backdrop-blur md:px-5 max-[860px]:absolute max-[860px]:inset-y-0 max-[860px]:left-0 max-[860px]:w-[min(22rem,86vw)] max-[860px]:shadow-2xl">
       <Card className="border border-border shadow-sm">
         <CardContent className="flex flex-col gap-4 p-5">
           <div className="flex min-w-0 items-start gap-3">

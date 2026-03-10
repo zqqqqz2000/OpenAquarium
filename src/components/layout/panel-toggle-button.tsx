@@ -12,7 +12,7 @@ export function PanelToggleButton(props: {
 }) {
   const { className, collapsed, onToggle, side } = props;
   const isLeft = side === "left";
-  const label = isLeft ? "projects sidebar" : "member sidebar";
+  const label = isLeft ? "projects sidebar" : "members sidebar";
   const action = collapsed ? "Show" : "Hide";
   const Icon = collapsed
     ? isLeft
