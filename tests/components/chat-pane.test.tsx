@@ -7,7 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
 describe("ChatPane", () => {
-  it("shows routed recipients, handlers, and shell toggles for room messages", async () => {
+  it("shows highlighted mentions, member actions, and shell toggles for room messages", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
@@ -36,14 +36,14 @@ describe("ChatPane", () => {
     );
 
     expect(screen.getAllByText("做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Handled by").length).toBeGreaterThan(0);
     expect(screen.getAllByText("@lead").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("To").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Handled by")).not.toBeInTheDocument();
+    expect(screen.queryByText("To")).not.toBeInTheDocument();
     expect(screen.queryByText("Room transcript")).not.toBeInTheDocument();
     expect(screen.queryByText("团队通常不大，右侧保留更多状态，便于快速切换到具体 member session。")).not.toBeInTheDocument();
     expect(screen.queryByText("成员内部推理只显示为处理状态；只有显式发送到 room 或 direct 的消息才会出现在消息流里。")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Direct" }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: "Session" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Chat" }).length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Hide projects sidebar" }));
     await user.click(screen.getByRole("button", { name: "Hide members sidebar" }));

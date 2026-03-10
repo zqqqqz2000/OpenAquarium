@@ -15,6 +15,10 @@ import { buildTransportSnapshot } from "./transport-snapshot";
 
 type JsonPayload = object | string | number | boolean | null;
 
+function containsLegacyFirstPrompt(payload: JsonPayload | undefined): boolean {
+  return typeof payload === "object" && payload !== null && Object.prototype.hasOwnProperty.call(payload, "firstPrompt");
+}
+
 function normalizeChunk(chunk: Buffer | string | Uint8Array): Buffer {
   if (Buffer.isBuffer(chunk)) {
     return chunk;
@@ -65,7 +69,13 @@ export async function handleWorkspaceJsonApiRequest(args: {
   }
 
   if (method === "POST" && pathname === "/api/projects") {
-    const created = await runtime.createProject(body as { projectName: string; firstPrompt: string; templateId: string });
+    if (containsLegacyFirstPrompt(body)) {
+      return {
+        statusCode: 400,
+        payload: { error: "firstPrompt is no longer supported. Create the room first, then send the first message." },
+      };
+    }
+    const created = await runtime.createProject(body as { projectName: string; templateId: string });
     return {
       statusCode: 200,
       payload: created,
@@ -81,10 +91,15 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing project id" },
       };
     }
+    if (containsLegacyFirstPrompt(body)) {
+      return {
+        statusCode: 400,
+        payload: { error: "firstPrompt is no longer supported. Create the room first, then send the first message." },
+      };
+    }
 
     const created = await runtime.createRoom({
       projectId,
-      firstPrompt: (body as { firstPrompt: string }).firstPrompt,
       templateId: (body as { templateId: string }).templateId,
     });
     return {
@@ -325,7 +340,13 @@ export async function startWorkspaceHttpServer(args: {
       }
 
       if (request.method === "POST" && url.pathname === "/api/projects") {
-        const body = await readJson<{ projectName: string; firstPrompt: string; templateId: string }>(request);
+        const body = await readJson<{ projectName: string; templateId: string }>(request);
+        if (containsLegacyFirstPrompt(body)) {
+          sendJson(response, 400, {
+            error: "firstPrompt is no longer supported. Create the room first, then send the first message.",
+          });
+          return;
+        }
         const created = await args.runtime.createProject(body);
         sendJson(response, 200, {
           ...created,
@@ -341,10 +362,15 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing project id" });
           return;
         }
-        const body = await readJson<{ firstPrompt: string; templateId: string }>(request);
+        const body = await readJson<{ templateId: string }>(request);
+        if (containsLegacyFirstPrompt(body)) {
+          sendJson(response, 400, {
+            error: "firstPrompt is no longer supported. Create the room first, then send the first message.",
+          });
+          return;
+        }
         const created = await args.runtime.createRoom({
           projectId,
-          firstPrompt: body.firstPrompt,
           templateId: body.templateId,
         });
         sendJson(response, 200, {

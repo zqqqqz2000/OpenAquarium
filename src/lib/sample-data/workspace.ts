@@ -1,5 +1,5 @@
 import { createRuntimeContext } from "../../domain/identity";
-import { completeMemberTask, createProjectWithRoom, createWorkspaceSnapshot, postMemberMessage, runWatcher } from "../../domain/workspace";
+import { completeMemberTask, createProjectWithRoom, createWorkspaceSnapshot, postMemberMessage, postUserMessage, runWatcher } from "../../domain/workspace";
 import type { WorkspaceSnapshot } from "../../domain/model";
 import { defaultTemplates } from "./templates";
 
@@ -116,8 +116,15 @@ export function createSeedWorkspace(): WorkspaceSnapshot {
     snapshot,
     {
       projectName: "OpenAquarium",
-      firstPrompt: "做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品",
       templateId: "template-product-pod",
+    },
+    context,
+  );
+  snapshot = postUserMessage(
+    snapshot,
+    {
+      roomId: snapshot.selection.roomId!,
+      content: "做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品",
     },
     context,
   );

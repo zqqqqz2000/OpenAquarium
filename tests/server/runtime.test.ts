@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createRuntimeContext } from "@/domain/identity";
-import { createProjectWithRoom, createWorkspaceSnapshot } from "@/domain/workspace";
+import { createProjectWithRoom, createWorkspaceSnapshot, postUserMessage } from "@/domain/workspace";
 import { defaultTemplates } from "@/lib/sample-data/templates";
 import type { ExecutorCallbacks, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 import { WorkspacePersistence } from "@/server/persistence";
@@ -48,6 +48,18 @@ async function waitFor(assertion: () => void | Promise<void>, timeoutMs = 800): 
 describe("WorkspaceRuntime", () => {
   const runtimes: WorkspaceRuntime[] = [];
 
+  async function createStartedRuntimeRoom(runtime: WorkspaceRuntime, projectName: string, firstMessage: string) {
+    const created = await runtime.createProject({
+      projectName,
+      templateId: "template-product-pod",
+    });
+    await runtime.sendUserMessage({
+      roomId: created.roomId,
+      content: firstMessage,
+    });
+    return created;
+  }
+
   afterEach(async () => {
     await Promise.all(runtimes.map((runtime) => runtime.dispose()));
     runtimes.length = 0;
@@ -78,11 +90,7 @@ describe("WorkspaceRuntime", () => {
     });
     runtimes.push(runtime);
 
-    await runtime.createProject({
-      projectName: "Runtime Check",
-      firstPrompt: "把 ACP runtime 接起来",
-      templateId: "template-product-pod",
-    });
+    await createStartedRuntimeRoom(runtime, "Runtime Check", "把 ACP runtime 接起来");
 
     await waitFor(() => {
       const snapshot = runtime.getSnapshot();
@@ -147,7 +155,6 @@ describe("WorkspaceRuntime", () => {
 
     await runtime.createProject({
       projectName: "Persist Check",
-      firstPrompt: "确认 state 会被落盘",
       templateId: "template-product-pod",
     });
 
@@ -175,11 +182,7 @@ describe("WorkspaceRuntime", () => {
     });
     runtimes.push(runtime);
 
-    await runtime.createProject({
-      projectName: "Crash Check",
-      firstPrompt: "@lead 请回应一下",
-      templateId: "template-product-pod",
-    });
+    await createStartedRuntimeRoom(runtime, "Crash Check", "@lead 请回应一下");
 
     await waitFor(() => {
       const snapshot = runtime.getSnapshot();
@@ -224,11 +227,7 @@ describe("WorkspaceRuntime", () => {
     });
     runtimes.push(runtime);
 
-    await runtime.createProject({
-      projectName: "Status Check",
-      firstPrompt: "@lead 看一下当前状态",
-      templateId: "template-product-pod",
-    });
+    await createStartedRuntimeRoom(runtime, "Status Check", "@lead 看一下当前状态");
 
     await waitFor(() => {
       const snapshot = runtime.getSnapshot();
@@ -278,7 +277,6 @@ describe("WorkspaceRuntime", () => {
 
     const first = await firstRuntime.createProject({
       projectName: "First",
-      firstPrompt: "first prompt",
       templateId: "template-product-pod",
     });
 
@@ -299,7 +297,6 @@ describe("WorkspaceRuntime", () => {
 
     const second = await secondRuntime.createProject({
       projectName: "Second",
-      firstPrompt: "second prompt",
       templateId: "template-product-pod",
     });
 
@@ -316,14 +313,22 @@ describe("WorkspaceRuntime", () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-stale-"));
     const stateFilePath = path.join(workspaceRoot, ".openaquarium", "state.json");
     const persistence = new WorkspacePersistence(stateFilePath);
-    const staleSnapshot = createProjectWithRoom(
+    const staleContext = createRuntimeContext(0, "2026-03-09T07:30:00.000Z");
+    let staleSnapshot = createProjectWithRoom(
       createWorkspaceSnapshot(defaultTemplates),
       {
         projectName: "Stale",
-        firstPrompt: "请回复我",
         templateId: "template-product-pod",
       },
-      createRuntimeContext(0, "2026-03-09T07:30:00.000Z"),
+      staleContext,
+    );
+    staleSnapshot = postUserMessage(
+      staleSnapshot,
+      {
+        roomId: staleSnapshot.selection.roomId!,
+        content: "请回复我",
+      },
+      staleContext,
     );
     const staleRoomId = staleSnapshot.selection.roomId!;
     const staleLead = staleSnapshot.rooms[staleRoomId].memberIds
@@ -373,8 +378,11 @@ describe("WorkspaceRuntime", () => {
 
     const { roomId } = await runtime.createProject({
       projectName: "Watcher Backoff",
-      firstPrompt: "先让 lead 挂起一会儿",
       templateId: "template-product-pod",
+    });
+    await runtime.sendUserMessage({
+      roomId,
+      content: "先让 lead 挂起一会儿",
     });
     const watcherId = runtime.getSnapshot().rooms[roomId]?.watcherIds[0];
 

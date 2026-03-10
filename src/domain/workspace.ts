@@ -126,8 +126,8 @@ function findBlueprint(template: TeamTemplate, predicate: (member: TeamMemberBlu
   return match;
 }
 
-function deriveRoomName(firstPrompt: string): string {
-  const trimmed = firstPrompt.trim();
+function deriveRoomName(content: string): string {
+  const trimmed = content.trim();
 
   if (trimmed.length === 0) {
     return "Untitled Thread";
@@ -141,6 +141,19 @@ function deriveRoomName(firstPrompt: string): string {
   const words = sanitized.split(" ").slice(0, 4);
 
   return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
+}
+
+function shouldInitializeRoomFromFirstMessage(snapshot: WorkspaceSnapshot, room: Room): boolean {
+  const messageCount = snapshot.messageOrderByRoom[room.id]?.length ?? 0;
+  return messageCount === 0 && room.topic.trim().length === 0;
+}
+
+function deriveRoomTitlesFromFirstMessage(content: string): Pick<Room, "name" | "topic"> {
+  const trimmed = content.trim();
+  return {
+    name: deriveRoomName(trimmed),
+    topic: trimmed,
+  };
 }
 
 function buildTaskTitle(message: ChatMessage): string {
@@ -374,7 +387,6 @@ export function createProjectWithRoom(
     snapshot,
     {
       projectId,
-      firstPrompt: input.firstPrompt,
       templateId: input.templateId,
     },
     context,
@@ -410,8 +422,8 @@ export function createRoomInProject(
   snapshot.rooms[roomId] = {
     id: roomId,
     projectId: input.projectId,
-    name: deriveRoomName(input.firstPrompt),
-    topic: input.firstPrompt.trim(),
+    name: "New room",
+    topic: "",
     templateId: template.id,
     memberIds: roomMembers.map((member) => member.id),
     watcherIds: watcherIds.map((watcher) => watcher.id),
@@ -430,15 +442,7 @@ export function createRoomInProject(
     roomId,
     memberId: memberIdByBlueprint[entryBlueprint.id],
   };
-
-  return postUserMessage(
-    snapshot,
-    {
-      roomId,
-      content: input.firstPrompt,
-    },
-    context,
-  );
+  return snapshot;
 }
 
 export function postUserMessage(
@@ -454,11 +458,20 @@ export function postUserMessage(
   }
 
   const now = context.now();
+  const trimmedContent = input.content.trim();
+
+  if (shouldInitializeRoomFromFirstMessage(snapshot, room)) {
+    snapshot.rooms[room.id] = {
+      ...room,
+      ...deriveRoomTitlesFromFirstMessage(trimmedContent),
+    };
+  }
+
   const message: ChatMessage = {
     id: context.createId("message"),
     roomId: input.roomId,
     author: buildUserAuthor(snapshot.currentUserName),
-    content: input.content.trim(),
+    content: trimmedContent,
     createdAt: now,
     transport: input.directMemberId ? "direct" : "group",
     status: "sent",

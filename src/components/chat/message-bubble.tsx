@@ -1,6 +1,6 @@
-import { memo, useState } from "react";
+import { Fragment, memo, useMemo, useState } from "react";
 
-import { AtSign, Cpu, Lock, Megaphone, PencilLine, UserRound } from "lucide-react";
+import { Cpu, Lock, Megaphone, PencilLine, UserRound } from "lucide-react";
 
 import type { ChatMessage, TeamMember } from "@/domain/model";
 import type { ContextBadge, MessageHandlerSummary } from "@/lib/message-feed";
@@ -48,6 +48,15 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
   const [expanded, setExpanded] = useState(!initialPreview.collapsed);
   const displayContent = expanded ? message.content : initialPreview.preview;
   const showExpandToggle = initialPreview.collapsed;
+  const highlightedHandles = useMemo(
+    () =>
+      new Set([
+        ...mentionedHandles,
+        ...recipientHandles.filter((handle) => handle !== message.author.label),
+        ...handlerSummaries.map((handler) => handler.handle),
+      ]),
+    [handlerSummaries, mentionedHandles, message.author.label, recipientHandles],
+  );
 
   return (
     <Card
@@ -94,7 +103,7 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
           </div>
         </header>
         <div className="space-y-2">
-          <p className="m-0 whitespace-pre-wrap text-sm leading-6">{displayContent}</p>
+          <p className="m-0 whitespace-pre-wrap text-sm leading-6">{renderHighlightedMessage(displayContent, highlightedHandles)}</p>
           {showExpandToggle ? (
             <Button
               type="button"
@@ -107,59 +116,27 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
             </Button>
           ) : null}
         </div>
-
-        {recipientHandles.length > 0 || handlerSummaries.length > 0 || mentionedHandles.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            {recipientHandles.length > 0 ? (
-              <footer className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="text-[0.7rem] font-medium uppercase tracking-[0.16em] text-muted-foreground">To</span>
-                {recipientHandles.map((handle) => (
-                  <Badge key={`recipient-${handle}`} variant="secondary" className="px-2 py-0.5 text-[10px]">
-                    @{handle}
-                  </Badge>
-                ))}
-              </footer>
-            ) : null}
-
-            {handlerSummaries.length > 0 ? (
-              <footer className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="text-[0.7rem] font-medium uppercase tracking-[0.16em] text-muted-foreground">Handled by</span>
-                {handlerSummaries.map((handler) => {
-                  const handlerBadge = badgeToneProps("blueprint");
-
-                  return (
-                    <Badge
-                      key={handler.taskId}
-                      variant={handlerBadge.variant}
-                      className={cn("gap-1 px-2 py-0.5 text-[10px]", handlerBadge.className)}
-                      title={handler.title}
-                    >
-                      @{handler.handle}
-                    </Badge>
-                  );
-                })}
-              </footer>
-            ) : null}
-
-            {mentionedHandles.length > 0 ? (
-              <footer className="flex flex-wrap items-center gap-2 text-sm">
-                <AtSign size={14} />
-                {mentionedHandles.map((handle) => (
-                  <Badge
-                    key={`mention-${handle}`}
-                    variant="outline"
-                    className="border-[color:var(--tone-postit-border)] bg-[var(--tone-postit-badge)] px-2 py-0.5 text-[10px] text-[var(--tone-postit-foreground)]"
-                  >
-                    @{handle}
-                  </Badge>
-                ))}
-              </footer>
-            ) : null}
-          </div>
-        ) : null}
       </CardContent>
     </Card>
   );
 }
 
 export const MessageBubble = memo(MessageBubbleComponent, areMessageBubblePropsEqual);
+
+function renderHighlightedMessage(content: string, handles: ReadonlySet<string>) {
+  return content.split(/(@[A-Za-z0-9_-]+)/g).map((segment, index) => {
+    const match = /^@([A-Za-z0-9_-]+)$/.exec(segment);
+    if (match && handles.has(match[1] ?? "")) {
+      return (
+        <span
+          key={`${segment}-${index}`}
+          className="rounded-md bg-[var(--tone-postit-badge)] px-1 py-0.5 text-[var(--tone-postit-foreground)]"
+        >
+          {segment}
+        </span>
+      );
+    }
+
+    return <Fragment key={`${segment}-${index}`}>{segment}</Fragment>;
+  });
+}

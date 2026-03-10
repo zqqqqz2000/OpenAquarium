@@ -28,7 +28,7 @@ export class WorkspaceRuntimeClient {
     return payload.snapshot;
   }
 
-  async createProject(input: { projectName: string; firstPrompt: string; templateId: string }): Promise<{
+  async createProject(input: { projectName: string; templateId: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     projectId: string;
     roomId: string;
@@ -42,7 +42,7 @@ export class WorkspaceRuntimeClient {
     );
   }
 
-  async createRoom(input: { projectId: string; firstPrompt: string; templateId: string }): Promise<{
+  async createRoom(input: { projectId: string; templateId: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     roomId: string;
   }> {
@@ -51,7 +51,6 @@ export class WorkspaceRuntimeClient {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          firstPrompt: input.firstPrompt,
           templateId: input.templateId,
         }),
       }),

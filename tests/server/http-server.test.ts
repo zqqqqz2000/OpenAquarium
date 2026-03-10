@@ -105,7 +105,6 @@ describe("workspace http api routing", () => {
 
     await runtime.createProject({
       projectName: "HTTP Check",
-      firstPrompt: "验证 API",
       templateId: "template-product-pod",
     });
 
@@ -226,13 +225,12 @@ describe("workspace http api routing", () => {
       method: "POST",
       pathname: `/api/projects/${projectId}/rooms`,
       body: {
-        firstPrompt: "为同一个 project 新开一个 room",
         templateId: "template-product-pod",
       },
     });
     const createRoomPayload = createRoomResult?.payload as {
       roomId: string;
-      snapshot: { rooms: Record<string, { projectId: string; topic: string }> };
+      snapshot: { rooms: Record<string, { name: string; projectId: string; topic: string }> };
     };
 
     expect(contents.some((content) => content.includes("@builder"))).toBe(true);
@@ -248,6 +246,54 @@ describe("workspace http api routing", () => {
     expect(templatePayload.template.id).toBe("template-http-generated");
     expect(templatePayload.snapshot.templates["template-http-generated"]?.description).toBe("生成一个新的协作模板");
     expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.projectId).toBe(projectId);
-    expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.topic).toBe("为同一个 project 新开一个 room");
+    expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.name).toBe("New room");
+    expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.topic).toBe("");
+  });
+
+  it("rejects legacy firstPrompt payloads for project and room creation", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-legacy-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const projectResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/projects",
+      body: {
+        projectName: "Legacy",
+        templateId: "template-product-pod",
+        firstPrompt: "legacy prompt",
+      },
+    });
+
+    expect(projectResult).toEqual({
+      statusCode: 400,
+      payload: { error: "firstPrompt is no longer supported. Create the room first, then send the first message." },
+    });
+
+    const created = await runtime.createProject({
+      projectName: "Modern",
+      templateId: "template-product-pod",
+    });
+
+    const roomResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: `/api/projects/${created.projectId}/rooms`,
+      body: {
+        templateId: "template-product-pod",
+        firstPrompt: "legacy prompt",
+      },
+    });
+
+    expect(roomResult).toEqual({
+      statusCode: 400,
+      payload: { error: "firstPrompt is no longer supported. Create the room first, then send the first message." },
+    });
   });
 });

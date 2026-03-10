@@ -118,7 +118,7 @@ export function ChatComposer(props: {
   return (
     <div className={cn("overflow-visible rounded-[1.75rem] border border-border/70 bg-card/95 shadow-sm", className)}>
       <div className={cn("flex flex-col gap-2 p-3 md:p-3.5", contentClassName)}>
-        <div className="space-y-2">
+        <div className="relative">
           <Textarea
             ref={textareaRef}
             className={cn(
@@ -176,7 +176,7 @@ export function ChatComposer(props: {
             }}
           />
           {visibleMentionMatch && visibleMentionMatch.matches.length > 0 ? (
-            <div className="rounded-2xl border border-border/70 bg-background/95 p-2 shadow-lg">
+            <div className="absolute top-[calc(100%+0.5rem)] left-0 z-30 w-[min(24rem,calc(100vw-4rem))] rounded-2xl border border-border/70 bg-background/95 p-2 shadow-lg">
               <p className="m-0 px-2 pb-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Mention member</p>
               <div className="flex flex-col gap-1">
                 {visibleMentionMatch.matches.map((member, index) => (
@@ -232,7 +232,7 @@ export function ChatComposer(props: {
             ) : null}
             <Button
               aria-label={submitLabel}
-              className="size-10 rounded-full bg-foreground/45 text-background hover:bg-foreground/60 disabled:bg-muted disabled:text-muted-foreground"
+              className="size-10 rounded-full bg-primary text-primary-foreground hover:bg-primary/88 disabled:bg-muted disabled:text-muted-foreground"
               disabled={text.trim().length === 0 || !connected}
               size="icon"
               type="button"

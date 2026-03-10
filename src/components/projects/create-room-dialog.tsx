@@ -10,7 +10,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -22,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { badgeToneProps } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
@@ -38,7 +36,6 @@ export function CreateRoomDialog(props: {
   const navigate = useNavigate();
   const createRoom = useWorkspaceStore((state) => state.createRoom);
   const [open, setOpen] = useState(false);
-  const [firstPrompt, setFirstPrompt] = useState("继续细化当前 project 的 agent-team 协作和实现路径。");
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [actionError, setActionError] = useState<string | undefined>();
   const resolvedTemplateId = templates.some((template) => template.id === templateId) ? templateId : (templates[0]?.id ?? "");
@@ -69,9 +66,6 @@ export function CreateRoomDialog(props: {
       <DialogContent className="w-[min(92vw,760px)] max-w-[760px] gap-4 p-5 sm:max-w-[760px]">
         <DialogHeader className="pr-10">
           <DialogTitle className="text-2xl font-semibold tracking-tight">Create room</DialogTitle>
-          <DialogDescription>
-            直接在 <span className="font-medium text-foreground">{project.name}</span> 下新开 room，名称会按首条问题自动生成。
-          </DialogDescription>
         </DialogHeader>
         <Card className="border border-transparent shadow-none">
           <CardContent className="flex flex-col gap-4">
@@ -79,14 +73,6 @@ export function CreateRoomDialog(props: {
               <span className="text-sm font-medium">Project</span>
               <div className="rounded-lg bg-muted/35 px-2.5 py-1.5 text-sm">{project.name}</div>
             </div>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium">First user prompt</span>
-              <Textarea
-                className="min-h-28"
-                value={firstPrompt}
-                onChange={(event) => setFirstPrompt(event.currentTarget.value)}
-              />
-            </label>
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">Team template</span>
               <Select value={resolvedTemplateId} onValueChange={setTemplateId}>
@@ -106,14 +92,13 @@ export function CreateRoomDialog(props: {
             {actionError ? <p className="m-0 text-sm text-destructive">{actionError}</p> : null}
             <div className="flex justify-end">
               <Button
-                disabled={triggerDisabled || firstPrompt.trim().length === 0 || !resolvedTemplateId}
+                disabled={triggerDisabled || !resolvedTemplateId}
                 onClick={() => {
                   void (async () => {
                     try {
                       setActionError(undefined);
                       const next = await createRoom({
                         projectId: project.id,
-                        firstPrompt,
                         templateId: resolvedTemplateId,
                       });
                       startTransition(() => {

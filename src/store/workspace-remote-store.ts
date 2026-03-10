@@ -55,8 +55,8 @@ export interface WorkspaceRemoteStoreState {
   connected: boolean;
   error?: string;
   hydrate(): Promise<void>;
-  createProject(input: { projectName: string; firstPrompt: string; templateId: string }): Promise<{ projectId: string; roomId: string }>;
-  createRoom(input: { projectId: string; firstPrompt: string; templateId: string }): Promise<{ roomId: string }>;
+  createProject(input: { projectName: string; templateId: string }): Promise<{ projectId: string; roomId: string }>;
+  createRoom(input: { projectId: string; templateId: string }): Promise<{ roomId: string }>;
   selectRoom(projectId: string, roomId: string): void;
   selectMember(memberId?: string): void;
   sendUserMessage(content: string, directMemberId?: string): Promise<void>;
@@ -74,12 +74,12 @@ export interface WorkspaceRemoteStoreState {
 
 export interface WorkspaceRemoteClient {
   getState(): Promise<WorkspaceSnapshot>;
-  createProject(input: { projectName: string; firstPrompt: string; templateId: string }): Promise<{
+  createProject(input: { projectName: string; templateId: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     projectId: string;
     roomId: string;
   }>;
-  createRoom(input: { projectId: string; firstPrompt: string; templateId: string }): Promise<{
+  createRoom(input: { projectId: string; templateId: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     roomId: string;
   }>;

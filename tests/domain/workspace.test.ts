@@ -18,18 +18,71 @@ import {
 } from "@/domain/workspace";
 import { defaultTemplates } from "@/lib/sample-data/templates";
 
+const DEFAULT_FIRST_MESSAGE = "实现一个可中断的 agent team";
+
+function createStartedProjectSnapshot(context: ReturnType<typeof createRuntimeContext>) {
+  let snapshot = createProjectWithRoom(
+    createWorkspaceSnapshot(defaultTemplates),
+    {
+      projectName: "ACP Lab",
+      templateId: "template-product-pod",
+    },
+    context,
+  );
+
+  snapshot = postUserMessage(
+    snapshot,
+    {
+      roomId: snapshot.selection.roomId!,
+      content: DEFAULT_FIRST_MESSAGE,
+    },
+    context,
+  );
+
+  return snapshot;
+}
+
 describe("workspace domain", () => {
-  it("routes the first prompt to the entry member and derives a room name", () => {
+  it("creates a virtual room before the first user message and initializes it from that message", () => {
     const context = createRuntimeContext();
-    const snapshot = createProjectWithRoom(
+    let snapshot = createProjectWithRoom(
       createWorkspaceSnapshot(defaultTemplates),
       {
         projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
         templateId: "template-product-pod",
       },
       context,
     );
+
+    const roomId = snapshot.selection.roomId;
+    expect(roomId).toBeDefined();
+    if (!roomId) {
+      throw new Error("Expected a room id");
+    }
+
+    expect(snapshot.rooms[roomId].name).toBe("New room");
+    expect(snapshot.rooms[roomId].topic).toBe("");
+    expect(snapshot.messageOrderByRoom[roomId]).toEqual([]);
+    expect(snapshot.members[snapshot.rooms[roomId].entryMemberId].activeTaskId).toBeUndefined();
+
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId,
+        content: "实现一个可中断的 agent team",
+      },
+      context,
+    );
+
+    expect(snapshot.rooms[roomId].name).toBe("实现一个可中断的 Agent Team");
+    expect(snapshot.rooms[roomId].topic).toBe("实现一个可中断的 agent team");
+    expect(snapshot.messageOrderByRoom[roomId]).toHaveLength(1);
+    expect(snapshot.members[snapshot.rooms[roomId].entryMemberId].activeTaskId).toBeDefined();
+  });
+
+  it("routes the first prompt to the entry member and derives a room name", () => {
+    const context = createRuntimeContext();
+    const snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId;
     expect(roomId).toBeDefined();
@@ -47,15 +100,7 @@ describe("workspace domain", () => {
 
   it("interrupts a running member without leaking internal draft text into the room transcript", () => {
     const context = createRuntimeContext();
-    let snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    let snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
     const entryMember = Object.values(snapshot.members).find((member) => member.isEntryMember)!;
@@ -85,15 +130,7 @@ describe("workspace domain", () => {
 
   it("extracts mentions by handle from message content", () => {
     const context = createRuntimeContext();
-    const snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    const snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
     const mentionIds = extractMentionMemberIds(snapshot, roomId, "@builder 帮我补 UI，@scribe 负责记录");
@@ -104,15 +141,7 @@ describe("workspace domain", () => {
 
   it("only treats leading mentions as routed recipients", () => {
     const context = createRuntimeContext();
-    const snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    const snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
     const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@builder @research 先同步一下，再提到 @scribe 作为引用。");
@@ -123,15 +152,7 @@ describe("workspace domain", () => {
 
   it("does not route member tasks from inline mentions that are not at the start of the message", () => {
     const context = createRuntimeContext();
-    let snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    let snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
     const lead = snapshot.rooms[roomId].memberIds
@@ -156,15 +177,7 @@ describe("workspace domain", () => {
 
   it("stores member-to-user directs without routing a new teammate task", () => {
     const context = createRuntimeContext();
-    let snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    let snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
     const lead = snapshot.rooms[roomId].memberIds
@@ -195,15 +208,7 @@ describe("workspace domain", () => {
 
   it("establishes a watcher baseline before sending digests for new room activity", () => {
     const context = createRuntimeContext();
-    let snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    let snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
     const watcherId = snapshot.rooms[roomId].watcherIds[0];
@@ -236,15 +241,7 @@ describe("workspace domain", () => {
 
   it("filters template ack placeholders without blocking later real updates", () => {
     const context = createRuntimeContext();
-    let snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    let snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
     const watcherId = snapshot.rooms[roomId].watcherIds[0];
@@ -289,15 +286,7 @@ describe("workspace domain", () => {
 
   it("excludes watcher-task digest summaries from future watcher digests", () => {
     const context = createRuntimeContext();
-    let snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    let snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
     const watcherId = snapshot.rooms[roomId].watcherIds[0];
@@ -361,15 +350,7 @@ describe("workspace domain", () => {
 
   it("does not auto-route monitor-all members when a teammate sends a normal group reply", () => {
     const context = createRuntimeContext();
-    let snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    let snapshot = createStartedProjectSnapshot(context);
 
     const lead = Object.values(snapshot.members).find((member) => member.isEntryMember);
     const scribe = Object.values(snapshot.members).find((member) => member.handle === "scribe");
@@ -396,15 +377,7 @@ describe("workspace domain", () => {
 
   it("updates member config, supports entry-member reassignment, and respects direct-message opt-out", () => {
     const context = createRuntimeContext();
-    let snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
-      {
-        projectName: "ACP Lab",
-        firstPrompt: "实现一个可中断的 agent team",
-        templateId: "template-product-pod",
-      },
-      context,
-    );
+    let snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
     const room = snapshot.rooms[roomId];

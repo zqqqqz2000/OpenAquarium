@@ -114,7 +114,11 @@ describe("MemberStudioDialog", () => {
     expect(screen.getByText("Processing history")).toBeInTheDocument();
     expect(screen.getByText("Accepted")).toBeInTheDocument();
     expect(screen.getByText("Reply")).toBeInTheDocument();
-    expect(screen.getByText("@builder @research 先整理需求边界，然后由 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。")).toBeInTheDocument();
+    expect(
+      screen.getAllByText((_, element) =>
+        element?.textContent?.includes("@builder @research 先整理需求边界，然后由 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。") ?? false,
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   it("shows the member session timeline and lets the user send a direct message", async () => {

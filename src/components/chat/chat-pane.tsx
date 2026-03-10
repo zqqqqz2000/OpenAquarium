@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { ArrowDown, Bot, Info, Sparkles, Users } from "lucide-react";
+import { ArrowDown, Bot, CornerDownLeft, Users } from "lucide-react";
 
 import type { ChatMessage, Room, TeamMember, TeamTemplate, WorkspaceSnapshot } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
@@ -12,14 +12,6 @@ import { getMemberActivitySummary, getWatcherForMember } from "@/components/memb
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { useRoomChat } from "@/lib/chat/use-room-chat";
 import { getUIMessageText, type WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
 import type { MessageHandlerSummary } from "@/lib/message-feed";
@@ -122,10 +114,6 @@ export function ChatPane(props: {
   };
 
   if (!room) {
-    const readyBadge = badgeToneProps("paper");
-    const membersBadge = badgeToneProps("blueprint");
-    const watcherBadge = badgeToneProps("correction");
-
     return (
       <main className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden px-6 py-10">
         <ShellToolbar leftSidebarCollapsed={leftSidebarCollapsed} onToggleLeftSidebar={onToggleLeftSidebar} />
@@ -133,20 +121,7 @@ export function ChatPane(props: {
           <CardContent className="flex flex-col gap-4 p-8">
             <div className="space-y-2">
               <p className="m-0 text-3xl font-semibold tracking-tight">OpenAquarium</p>
-              <p className="m-0 text-base text-muted-foreground">
-                左边先建一个 project。每个 project 会以首条问题命名 room，并固定一套 team template。
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <Badge variant={readyBadge.variant} className={readyBadge.className}>
-                ACP-ready
-              </Badge>
-              <Badge variant={membersBadge.variant} className={membersBadge.className}>
-                Interruptible members
-              </Badge>
-              <Badge variant={watcherBadge.variant} className={watcherBadge.className}>
-                Watcher digests
-              </Badge>
+              <p className="m-0 text-base text-muted-foreground">创建一个 project 开始聊天。</p>
             </div>
           </CardContent>
         </Card>
@@ -160,10 +135,7 @@ export function ChatPane(props: {
         <Card className="border border-destructive/30 bg-destructive/5 shadow-sm">
           <CardContent className="flex flex-col gap-2 p-4">
             <p className="m-0 text-sm font-medium">Runtime offline</p>
-            <p className="m-0 text-sm text-muted-foreground">
-              当前聊天依赖本地 runtime 服务；如果它没启动，发消息、建 room、改成员配置都不会生效。
-            </p>
-            <p className="m-0 text-xs text-muted-foreground">现在页面里展示的是本地空工作区，不是已经连上 runtime 的真实状态。</p>
+            <p className="m-0 text-sm text-muted-foreground">启动本地 runtime 后，发消息和保存改动才会生效。</p>
             <p className="m-0 font-mono text-xs text-muted-foreground">bun run server</p>
             {error ? <p className="m-0 text-xs text-destructive">{error}</p> : null}
           </CardContent>
@@ -216,7 +188,7 @@ export function ChatPane(props: {
                 <Card className="border border-border shadow-none">
                   <CardContent className="flex items-center gap-4 p-5">
                     <Bot size={28} />
-                    <p className="m-0 text-sm text-muted-foreground">还没有消息。发第一句话，入口 member 会先接住。</p>
+                    <p className="m-0 text-sm text-muted-foreground">还没有消息。发送第一句话开始。</p>
                   </CardContent>
                 </Card>
               ) : null}
@@ -315,9 +287,8 @@ function RoomTopBar(props: {
               {room.watcherIds.length} watchers
             </Badge>
             <Badge variant="outline">{statusBadgeLabel}</Badge>
-            <RoomInfoPopover room={room} template={template} members={members} />
           </div>
-          <p className="m-0 max-w-3xl text-sm text-muted-foreground">{room.topic}</p>
+          {room.topic.trim().length > 0 ? <p className="m-0 max-w-3xl text-sm text-muted-foreground">{room.topic}</p> : null}
           {activeStreamSummary ? <p className="m-0 text-sm text-muted-foreground">{activeStreamSummary}</p> : null}
         </div>
       </div>
@@ -405,7 +376,7 @@ function RoomMembersSidebar(props: {
                             {member.status}
                           </Badge>
                           <p className="m-0 text-xs text-muted-foreground">
-                            {activeTask ? "Open Session for full timeline" : activity.statusLine}
+                            {activity.statusLine}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
@@ -413,7 +384,8 @@ function RoomMembersSidebar(props: {
                             Direct
                           </Button>
                           <Button size="sm" type="button" onClick={() => onOpenMember(member.id)}>
-                            Session
+                            <CornerDownLeft size={14} />
+                            Chat
                           </Button>
                         </div>
                       </div>
@@ -426,40 +398,6 @@ function RoomMembersSidebar(props: {
         </CardContent>
       </Card>
     </aside>
-  );
-}
-
-function RoomInfoPopover(props: {
-  room: Room;
-  template?: TeamTemplate;
-  members: TeamMember[];
-}) {
-  const { room, template } = props;
-
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm">
-          <Info size={16} />
-          Room note
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[min(88vw,360px)]">
-        <PopoverHeader>
-          <PopoverTitle className="flex items-center gap-2 text-base">
-            <Sparkles size={16} />
-            Room note
-          </PopoverTitle>
-          <PopoverDescription>
-            当前 template 固定为 {template?.name ?? "Template"}。
-          </PopoverDescription>
-        </PopoverHeader>
-        <div className="space-y-2 text-sm text-muted-foreground">
-          <p className="m-0">首条问题会把 room 主题初始化为：{summarizePrompt(room.topic, 80)}。</p>
-          <p className="m-0">成员 Session 里可以看到更完整的执行细节和 direct 上下文。</p>
-        </div>
-      </PopoverContent>
-    </Popover>
   );
 }
 

@@ -17,7 +17,7 @@ export function MemberHoverPreview(props: {
   return (
     <HoverCard openDelay={120}>
       <HoverCardTrigger asChild>{children}</HoverCardTrigger>
-      <HoverCardContent className="w-[min(88vw,320px)] p-0">
+      <HoverCardContent side="left" align="start" sideOffset={12} className="w-[min(88vw,320px)] p-0">
         <Card>
           <CardContent className="flex flex-col gap-3 p-4">
             <div>
@@ -35,9 +35,6 @@ export function MemberHoverPreview(props: {
               {member.acceptsDirectMessages ? <Badge variant="secondary">Direct inbox</Badge> : null}
               {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
             </div>
-            <p className="m-0 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              Click to open member studio
-            </p>
           </CardContent>
         </Card>
       </HoverCardContent>

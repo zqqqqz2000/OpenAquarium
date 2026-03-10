@@ -177,13 +177,11 @@ export interface WorkspaceSnapshot {
 
 export interface CreateProjectInput {
   projectName: string;
-  firstPrompt: string;
   templateId: TemplateId;
 }
 
 export interface CreateRoomInput {
   projectId: ProjectId;
-  firstPrompt: string;
   templateId: TemplateId;
 }
 

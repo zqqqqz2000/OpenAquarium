@@ -24,9 +24,9 @@ describe("workspace store", () => {
     const store = createWorkspaceStore(createSeedWorkspace());
     store.getState().createProject({
       projectName: "Advance Check",
-      firstPrompt: "先由入口成员回应一下",
       templateId: "template-product-pod",
     });
+    store.getState().sendUserMessage("先由入口成员回应一下");
 
     const snapshot = store.getState().snapshot;
     const roomId = snapshot.selection.roomId!;
@@ -52,7 +52,6 @@ describe("workspace store", () => {
 
     const next = store.getState().createProject({
       projectName: "Second Tank",
-      firstPrompt: "给我一个 incident 调试专用的 team",
       templateId: "template-incident-pod",
     });
 
@@ -63,5 +62,24 @@ describe("workspace store", () => {
     expect(room.templateId).toBe("template-incident-pod");
     expect(snapshot.selection.projectId).toBe(next.projectId);
     expect(snapshot.selection.roomId).toBe(next.roomId);
+  });
+
+  it("creates a virtual room without a first prompt and names it from the first message", () => {
+    const store = createWorkspaceStore(createSeedWorkspace());
+    const next = store.getState().createProject({
+      projectName: "Third Tank",
+      templateId: "template-product-pod",
+    });
+
+    let snapshot = store.getState().snapshot;
+    expect(snapshot.rooms[next.roomId].name).toBe("New room");
+    expect(snapshot.rooms[next.roomId].topic).toBe("");
+
+    store.getState().sendUserMessage("实现一个可中断的 agent team");
+
+    snapshot = store.getState().snapshot;
+    expect(snapshot.rooms[next.roomId].name).toBe("实现一个可中断的 Agent Team");
+    expect(snapshot.rooms[next.roomId].topic).toBe("实现一个可中断的 agent team");
+    expect(snapshot.members[snapshot.rooms[next.roomId].entryMemberId].activeTaskId).toBeDefined();
   });
 });

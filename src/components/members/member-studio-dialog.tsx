@@ -247,12 +247,7 @@ export function MemberStudioDialog(props: {
               <TabsContent value="history" className="m-0">
                 <Card className="border-none bg-transparent py-0 ring-0 shadow-none">
                   <CardContent className="flex flex-col gap-3 p-0">
-                    <div>
-                      <p className="m-0 text-lg font-semibold tracking-tight">Processing history</p>
-                      <p className="m-0 text-sm text-muted-foreground">
-                        这里是结果化消息视图。更完整的私聊和执行上下文在 Session 里。
-                      </p>
-                    </div>
+                    <p className="m-0 text-lg font-semibold tracking-tight">Processing history</p>
                     <div className="flex flex-col gap-3">
                       {memberHistory.map((entry) => {
                         const historyAuthor =
@@ -287,12 +282,7 @@ export function MemberStudioDialog(props: {
               <TabsContent value="behavior" className="m-0">
                 <Card>
                   <CardContent className="flex flex-col gap-4 p-4">
-                    <div>
-                      <p className="m-0 text-lg font-semibold tracking-tight">Behavior</p>
-                      <p className="m-0 text-sm text-muted-foreground">
-                        职责由 prompt、skills 和 provider 组合出来，不写死在系统里。
-                      </p>
-                    </div>
+                    <p className="m-0 text-lg font-semibold tracking-tight">Behavior</p>
                     <label className="flex flex-col gap-2">
                       <span className="text-sm font-medium">Summary</span>
                       <Input value={configDraft.summary} onChange={(event) => patchConfigDraft({ summary: event.currentTarget.value })} />
@@ -511,9 +501,7 @@ export function MemberStudioDialog(props: {
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
               {memberError ? (
                 <p className="m-0 text-sm text-destructive">{memberError}</p>
-              ) : (
-                <span className="text-sm text-muted-foreground">修改只在这里集中保存，不再挤在主页面右栏。</span>
-              )}
+              ) : null}
               <Button onClick={saveConfig}>Save member config</Button>
             </div>
           </Tabs>
