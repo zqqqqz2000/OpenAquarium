@@ -189,25 +189,17 @@ export function MemberSessionPane(props: {
   return (
     <Card className="flex h-full min-h-0 flex-col overflow-hidden">
       <CardContent className="flex h-full min-h-0 flex-col p-0">
-        <div className="shrink-0 space-y-4 border-b border-border px-4 py-4">
-          <div className="space-y-1">
-            <p className="m-0 text-lg font-semibold tracking-tight">Member session</p>
-            <p className="m-0 text-sm text-muted-foreground">
-              这里把私聊消息、成员可见的房间上下文、执行进度、原始 prompt 和完成结果混排成一条会话时间线。
-            </p>
-          </div>
-
-          {activeTask ? (
-            <div className="rounded-xl border border-border bg-muted/40 px-4 py-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <p className="m-0 text-sm font-medium">Current focus</p>
-                  <p className="m-0 text-sm text-muted-foreground">{activeTask.title}</p>
-                </div>
-                <Badge variant="outline">{activeTask.status}</Badge>
-              </div>
+        <div className="shrink-0 border-b border-border px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="m-0 text-lg font-semibold tracking-tight">Member session</p>
+              {activeTask ? <p className="m-0 text-sm text-muted-foreground">{activeTask.title}</p> : null}
             </div>
-          ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              {activeTask ? <Badge variant="outline">{activeTask.status}</Badge> : null}
+              <Badge variant="secondary">{sessionEntries.length} entries</Badge>
+            </div>
+          </div>
         </div>
 
         <div className="relative min-h-0 flex-1">
@@ -248,9 +240,11 @@ export function MemberSessionPane(props: {
           ) : null}
         </div>
 
-        <div className="shrink-0 border-t border-border px-4 py-4">
+        <div className="shrink-0 border-t border-border px-4 py-3">
           <ChatComposer
-            className="border-none shadow-none"
+            className="border-none bg-transparent py-0 shadow-none ring-0"
+            contentClassName="gap-2 p-0"
+            textareaClassName="min-h-16"
             connected={connected && canSendDirectMessage}
             error={canSendDirectMessage ? error : "当前 session 不支持直接发消息。"}
             members={[member]}

@@ -4,6 +4,7 @@ import { Plus } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
 import type { Project, TeamTemplate } from "@/domain/model";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -14,7 +15,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { badgeToneProps } from "@/lib/ui-tone";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
 
 export function CreateRoomDialog(props: {
@@ -40,6 +41,7 @@ export function CreateRoomDialog(props: {
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [actionError, setActionError] = useState<string | undefined>();
   const projectOptions = useMemo(() => projects, [projects]);
+  const selectedTemplate = useMemo(() => templates.find((template) => template.id === templateId), [templateId, templates]);
   const triggerDisabled = disabled || projectOptions.length === 0;
 
   return (
@@ -58,13 +60,13 @@ export function CreateRoomDialog(props: {
           New room
         </Button>
       </DialogTrigger>
-      <DialogContent className="w-[min(92vw,720px)] max-w-[720px] sm:max-w-[720px]">
-        <DialogHeader>
+      <DialogContent className="w-[min(92vw,760px)] max-w-[760px] gap-5 p-6 sm:max-w-[760px]">
+        <DialogHeader className="pr-10">
           <DialogTitle className="text-2xl font-semibold tracking-tight">Create room</DialogTitle>
           <DialogDescription>在现有 project 下新开一个 room，名称会按首条问题自动生成。</DialogDescription>
         </DialogHeader>
-        <Card className="border border-transparent shadow-none">
-          <CardContent className="flex flex-col gap-4 p-0">
+        <Card className="border border-border shadow-sm">
+          <CardContent className="flex flex-col gap-5 p-5">
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">Project</span>
               <Select value={projectId} onValueChange={setProjectId}>
@@ -83,7 +85,7 @@ export function CreateRoomDialog(props: {
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">First user prompt</span>
               <Textarea
-                className="min-h-28"
+                className="min-h-32"
                 value={firstPrompt}
                 onChange={(event) => setFirstPrompt(event.currentTarget.value)}
               />
@@ -103,14 +105,7 @@ export function CreateRoomDialog(props: {
                 </SelectContent>
               </Select>
             </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium">Project note</span>
-              <Input
-                disabled
-                value={projectOptions.find((project) => project.id === projectId)?.name ?? ""}
-                placeholder="Select a project first"
-              />
-            </label>
+            {selectedTemplate ? <TemplateDetails template={selectedTemplate} /> : null}
             {actionError ? <p className="m-0 text-sm text-destructive">{actionError}</p> : null}
             <div className="flex justify-end">
               <Button
@@ -147,5 +142,37 @@ export function CreateRoomDialog(props: {
         </Card>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function TemplateDetails(props: { template: TeamTemplate }) {
+  const { template } = props;
+  const accentBadge = badgeToneProps(template.accentTone);
+
+  return (
+    <div className="rounded-2xl border border-border bg-muted/30 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="m-0 text-base font-semibold tracking-tight">{template.name}</p>
+            <Badge variant={accentBadge.variant} className={accentBadge.className}>
+              {template.members.length} members
+            </Badge>
+          </div>
+          <p className="m-0 text-sm leading-6 text-muted-foreground">{template.description}</p>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        {template.members.map((member) => (
+          <div key={member.id} className="rounded-xl border border-border bg-card px-3 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="m-0 text-sm font-semibold">{member.name}</p>
+              <Badge variant="outline">@{member.handle}</Badge>
+            </div>
+            <p className="m-0 mt-2 text-sm leading-6 text-muted-foreground">{member.summary}</p>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

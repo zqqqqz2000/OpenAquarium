@@ -11,20 +11,35 @@ describe("ChatComposer", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const lead = members.find((member) => member.handle === "lead");
     const onSend = vi.fn();
 
-    render(<ChatComposer connected error={undefined} members={members} onSend={onSend} />);
+    if (!lead) {
+      throw new Error("Expected a lead member");
+    }
 
-    await user.click(screen.getByRole("button", { name: /Lead Koi/i }));
-    expect(screen.getByText("DM @lead")).toBeInTheDocument();
+    render(
+      <ChatComposer
+        connected
+        error={undefined}
+        members={members}
+        onSend={onSend}
+        preferredDirectMemberId={lead.id}
+        focusSignal={1}
+      />,
+    );
+
+    expect(await screen.findByText("DM @lead")).toBeInTheDocument();
+    expect(screen.queryByText("Group message")).not.toBeInTheDocument();
+    expect(screen.queryByText("Quick direct targets")).not.toBeInTheDocument();
 
     const textbox = screen.getByRole("textbox");
     await user.type(textbox, "先回复用户，再拉 builder。");
     await user.click(screen.getByRole("button", { name: /Send/i }));
 
-    expect(onSend).toHaveBeenCalledWith("先回复用户，再拉 builder。", members.find((member) => member.handle === "lead")?.id);
+    expect(onSend).toHaveBeenCalledWith("先回复用户，再拉 builder。", lead.id);
     expect(textbox).toHaveValue("");
-    expect(screen.getByText("Group message")).toBeInTheDocument();
+    expect(screen.queryByText("DM @lead")).not.toBeInTheDocument();
   });
 
   it("locks the composer to a single direct target when fixedDirectMemberId is provided", async () => {
@@ -75,6 +90,26 @@ describe("ChatComposer", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(textbox).toHaveValue("这条消息不该在失败后消失。");
     expect(screen.getByText("Failed to fetch")).toBeInTheDocument();
+  });
+
+  it("offers @ mention completion without showing a static member list", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(<ChatComposer connected error={undefined} members={members} onSend={vi.fn()} />);
+
+    const textbox = screen.getByRole("textbox");
+    await user.type(textbox, "请 @re");
+
+    expect(screen.getByText("Mention member")).toBeInTheDocument();
+    expect(screen.getByText("@research")).toBeInTheDocument();
+    expect(screen.queryByText("Quick direct targets")).not.toBeInTheDocument();
+
+    await user.keyboard("{Enter}");
+
+    expect(textbox).toHaveValue("请 @research ");
   });
 
   it("keeps the composer enabled while other member streams are still active", async () => {

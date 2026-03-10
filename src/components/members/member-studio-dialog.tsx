@@ -34,6 +34,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { getMemberHistory } from "@/lib/message-feed";
 import { badgeToneProps, surfaceToneClass } from "@/lib/ui-tone";
+import { cn } from "@/lib/utils";
 
 function FactTile(props: { label: string; value: string }) {
   const { label, value } = props;
@@ -91,6 +92,7 @@ export function MemberStudioDialog(props: {
   const watcherDraft = watcherDrafts[member.id] ?? createWatcherDraft(watcher);
   const memberError = errorByMember[member.id];
   const memberToneBadge = badgeToneProps(member.accentTone);
+  const isSessionTab = activeTab === "session";
 
   const patchConfigDraft = (patch: Partial<MemberConfigDraft>): void => {
     setConfigDrafts((current) => ({
@@ -149,9 +151,7 @@ export function MemberStudioDialog(props: {
           <DialogHeader className="flex-row items-start justify-between gap-4">
             <div className="space-y-1">
               <DialogTitle className="text-2xl font-semibold tracking-tight">Member Studio</DialogTitle>
-              <DialogDescription>
-                深配置收进这里。主聊天页只保留概览和入口动作。
-              </DialogDescription>
+              <DialogDescription className="sr-only">Inspect session history and update member configuration.</DialogDescription>
             </div>
             <DialogClose asChild>
               <Button variant="ghost" size="icon-sm" aria-label="Close member studio">
@@ -161,12 +161,12 @@ export function MemberStudioDialog(props: {
           </DialogHeader>
         </div>
 
-        <div className="grid min-h-0 gap-4 overflow-hidden p-4 lg:grid-cols-[280px_minmax(0,1fr)] lg:p-5">
-          <div className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1">
+        <div className={cn("grid min-h-0 gap-4 overflow-hidden p-4 lg:p-5", isSessionTab ? "lg:grid-cols-[220px_minmax(0,1fr)]" : "lg:grid-cols-[272px_minmax(0,1fr)]")}>
+          <div className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1">
             <Card>
-              <CardContent className="flex flex-col gap-4 p-4">
+              <CardContent className="flex flex-col gap-3 p-4">
                 <MemberAvatar member={member} active />
-                <p className="m-0 text-sm leading-6 text-muted-foreground">{member.summary}</p>
+                {!isSessionTab ? <p className="m-0 text-sm leading-6 text-muted-foreground">{member.summary}</p> : null}
                 <div className="flex flex-wrap gap-2">
                   <Badge variant={memberToneBadge.variant} className={memberToneBadge.className}>
                     {member.provider.label}
@@ -181,7 +181,7 @@ export function MemberStudioDialog(props: {
 
             <Card>
               <CardContent className="flex flex-col gap-3 p-4">
-                <p className="m-0 text-lg font-semibold tracking-tight">At a glance</p>
+                {!isSessionTab ? <p className="m-0 text-lg font-semibold tracking-tight">At a glance</p> : null}
                 <div className="grid grid-cols-2 gap-2">
                   <FactTile label="Status" value={member.status} />
                   <FactTile label="Direct inbox" value={member.acceptsDirectMessages ? "Open" : "Closed"} />
@@ -205,8 +205,8 @@ export function MemberStudioDialog(props: {
             {activeTask ? (
               <Card className={surfaceToneClass("correction")}>
                 <CardContent className="flex flex-col gap-2 p-4">
-                  <p className="m-0 text-lg font-semibold tracking-tight">Current task</p>
-                  <p className="m-0 text-base">{activeTask.title}</p>
+                  <p className="m-0 text-base font-semibold tracking-tight">Current task</p>
+                  <p className="m-0 text-sm">{activeTask.title}</p>
                   <p className="m-0 text-sm text-muted-foreground">status: {activeTask.status}</p>
                   <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">source message</p>
                   <p className="m-0 text-sm">{snapshot.messages[activeTask.sourceMessageId]?.content}</p>
@@ -215,7 +215,7 @@ export function MemberStudioDialog(props: {
             ) : null}
           </div>
 
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-col gap-4 overflow-hidden">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-col gap-3 overflow-hidden">
             <TabsList variant="line" className="h-auto w-full flex-wrap justify-start rounded-none border-b bg-transparent p-0">
               {[
                 ["session", "Session"],

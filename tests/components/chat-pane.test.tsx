@@ -39,6 +39,9 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("Handled by").length).toBeGreaterThan(0);
     expect(screen.getAllByText("@lead").length).toBeGreaterThan(0);
     expect(screen.getAllByText("To").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Room transcript")).not.toBeInTheDocument();
+    expect(screen.queryByText("团队通常不大，右侧保留更多状态，便于快速切换到具体 member session。")).not.toBeInTheDocument();
+    expect(screen.queryByText("成员内部推理只显示为处理状态；只有显式发送到 room 或 direct 的消息才会出现在消息流里。")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Direct" }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Session" }).length).toBeGreaterThan(0);
 

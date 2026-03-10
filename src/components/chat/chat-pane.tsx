@@ -154,18 +154,8 @@ export function ChatPane(props: {
     );
   }
 
-  const templateBadge = badgeToneProps(template?.accentTone ?? "paper");
-  const watcherBadge = badgeToneProps("correction");
-  const neutralBadge = badgeToneProps("paper");
-
   return (
     <main className="flex h-full min-h-0 min-w-0 flex-col gap-5 overflow-hidden border-x border-border/70 bg-background/70 px-4 py-5 md:px-6">
-      <ShellToolbar
-        leftSidebarCollapsed={leftSidebarCollapsed}
-        onToggleLeftSidebar={onToggleLeftSidebar}
-        rightSidebarCollapsed={rightSidebarCollapsed}
-        onToggleRightSidebar={onToggleRightSidebar}
-      />
       {!connected || error ? (
         <Card className="border border-destructive/30 bg-destructive/5 shadow-sm">
           <CardContent className="flex flex-col gap-2 p-4">
@@ -194,43 +184,20 @@ export function ChatPane(props: {
           />
         ) : null}
         <section className="flex h-full min-h-0 min-w-0 flex-col gap-4">
-          <Card className="shrink-0 border border-border shadow-sm">
-            <CardContent className="flex flex-col gap-4 p-5">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="space-y-2">
-                  <p className="m-0 text-3xl font-semibold tracking-tight">{room.name}</p>
-                  <p className="m-0 max-w-3xl text-sm text-muted-foreground">{room.topic}</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant={templateBadge.variant} className={templateBadge.className}>
-                    {template?.name ?? "Template"}
-                  </Badge>
-                  <Badge variant={neutralBadge.variant} className={neutralBadge.className}>
-                    {members.length} members
-                  </Badge>
-                  <Badge variant={watcherBadge.variant} className={watcherBadge.className}>
-                    {room.watcherIds.length} watchers
-                  </Badge>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
+          <RoomTopBar
+            leftSidebarCollapsed={leftSidebarCollapsed}
+            rightSidebarCollapsed={rightSidebarCollapsed}
+            room={room}
+            template={template}
+            members={members}
+            activeStreamSummary={roomChat.activeStreamSummary}
+            onToggleLeftSidebar={onToggleLeftSidebar}
+            onToggleRightSidebar={onToggleRightSidebar}
+          />
           <Card className="min-h-0 flex-1 overflow-hidden border border-border shadow-sm">
             <CardContent className="flex h-full min-h-0 flex-col p-0">
-              <div className="flex shrink-0 flex-wrap items-start justify-between gap-4 border-b border-border px-5 py-4">
-                <div className="space-y-1">
-                  <p className="m-0 text-2xl font-semibold tracking-tight">Room transcript</p>
-                  <p className="m-0 text-sm text-muted-foreground">{describeStreamingState(roomChat.activeStreamSummary)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline">{roomChat.messages.length} messages</Badge>
-                  <Badge variant="secondary">newest at bottom</Badge>
-                  <RoomInfoPopover room={room} template={template} members={members} />
-                </div>
-              </div>
               <div className="relative min-h-0 flex-1">
-                <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4" onScroll={updateScrollState}>
+                <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-5" onScroll={updateScrollState}>
                   {roomChat.messages.map((message) => {
                     const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
                     const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
@@ -316,6 +283,51 @@ function ShellToolbar(props: {
   );
 }
 
+function RoomTopBar(props: {
+  leftSidebarCollapsed: boolean;
+  rightSidebarCollapsed: boolean;
+  room: Room;
+  template?: TeamTemplate;
+  members: TeamMember[];
+  activeStreamSummary?: string;
+  onToggleLeftSidebar: () => void;
+  onToggleRightSidebar: () => void;
+}) {
+  const { leftSidebarCollapsed, rightSidebarCollapsed, room, template, members, activeStreamSummary, onToggleLeftSidebar, onToggleRightSidebar } =
+    props;
+  const templateBadge = badgeToneProps(template?.accentTone ?? "paper");
+  const watcherBadge = badgeToneProps("correction");
+  const neutralBadge = badgeToneProps("paper");
+  const statusBadgeLabel = activeStreamSummary ? "Running" : "Ready";
+
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <PanelToggleButton collapsed={leftSidebarCollapsed} side="left" onToggle={onToggleLeftSidebar} />
+        <div className="min-w-0 flex-1 space-y-2 pt-0.5">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <p className="m-0 text-3xl font-semibold tracking-tight">{room.name}</p>
+            <Badge variant={templateBadge.variant} className={templateBadge.className}>
+              {template?.name ?? "Template"}
+            </Badge>
+            <Badge variant={neutralBadge.variant} className={neutralBadge.className}>
+              {members.length} members
+            </Badge>
+            <Badge variant={watcherBadge.variant} className={watcherBadge.className}>
+              {room.watcherIds.length} watchers
+            </Badge>
+            <Badge variant="outline">{statusBadgeLabel}</Badge>
+            <RoomInfoPopover room={room} template={template} members={members} />
+          </div>
+          <p className="m-0 max-w-3xl text-sm text-muted-foreground">{room.topic}</p>
+          {activeStreamSummary ? <p className="m-0 text-sm text-muted-foreground">{activeStreamSummary}</p> : null}
+        </div>
+      </div>
+      <PanelToggleButton collapsed={rightSidebarCollapsed} side="right" onToggle={onToggleRightSidebar} />
+    </div>
+  );
+}
+
 function RoomMembersSidebar(props: {
   room: Room;
   snapshot: WorkspaceSnapshot;
@@ -330,17 +342,12 @@ function RoomMembersSidebar(props: {
     <aside className="absolute inset-y-0 right-0 z-20 w-[min(23rem,84vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
       <Card className="flex h-full min-h-0 flex-col border border-border shadow-sm">
         <CardContent className="flex h-full min-h-0 flex-col gap-0 p-0">
-          <div className="shrink-0 border-b border-border px-5 py-4">
+          <div className="shrink-0 border-b border-border px-5 py-3.5">
             <div className="flex items-center justify-between gap-3">
-              <div className="space-y-1">
-                <p className="m-0 flex items-center gap-2 text-lg font-semibold tracking-tight">
-                  <Users size={18} />
-                  Members
-                </p>
-                <p className="m-0 text-sm text-muted-foreground">
-                  团队通常不大，右侧保留更多状态，便于快速切换到具体 member session。
-                </p>
-              </div>
+              <p className="m-0 flex items-center gap-2 text-lg font-semibold tracking-tight">
+                <Users size={18} />
+                Members
+              </p>
               <Badge variant="outline">{members.length}</Badge>
             </div>
           </div>
@@ -438,19 +445,11 @@ function RoomInfoPopover(props: {
         </PopoverHeader>
         <div className="space-y-2 text-sm text-muted-foreground">
           <p className="m-0">首条问题会把 room 主题初始化为：{summarizePrompt(room.topic, 80)}。</p>
-          <p className="m-0">后台 runtime 会自动驱动 {members.length} 个成员 turn；更完整的执行细节和私聊上下文放在成员 Session，群聊只显示真实发出的消息。</p>
+          <p className="m-0">成员 Session 里可以看到更完整的执行细节和 direct 上下文。</p>
         </div>
       </PopoverContent>
     </Popover>
   );
-}
-
-function describeStreamingState(activeStreamSummary?: string): string {
-  if (activeStreamSummary) {
-    return activeStreamSummary;
-  }
-
-  return "成员内部推理只显示为处理状态；只有显式发送到 room 或 direct 的消息才会出现在消息流里。";
 }
 
 function inferMessageStatus(message: WorkspaceUIMessage): ChatMessage["status"] {

@@ -32,6 +32,8 @@ describe("MemberStudioDialog", () => {
       />,
     );
 
+    expect(screen.queryByText("深配置收进这里。主聊天页只保留概览和入口动作。")).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("tab", { name: "Behavior" }));
     await user.clear(screen.getByRole("textbox", { name: /Summary/i }));
     await user.type(screen.getByRole("textbox", { name: /Summary/i }), "Builder summary v2");
