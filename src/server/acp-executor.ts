@@ -12,11 +12,75 @@ import type { ExecutionRequest, ExecutorCallbacks, MemberExecutor } from "./exec
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { TerminalRegistry } from "./terminal-registry";
 
+const ACP_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const ACP_CANCEL_TIMEOUT_MS = 5 * 1000;
+
 export interface MemberToolHost {
   sendGroupMessage(input: { roomId: RoomId; memberId: string; taskId: string; content: string }): Promise<void>;
   sendDirectMessage(input: { roomId: RoomId; memberId: string; taskId: string; targetHandle: string; content: string }): Promise<void>;
   runWatcher(input: { watcherId: string }): Promise<void>;
   inspectRoomState(input: { roomId: RoomId }): Promise<string>;
+}
+
+class TimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+class IdleTimeoutController {
+  private readonly timeoutPromise: Promise<never>;
+  private rejectTimeout?: (error: Error) => void;
+  private timer?: ReturnType<typeof setTimeout>;
+  private stopped = false;
+
+  constructor(
+    private readonly timeoutMs: number,
+    private readonly onTimeout: () => void,
+    private readonly label: string,
+  ) {
+    this.timeoutPromise = new Promise<never>((_resolve, reject) => {
+      this.rejectTimeout = reject;
+    });
+    this.touch();
+  }
+
+  touch(): void {
+    if (this.stopped) {
+      return;
+    }
+
+    if (this.timer) {
+      clearTimeout(this.timer);
+    }
+
+    this.timer = setTimeout(() => {
+      if (this.stopped) {
+        return;
+      }
+
+      this.stopped = true;
+      this.onTimeout();
+      this.rejectTimeout?.(new TimeoutError(`${this.label} timed out after ${this.timeoutMs}ms without activity`));
+    }, this.timeoutMs);
+  }
+
+  async race<T>(operation: Promise<T>): Promise<T> {
+    return Promise.race([operation, this.timeoutPromise]);
+  }
+
+  stop(): void {
+    if (this.stopped) {
+      return;
+    }
+
+    this.stopped = true;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+  }
 }
 
 function resolveSpawnCommand(member: TeamMember): { command: string; args: string[] } {
@@ -84,7 +148,7 @@ export class AcpMemberExecutor implements MemberExecutor {
   private readonly member: TeamMember;
   private readonly host: MemberToolHost;
   private readonly terminalRegistry = new TerminalRegistry();
-  private readonly provider;
+  private provider: ReturnType<typeof createACPProvider>;
   private codexSessionPrepared = false;
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
@@ -93,17 +157,7 @@ export class AcpMemberExecutor implements MemberExecutor {
     this.workspaceRoot = args.workspaceRoot;
     this.member = args.member;
     this.host = args.host;
-    const spawnCommand = resolveSpawnCommand(this.member);
-    this.provider = createACPProvider({
-      command: spawnCommand.command,
-      args: spawnCommand.args,
-      env: this.member.provider.env,
-      session: {
-        cwd: this.member.provider.workingDirectory ?? this.workspaceRoot,
-        mcpServers: [],
-      },
-      persistSession: true,
-    });
+    this.provider = this.createProvider();
   }
 
   async execute(request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
@@ -113,9 +167,17 @@ export class AcpMemberExecutor implements MemberExecutor {
 
     let finalContent = "";
     const tools = this.createWorkspaceTools(request);
+    const idleTimeout = new IdleTimeoutController(
+      ACP_IDLE_TIMEOUT_MS,
+      () => {
+        abortController.abort("timed_out");
+      },
+      `ACP turn for @${this.member.handle}`,
+    );
     const currentTurn = (async () => {
       try {
         await this.prepareProviderSession(tools);
+        idleTimeout.touch();
         const result = streamText({
           abortSignal: abortController.signal,
           includeRawChunks: true,
@@ -123,6 +185,7 @@ export class AcpMemberExecutor implements MemberExecutor {
           prompt: request.prompt,
           tools,
           onChunk: async ({ chunk }) => {
+            idleTimeout.touch();
             switch (chunk.type) {
               case "text-delta":
                 finalContent = `${finalContent}${chunk.text}`;
@@ -154,19 +217,24 @@ export class AcpMemberExecutor implements MemberExecutor {
           },
         });
 
-        const [text, finishReason] = await Promise.all([result.text, result.finishReason]);
+        const [text, finishReason] = await idleTimeout.race(Promise.all([result.text, result.finishReason]));
+        idleTimeout.stop();
         if (abortController.signal.aborted) {
           return;
         }
 
         await callbacks.onComplete(text.trim().length > 0 ? text : finalContent, finishReason);
       } catch (error) {
-        if (abortController.signal.aborted) {
+        if (abortController.signal.aborted && abortController.signal.reason === "cancelled") {
           return;
         }
 
+        if (error instanceof TimeoutError) {
+          await this.resetProvider();
+        }
         await callbacks.onError(getErrorMessage(error as RuntimeError));
       } finally {
+        idleTimeout.stop();
         if (this.currentAbortController === abortController) {
           this.currentAbortController = undefined;
           this.currentTurn = undefined;
@@ -183,11 +251,24 @@ export class AcpMemberExecutor implements MemberExecutor {
       return;
     }
 
-    this.currentAbortController.abort("cancelled");
+    const abortController = this.currentAbortController;
+    const currentTurn = this.currentTurn;
+    abortController.abort("cancelled");
     try {
-      await this.currentTurn;
+      await withTimeout(
+        currentTurn,
+        ACP_CANCEL_TIMEOUT_MS,
+        () => undefined,
+        `ACP cancel for @${this.member.handle}`,
+      );
     } catch {
-      // The current turn already forwards errors through callbacks.
+      await this.resetProvider();
+      if (this.currentAbortController === abortController) {
+        this.currentAbortController = undefined;
+      }
+      if (this.currentTurn === currentTurn) {
+        this.currentTurn = undefined;
+      }
     }
   }
 
@@ -320,6 +401,27 @@ export class AcpMemberExecutor implements MemberExecutor {
     return resolvedPath;
   }
 
+  private createProvider(): ReturnType<typeof createACPProvider> {
+    const spawnCommand = resolveSpawnCommand(this.member);
+    return createACPProvider({
+      command: spawnCommand.command,
+      args: spawnCommand.args,
+      env: this.member.provider.env,
+      session: {
+        cwd: this.member.provider.workingDirectory ?? this.workspaceRoot,
+        mcpServers: [],
+      },
+      persistSession: true,
+    });
+  }
+
+  private async resetProvider(): Promise<void> {
+    this.provider.cleanup();
+    await this.terminalRegistry.disposeAll();
+    this.provider = this.createProvider();
+    this.codexSessionPrepared = false;
+  }
+
   private async prepareProviderSession(tools: ReturnType<AcpMemberExecutor["createWorkspaceTools"]>): Promise<void> {
     if (this.member.provider.kind !== "codex-acp" || this.codexSessionPrepared) {
       return;
@@ -331,4 +433,29 @@ export class AcpMemberExecutor implements MemberExecutor {
     });
     this.codexSessionPrepared = true;
   }
+}
+
+function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => void,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout();
+      reject(new TimeoutError(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCodexAcpProvider, createGenericAcpProvider } from "@/lib/acp";
 
@@ -96,6 +96,7 @@ function createRequest(provider = createCodexAcpProvider()): ExecutionRequest {
 
 describe("AcpMemberExecutor", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     initSessionMock.mockReset();
     initSessionMock.mockResolvedValue({
       sessionId: "session_1",
@@ -113,6 +114,10 @@ describe("AcpMemberExecutor", () => {
       text: Promise.resolve("done"),
       finishReason: Promise.resolve("stop"),
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("switches codex sessions to full-access before streaming", async () => {
@@ -168,5 +173,154 @@ describe("AcpMemberExecutor", () => {
     expect(initSessionMock).not.toHaveBeenCalled();
     expect(setModeMock).not.toHaveBeenCalled();
     expect(streamTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails a turn after the ACP stream stops making progress", async () => {
+    vi.useFakeTimers();
+    streamTextMock.mockReturnValue({
+      text: new Promise<string>(() => undefined),
+      finishReason: new Promise<string>(() => undefined),
+    });
+
+    const request = createRequest();
+    const onError = vi.fn(() => Promise.resolve());
+    const onComplete = vi.fn(() => Promise.resolve());
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: {
+        sendGroupMessage: () => Promise.resolve(),
+        sendDirectMessage: () => Promise.resolve(),
+        runWatcher: () => Promise.resolve(),
+        inspectRoomState: () => Promise.resolve("state"),
+      },
+    });
+
+    const runPromise = executor.execute(request, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete,
+      onError,
+    });
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    await runPromise;
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith("ACP turn for @lead timed out after 300000ms without activity");
+    expect(cleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a turn alive while chunks continue arriving before the idle timeout", async () => {
+    vi.useFakeTimers();
+    streamTextMock.mockImplementation(({ onChunk }: { onChunk: (event: { chunk: { type: string; text: string } }) => Promise<void> }) => {
+      setTimeout(() => {
+        void onChunk({
+          chunk: {
+            type: "text-delta",
+            text: "still working",
+          },
+        });
+      }, 4 * 60 * 1000);
+
+      return {
+        text: new Promise<string>((resolve) => {
+          setTimeout(() => {
+            resolve("done");
+          }, 6 * 60 * 1000);
+        }),
+        finishReason: Promise.resolve("stop"),
+      };
+    });
+
+    const request = createRequest();
+    const onComplete = vi.fn(() => Promise.resolve());
+    const onError = vi.fn(() => Promise.resolve());
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: {
+        sendGroupMessage: () => Promise.resolve(),
+        sendDirectMessage: () => Promise.resolve(),
+        runWatcher: () => Promise.resolve(),
+        inspectRoomState: () => Promise.resolve("state"),
+      },
+    });
+
+    const runPromise = executor.execute(request, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete,
+      onError,
+    });
+
+    await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+    expect(onError).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    await runPromise;
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith("done", "stop");
+    expect(cleanupMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a new turn continue after cancel times out on a stuck prior turn", async () => {
+    vi.useFakeTimers();
+    streamTextMock
+      .mockReturnValueOnce({
+        text: new Promise<string>(() => undefined),
+        finishReason: new Promise<string>(() => undefined),
+      })
+      .mockReturnValueOnce({
+        text: Promise.resolve("second turn"),
+        finishReason: Promise.resolve("stop"),
+      });
+
+    const request = createRequest();
+    const firstExecutor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: {
+        sendGroupMessage: () => Promise.resolve(),
+        sendDirectMessage: () => Promise.resolve(),
+        runWatcher: () => Promise.resolve(),
+        inspectRoomState: () => Promise.resolve("state"),
+      },
+    });
+
+    const firstRun = firstExecutor.execute(request, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError: () => Promise.resolve(),
+    });
+    await Promise.resolve();
+
+    const secondComplete = vi.fn(() => Promise.resolve());
+    const secondRun = firstExecutor.execute(
+      {
+        ...request,
+        task: {
+          ...request.task,
+          id: "task_2",
+        },
+      },
+      {
+        onDraft: () => Promise.resolve(),
+        onStatus: () => Promise.resolve(),
+        onComplete: secondComplete,
+        onError: () => Promise.resolve(),
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(5 * 1000);
+    await secondRun;
+
+    expect(secondComplete).toHaveBeenCalledWith("second turn", "stop");
+    expect(cleanupMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    await firstRun;
   });
 });
