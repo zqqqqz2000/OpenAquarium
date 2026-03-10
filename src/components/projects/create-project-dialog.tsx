@@ -54,7 +54,7 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
           <DialogDescription>room 名会按首条问题自动生成，template 第一次固定。</DialogDescription>
         </DialogHeader>
         <Card className="border border-transparent shadow-none">
-          <CardContent className="flex flex-col gap-4 p-0">
+          <CardContent className="flex flex-col gap-4">
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">Project name</span>
               <Input value={projectName} onChange={(event) => setProjectName(event.currentTarget.value)} />
@@ -148,7 +148,7 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
                 }}
                 disabled={disabled || projectName.trim().length === 0 || firstPrompt.trim().length === 0 || templateId.length === 0}
               >
-                Create room
+                Create project
               </Button>
             </div>
           </CardContent>

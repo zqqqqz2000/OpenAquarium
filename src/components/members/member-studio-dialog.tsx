@@ -161,7 +161,7 @@ export function MemberStudioDialog(props: {
           </DialogHeader>
         </div>
 
-        <div className={cn("grid min-h-0 gap-4 overflow-hidden p-4 lg:p-5", isSessionTab ? "lg:grid-cols-[220px_minmax(0,1fr)]" : "lg:grid-cols-[272px_minmax(0,1fr)]")}>
+        <div className={cn("grid min-h-0 gap-3 overflow-hidden p-3 lg:p-4", isSessionTab ? "lg:grid-cols-[220px_minmax(0,1fr)]" : "lg:grid-cols-[272px_minmax(0,1fr)]")}>
           <div className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1">
             <Card>
               <CardContent className="flex flex-col gap-3 p-4">
@@ -215,7 +215,7 @@ export function MemberStudioDialog(props: {
             ) : null}
           </div>
 
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-col gap-3 overflow-hidden">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-col gap-2 overflow-hidden">
             <TabsList variant="line" className="h-auto w-full flex-wrap justify-start rounded-none border-b bg-transparent p-0">
               {[
                 ["session", "Session"],
@@ -245,15 +245,15 @@ export function MemberStudioDialog(props: {
               </TabsContent>
 
               <TabsContent value="history" className="m-0">
-                <Card>
-                  <CardContent className="flex flex-col gap-4 p-4">
+                <Card className="border-none bg-transparent py-0 ring-0 shadow-none">
+                  <CardContent className="flex flex-col gap-3 p-0">
                     <div>
                       <p className="m-0 text-lg font-semibold tracking-tight">Processing history</p>
                       <p className="m-0 text-sm text-muted-foreground">
                         这里是结果化消息视图。更完整的私聊和执行上下文在 Session 里。
                       </p>
                     </div>
-                    <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-3">
                       {memberHistory.map((entry) => {
                         const historyAuthor =
                           entry.message.author.kind === "member" ? snapshot.members[entry.message.author.id] : undefined;
@@ -271,7 +271,7 @@ export function MemberStudioDialog(props: {
                         );
                       })}
                       {memberHistory.length === 0 ? (
-                        <Card className="border-dashed">
+                        <Card className="border-dashed shadow-none">
                           <CardContent className="p-5">
                             <p className="m-0 text-sm text-muted-foreground">
                               这个成员还没有接到过消息，也没有留下处理痕迹。

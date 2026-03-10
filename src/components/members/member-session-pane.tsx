@@ -187,9 +187,9 @@ export function MemberSessionPane(props: {
   }, [latestEntryId, member.id, showScrollToLatest]);
 
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden border-none bg-transparent py-0 ring-0 shadow-none">
       <CardContent className="flex h-full min-h-0 flex-col p-0">
-        <div className="shrink-0 border-b border-border px-4 py-3">
+        <div className="shrink-0 px-0 py-2">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="space-y-1">
               <p className="m-0 text-lg font-semibold tracking-tight">Member session</p>
@@ -203,8 +203,8 @@ export function MemberSessionPane(props: {
         </div>
 
         <div className="relative min-h-0 flex-1">
-          <div ref={transcriptRef} className="h-full min-h-0 overflow-y-auto px-4 py-4" onScroll={updateScrollState}>
-            <div className="flex flex-col gap-4">
+          <div ref={transcriptRef} className="h-full min-h-0 overflow-y-auto px-0 py-1" onScroll={updateScrollState}>
+            <div className="flex flex-col gap-3">
               {sessionEntries.map((entry) =>
                 entry.type === "message" ? (
                   <MessageBubble
@@ -222,7 +222,7 @@ export function MemberSessionPane(props: {
                 ),
               )}
               {sessionEntries.length === 0 ? (
-                <Card className="border-dashed">
+                <Card className="border-dashed shadow-none">
                   <CardContent className="p-5">
                     <p className="m-0 text-sm text-muted-foreground">
                       还没有 session 内容。下一次这个成员接到任务或收到私聊后，这里会出现完整时间线。
@@ -233,18 +233,18 @@ export function MemberSessionPane(props: {
             </div>
           </div>
           {showScrollToLatest ? (
-            <Button className="absolute right-4 bottom-4 shadow-lg" size="sm" type="button" onClick={() => scrollTimelineToLatest()}>
+            <Button className="absolute right-0 bottom-2 shadow-lg" size="sm" type="button" onClick={() => scrollTimelineToLatest()}>
               <ArrowDown size={16} />
               Jump to latest
             </Button>
           ) : null}
         </div>
 
-        <div className="shrink-0 border-t border-border px-4 py-3">
+        <div className="shrink-0 px-0 py-2">
           <ChatComposer
-            className="border-none bg-transparent py-0 shadow-none ring-0"
+            className="py-0"
             contentClassName="gap-2 p-0"
-            textareaClassName="min-h-16"
+            textareaClassName="min-h-12"
             connected={connected && canSendDirectMessage}
             error={canSendDirectMessage ? error : "当前 session 不支持直接发消息。"}
             members={[member]}

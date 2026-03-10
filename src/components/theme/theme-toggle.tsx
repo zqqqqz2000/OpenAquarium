@@ -20,7 +20,7 @@ function ThemeButton(props: {
     <Button
       variant={active ? "default" : "ghost"}
       size="sm"
-      className={cn("h-8 w-full gap-1.5 px-3", active ? "shadow-sm" : "text-muted-foreground", className)}
+      className={cn("h-7 w-full gap-1.5 px-3", active ? "shadow-sm" : "text-muted-foreground", className)}
       onClick={onClick}
     >
       {icon}
@@ -40,7 +40,7 @@ export function ThemeToggle(props: { className?: string }) {
   };
 
   return (
-    <div className={cn("grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/70 p-1", className)}>
+    <div className={cn("grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/70 p-0.5", className)}>
       <ThemeButton active={theme === "light"} icon={<Sun size={14} />} label="Light" onClick={() => applyTheme("light")} />
       <ThemeButton active={theme === "dark"} icon={<Moon size={14} />} label="Dark" onClick={() => applyTheme("dark")} />
     </div>

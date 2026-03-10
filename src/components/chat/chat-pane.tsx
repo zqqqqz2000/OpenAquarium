@@ -155,7 +155,7 @@ export function ChatPane(props: {
   }
 
   return (
-    <main className="flex h-full min-h-0 min-w-0 flex-col gap-5 overflow-hidden border-x border-border/70 bg-background/70 px-4 py-5 md:px-6">
+    <main className="flex h-full min-h-0 min-w-0 flex-col gap-3 overflow-hidden bg-background/70 px-3 py-3 md:px-4">
       {!connected || error ? (
         <Card className="border border-destructive/30 bg-destructive/5 shadow-sm">
           <CardContent className="flex flex-col gap-2 p-4">
@@ -172,7 +172,7 @@ export function ChatPane(props: {
       <div
         className={cn(
           "relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden",
-          !rightSidebarCollapsed && "xl:grid-cols-[minmax(0,1fr)_minmax(21rem,25rem)] xl:gap-5",
+          !rightSidebarCollapsed && "xl:grid-cols-[minmax(0,1fr)_minmax(21rem,25rem)] xl:gap-3",
         )}
       >
         {!rightSidebarCollapsed ? (
@@ -183,7 +183,7 @@ export function ChatPane(props: {
             onClick={onToggleRightSidebar}
           />
         ) : null}
-        <section className="flex h-full min-h-0 min-w-0 flex-col gap-4">
+        <section className="flex h-full min-h-0 min-w-0 flex-col gap-3">
           <RoomTopBar
             leftSidebarCollapsed={leftSidebarCollapsed}
             rightSidebarCollapsed={rightSidebarCollapsed}
@@ -194,52 +194,50 @@ export function ChatPane(props: {
             onToggleLeftSidebar={onToggleLeftSidebar}
             onToggleRightSidebar={onToggleRightSidebar}
           />
-          <Card className="min-h-0 flex-1 overflow-hidden border border-border shadow-sm">
-            <CardContent className="flex h-full min-h-0 flex-col p-0">
-              <div className="relative min-h-0 flex-1">
-                <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-5" onScroll={updateScrollState}>
-                  {roomChat.messages.map((message) => {
-                    const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
-                    const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
+          <div className="relative min-h-0 flex-1">
+            <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-1 py-1 md:px-2" onScroll={updateScrollState}>
+              {roomChat.messages.map((message) => {
+                const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
+                const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
 
-                    return (
-                      <MessageBubble
-                        key={bubble.message.id}
-                        message={bubble.message}
-                        authorMember={authorMember}
-                        mentionedHandles={bubble.mentionedHandles}
-                        recipientHandles={bubble.recipientHandles}
-                        handlerSummaries={bubble.handlerSummaries}
-                        onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
-                      />
-                    );
-                  })}
-                  {roomChat.messages.length === 0 ? (
-                    <Card className="border border-border shadow-sm">
-                      <CardContent className="flex items-center gap-4 p-6">
-                        <Bot size={28} />
-                        <p className="m-0 text-sm text-muted-foreground">还没有消息。发第一句话，入口 member 会先接住。</p>
-                      </CardContent>
-                    </Card>
-                  ) : null}
-                </div>
-                {showScrollToLatest ? (
-                  <Button
-                    className="absolute right-5 bottom-4 shadow-lg"
-                    size="sm"
-                    type="button"
-                    onClick={() => scrollTranscriptToLatest()}
-                  >
-                    <ArrowDown size={16} />
-                    Jump to latest
-                  </Button>
-                ) : null}
-              </div>
-            </CardContent>
-          </Card>
+                return (
+                  <MessageBubble
+                    key={bubble.message.id}
+                    message={bubble.message}
+                    authorMember={authorMember}
+                    mentionedHandles={bubble.mentionedHandles}
+                    recipientHandles={bubble.recipientHandles}
+                    handlerSummaries={bubble.handlerSummaries}
+                    onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
+                  />
+                );
+              })}
+              {roomChat.messages.length === 0 ? (
+                <Card className="border border-border shadow-none">
+                  <CardContent className="flex items-center gap-4 p-5">
+                    <Bot size={28} />
+                    <p className="m-0 text-sm text-muted-foreground">还没有消息。发第一句话，入口 member 会先接住。</p>
+                  </CardContent>
+                </Card>
+              ) : null}
+            </div>
+            {showScrollToLatest ? (
+              <Button
+                className="absolute right-2 bottom-2 shadow-lg"
+                size="sm"
+                type="button"
+                onClick={() => scrollTranscriptToLatest()}
+              >
+                <ArrowDown size={16} />
+                Jump to latest
+              </Button>
+            ) : null}
+          </div>
 
           <ChatComposer
-            className="shrink-0"
+            className="shrink-0 py-0"
+            contentClassName="gap-2 p-0"
+            textareaClassName="min-h-16"
             connected={connected}
             error={error}
             members={members}

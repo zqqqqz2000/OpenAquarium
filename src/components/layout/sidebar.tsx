@@ -1,4 +1,4 @@
-import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { Link } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, FolderKanban, MessageSquareShare, Waves } from "lucide-react";
@@ -8,7 +8,6 @@ import { CreateProjectDialog } from "@/components/projects/create-project-dialog
 import { CreateRoomDialog } from "@/components/projects/create-room-dialog";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import { cn, summarizePrompt } from "@/lib/utils";
 import { badgeToneProps } from "@/lib/ui-tone";
 
@@ -27,138 +26,144 @@ export function Sidebar(props: {
   const { collapsed, projects, roomsByProject, activeProjectId, activeRoomId, templates, connected, error, loading, onResizeStart } = props;
   const connectionBadge = badgeToneProps(connected ? "blueprint" : "correction");
   const actionsDisabled = !connected || loading;
-  const [expandedProjectIds, setExpandedProjectIds] = useState<Record<string, boolean>>(() =>
-    createInitialExpandedProjectIds(projects, activeProjectId),
-  );
-
-  useEffect(() => {
-    setExpandedProjectIds((current) => {
-      const next = Object.fromEntries(projects.map((project) => [project.id, current[project.id] ?? project.id === activeProjectId])) as Record<
-        string,
-        boolean
-      >;
-
-      if (activeProjectId && !next[activeProjectId]) {
-        next[activeProjectId] = true;
-      }
-
-      const currentKeys = Object.keys(current);
-      const nextKeys = Object.keys(next);
-      const hasSameKeys = currentKeys.length === nextKeys.length && nextKeys.every((key) => currentKeys.includes(key));
-      const hasSameValues = hasSameKeys && nextKeys.every((key) => current[key] === next[key]);
-
-      return hasSameValues ? current : next;
-    });
-  }, [activeProjectId, projects]);
+  const [expandedProjectOverrides, setExpandedProjectOverrides] = useState<Record<string, boolean>>({});
+  const defaultExpandedProjectId = activeProjectId ?? projects[0]?.id;
+  const expandedProjectIds = Object.fromEntries(
+    projects.map((project) => [project.id, expandedProjectOverrides[project.id] ?? project.id === defaultExpandedProjectId]),
+  ) as Record<string, boolean>;
+  const toggleProjectExpanded = (projectId: string): void => {
+    setExpandedProjectOverrides((current) => ({
+      ...current,
+      [projectId]: !expandedProjectIds[projectId],
+    }));
+  };
 
   if (collapsed) {
     return <aside className="min-h-0 min-w-0 overflow-hidden" data-collapsed="true" aria-hidden />;
   }
 
   return (
-    <aside className="relative z-20 flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden border-r border-border/60 bg-background/96 px-4 py-5 backdrop-blur md:px-5 max-[860px]:absolute max-[860px]:inset-y-0 max-[860px]:left-0 max-[860px]:w-[min(21rem,82vw)] max-[860px]:shadow-2xl">
-      <Card className="shrink-0 border border-border shadow-sm">
-        <CardContent className="flex flex-col gap-3 p-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card shadow-sm">
-              <Waves size={22} />
-            </div>
-            <div className="min-w-0">
-              <p className="m-0 truncate text-2xl font-semibold tracking-tight">OpenAquarium</p>
-              <p className="m-0 text-sm text-muted-foreground">ACP multi-agent workspace.</p>
-            </div>
+    <aside className="relative z-20 flex h-full min-h-0 min-w-0 flex-col gap-3 overflow-hidden border-r border-border/60 bg-background/96 px-3 py-3 backdrop-blur md:px-4 max-[860px]:absolute max-[860px]:inset-y-0 max-[860px]:left-0 max-[860px]:w-[min(21rem,82vw)] max-[860px]:shadow-2xl">
+      <div className="shrink-0 space-y-2.5">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-9 items-center justify-center rounded-xl border border-border/70 bg-card shadow-sm">
+            <Waves size={20} />
           </div>
-          <ThemeToggle className="w-full" />
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={connectionBadge.variant} className={connectionBadge.className}>
-              {connected ? "Runtime online" : "Runtime offline"}
-            </Badge>
-            {loading ? <Badge variant="secondary">Loading state…</Badge> : null}
-            <CreateProjectDialog templates={templates} triggerClassName="ml-auto" disabled={actionsDisabled} />
+          <div className="min-w-0">
+            <p className="m-0 truncate text-[1.9rem] font-semibold tracking-tight">OpenAquarium</p>
+            <p className="m-0 text-sm text-muted-foreground">ACP multi-agent workspace.</p>
           </div>
-          {!connected ? (
-            <p className="m-0 text-xs leading-5 text-muted-foreground">
-              启动本地 runtime：<span className="font-mono">bun run server</span>
-            </p>
-          ) : null}
-          {error ? <p className="m-0 text-xs leading-5 text-destructive">{error}</p> : null}
-        </CardContent>
-      </Card>
+        </div>
+        <ThemeToggle className="w-full" />
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={connectionBadge.variant} className={connectionBadge.className}>
+            {connected ? "Runtime online" : "Runtime offline"}
+          </Badge>
+          {loading ? <Badge variant="secondary">Loading state…</Badge> : null}
+          <CreateProjectDialog templates={templates} triggerClassName="ml-auto" disabled={actionsDisabled} />
+        </div>
+        {!connected ? (
+          <p className="m-0 text-xs leading-5 text-muted-foreground">
+            启动本地 runtime：<span className="font-mono">bun run server</span>
+          </p>
+        ) : null}
+        {error ? <p className="m-0 text-xs leading-5 text-destructive">{error}</p> : null}
+      </div>
 
-      <Card className="min-h-0 flex-[1.35] border border-border shadow-sm">
-        <CardContent className="flex h-full min-h-0 flex-col gap-4 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="min-h-0 flex-[1.35] border-t border-border/40 pt-3">
+        <div className="flex h-full min-h-0 flex-col gap-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
             <div className="flex min-w-0 items-center gap-2">
-              <FolderKanban size={20} />
+              <FolderKanban size={18} />
               <p className="m-0 text-xl font-semibold tracking-tight">Projects</p>
+              <Badge variant="outline">{projects.length}</Badge>
             </div>
-            <CreateRoomDialog activeProjectId={activeProjectId} projects={projects} templates={templates} disabled={actionsDisabled} />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2.5">
               {projects.map((project) => (
-                <Card
+                <div
                   key={project.id}
-                  size="sm"
                   className={cn(
-                    "border border-border shadow-sm",
+                    "rounded-[1.45rem] border border-border/80 bg-card px-3 py-2.5 text-sm text-card-foreground shadow-sm",
                     project.id === activeProjectId && "border-ring bg-accent/5",
                   )}
                 >
-                  <CardContent className="flex flex-col gap-3 p-3">
-                    <button
-                      type="button"
-                      className="flex w-full items-start justify-between gap-3 text-left"
-                      onClick={() =>
-                        setExpandedProjectIds((current) => ({
-                          ...current,
-                          [project.id]: !current[project.id],
-                        }))
-                      }
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate text-base font-semibold tracking-tight">{project.name}</span>
-                        <span className="block text-sm text-muted-foreground">{roomsByProject[project.id]?.length ?? 0} rooms</span>
-                      </span>
-                      <span className="flex shrink-0 items-center gap-2">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <button
+                          type="button"
+                          className="block w-full truncate rounded-none border-0 bg-transparent p-0 text-left text-base font-semibold tracking-tight"
+                          onClick={() => toggleProjectExpanded(project.id)}
+                        >
+                          {project.name}
+                        </button>
+                        <div className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+                          <button
+                            type="button"
+                            className="rounded-none border-0 bg-transparent p-0 text-left text-sm text-muted-foreground"
+                            onClick={() => toggleProjectExpanded(project.id)}
+                          >
+                            {roomsByProject[project.id]?.length ?? 0} rooms
+                          </button>
+                          <CreateRoomDialog
+                            project={project}
+                            templates={templates}
+                            disabled={actionsDisabled}
+                            triggerMode="icon"
+                            triggerClassName="size-6"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label={expandedProjectIds[project.id] ? `Collapse ${project.name}` : `Expand ${project.name}`}
+                        className="flex shrink-0 items-center gap-2 self-start rounded-none border-0 bg-transparent p-0"
+                        onClick={() => toggleProjectExpanded(project.id)}
+                      >
                         <Badge variant="outline">{roomsByProject[project.id]?.length ?? 0}</Badge>
                         {expandedProjectIds[project.id] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                      </span>
-                    </button>
+                      </button>
+                    </div>
                     {expandedProjectIds[project.id] ? (
-                      <div className="flex flex-col gap-2">
-                        {(roomsByProject[project.id] ?? []).map((room) => (
-                          <Link
-                            key={room.id}
-                            to="/projects/$projectId/rooms/$roomId"
-                            params={{ projectId: project.id, roomId: room.id }}
-                            className="no-underline"
-                          >
-                            <div
-                              className={cn(
-                                "flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2 text-left shadow-sm transition-colors hover:bg-muted/60",
-                                room.id === activeRoomId && "border-ring bg-accent/5",
-                              )}
+                      <div className="flex flex-col gap-1.5">
+                        {(roomsByProject[project.id] ?? []).length > 0 ? (
+                          (roomsByProject[project.id] ?? []).map((room) => (
+                            <Link
+                              key={room.id}
+                              to="/projects/$projectId/rooms/$roomId"
+                              params={{ projectId: project.id, roomId: room.id }}
+                              className="no-underline"
                             >
-                              <span className="min-w-0">
-                                <span className="block truncate text-sm font-medium">{room.name}</span>
-                                <span className="block truncate text-xs text-muted-foreground">
-                                  {summarizePrompt(room.topic, 40)}
+                              <div
+                                className={cn(
+                                  "flex items-center justify-between rounded-lg border border-border/70 bg-card px-2.5 py-1.5 text-left shadow-sm transition-colors hover:bg-muted/60",
+                                  room.id === activeRoomId && "border-ring bg-accent/5",
+                                )}
+                              >
+                                <span className="min-w-0">
+                                  <span className="block truncate text-sm font-medium">{room.name}</span>
+                                  <span className="block truncate text-xs text-muted-foreground">
+                                    {summarizePrompt(room.topic, 40)}
+                                  </span>
                                 </span>
-                              </span>
-                              <MessageSquareShare size={18} />
-                            </div>
-                          </Link>
-                        ))}
+                                <MessageSquareShare size={18} />
+                              </div>
+                            </Link>
+                          ))
+                        ) : (
+                          <div className="rounded-lg bg-muted/25 px-2.5 py-1.5 text-sm text-muted-foreground">No rooms yet.</div>
+                        )}
                       </div>
                     ) : null}
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       <div
         aria-hidden
@@ -169,10 +174,4 @@ export function Sidebar(props: {
       </div>
     </aside>
   );
-}
-
-function createInitialExpandedProjectIds(projects: Project[], activeProjectId?: string): Record<string, boolean> {
-  const defaultExpandedProjectId = activeProjectId ?? projects[0]?.id;
-
-  return Object.fromEntries(projects.map((project) => [project.id, project.id === defaultExpandedProjectId])) as Record<string, boolean>;
 }
