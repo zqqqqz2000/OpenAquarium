@@ -223,11 +223,15 @@ describe("AcpMemberExecutor", () => {
     expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
 
-  it("fails a turn after the ACP stream stops making progress", async () => {
+  it("allows a turn to continue past five minutes without chunks", async () => {
     vi.useFakeTimers();
     streamTextMock.mockReturnValue({
-      text: new Promise<string>(() => undefined),
-      finishReason: new Promise<string>(() => undefined),
+      text: new Promise<string>((resolve) => {
+        setTimeout(() => {
+          resolve("done");
+        }, 6 * 60 * 1000);
+      }),
+      finishReason: Promise.resolve("stop"),
     });
 
     const request = createRequest();
@@ -252,14 +256,18 @@ describe("AcpMemberExecutor", () => {
     });
 
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60 * 1000);
     await runPromise;
 
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledWith("ACP turn for @lead timed out after 300000ms without activity");
-    expect(cleanupMock).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith("done", "stop");
+    expect(cleanupMock).not.toHaveBeenCalled();
   });
 
-  it("keeps a turn alive while chunks continue arriving before the idle timeout", async () => {
+  it("keeps streaming updates working while a long turn is still in progress", async () => {
     vi.useFakeTimers();
     streamTextMock.mockImplementation(({ onChunk }: { onChunk: (event: { chunk: { type: string; text: string } }) => Promise<void> }) => {
       setTimeout(() => {
@@ -315,10 +323,22 @@ describe("AcpMemberExecutor", () => {
 
   it("lets a new turn continue after cancel times out on a stuck prior turn", async () => {
     vi.useFakeTimers();
+    let releaseStuckTurn: (() => void) | undefined;
+    const stuckTurn = new Promise<void>((resolve) => {
+      releaseStuckTurn = resolve;
+    });
     streamTextMock
       .mockReturnValueOnce({
-        text: new Promise<string>(() => undefined),
-        finishReason: new Promise<string>(() => undefined),
+        text: new Promise<string>((resolve) => {
+          void stuckTurn.then(() => {
+            resolve("first turn");
+          });
+        }),
+        finishReason: new Promise<string>((resolve) => {
+          void stuckTurn.then(() => {
+            resolve("stop");
+          });
+        }),
       })
       .mockReturnValueOnce({
         text: Promise.resolve("second turn"),
@@ -368,7 +388,7 @@ describe("AcpMemberExecutor", () => {
     expect(secondComplete).toHaveBeenCalledWith("second turn", "stop");
     expect(cleanupMock).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    releaseStuckTurn?.();
     await firstRun;
   });
 

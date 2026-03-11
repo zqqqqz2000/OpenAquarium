@@ -339,6 +339,46 @@ describe("WorkspaceRuntime", () => {
     expect(runtime.getSnapshot().templates["template-unused-browser-chat-check"]).toBeUndefined();
   });
 
+  it("publishes a room-visible failure message when the executor reports an error", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-error-message-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          if (member.handle === "lead") {
+            await callbacks.onError("executor reported @builder failure\nwith details");
+            return;
+          }
+
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    await createStartedRuntimeRoom(runtime, "Failure Check", "@lead 请回应一下");
+
+    await waitFor(async () => {
+      const snapshot = runtime.getSnapshot();
+      const roomId = snapshot.selection.roomId!;
+      const room = snapshot.rooms[roomId];
+      const lead = room.memberIds
+        .map((memberId) => snapshot.members[memberId])
+        .find((member) => member.handle === "lead")!;
+      const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
+      const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map((traceId) => snapshot.taskTraces[traceId]);
+      const roomMessages = (snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId]);
+      const transcript = await readFile(getRoomTranscriptFilePath(workspaceRoot, room), "utf8");
+
+      expect(leadTask.status).toBe("completed");
+      expect(leadTraceEntries.some((entry) => entry?.kind === "error" && entry.content === "executor reported @builder failure\nwith details")).toBe(true);
+      expect(roomMessages.some((message) => message.author.kind === "member" && message.content === "任务执行失败：executor reported at builder failure with details")).toBe(true);
+      expect(transcript).toContain("任务执行失败：executor reported at builder failure with details");
+      expect(Object.values(snapshot.tasks).some((task) => snapshot.members[task.memberId]?.handle === "builder")).toBe(false);
+    });
+  });
+
   it("captures an error trace when execution crashes before ACP completes", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-crash-"));
     const runtime = new WorkspaceRuntime({
@@ -348,7 +388,7 @@ describe("WorkspaceRuntime", () => {
       executorFactory: ({ member }) =>
         new FakeExecutor(() => {
           if (member.handle === "lead") {
-            return Promise.reject(new Error("executor crashed"));
+            return Promise.reject(new Error("executor crashed @builder"));
           }
 
           return Promise.resolve();
@@ -358,19 +398,25 @@ describe("WorkspaceRuntime", () => {
 
     await createStartedRuntimeRoom(runtime, "Crash Check", "@lead 请回应一下");
 
-    await waitFor(() => {
+    await waitFor(async () => {
       const snapshot = runtime.getSnapshot();
       const roomId = snapshot.selection.roomId!;
-      const lead = snapshot.rooms[roomId].memberIds
+      const room = snapshot.rooms[roomId];
+      const lead = room.memberIds
         .map((memberId) => snapshot.members[memberId])
         .find((member) => member.handle === "lead")!;
       const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
       const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map(
         (traceId) => snapshot.taskTraces[traceId],
       );
+      const roomMessages = (snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId]);
+      const transcript = await readFile(getRoomTranscriptFilePath(workspaceRoot, room), "utf8");
 
       expect(leadTask.status).toBe("completed");
-      expect(leadTraceEntries.some((entry) => entry?.kind === "error")).toBe(true);
+      expect(leadTraceEntries.some((entry) => entry?.kind === "error" && entry.content === "executor crashed @builder")).toBe(true);
+      expect(roomMessages.some((message) => message.author.kind === "member" && message.content === "任务执行失败：executor crashed at builder")).toBe(true);
+      expect(transcript).toContain("任务执行失败：executor crashed at builder");
+      expect(Object.values(snapshot.tasks).some((task) => snapshot.members[task.memberId]?.handle === "builder")).toBe(false);
     });
   });
 

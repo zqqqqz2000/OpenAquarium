@@ -86,6 +86,15 @@ interface TaskObserverEntry {
   resolve(): void;
 }
 
+function buildVisibleTaskFailureContent(message: string): string {
+  const compactMessage = message
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/@([\p{L}\p{N}_-]+)/gu, "at $1");
+
+  return compactMessage.length > 0 ? `任务执行失败：${compactMessage}` : "任务执行失败。";
+}
+
 function cloneTemplates(snapshot: WorkspaceSnapshot): TeamTemplate[] {
   return snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
 }
@@ -997,28 +1006,12 @@ export class WorkspaceRuntime {
             if (!currentTask || currentTask.status !== "running") {
               return;
             }
-            const previous = this.snapshot;
-            const snapshotWithTrace = appendTaskTrace(
-              previous,
-              {
-                taskId,
-                roomId: currentTask.roomId,
-                memberId: currentTask.memberId,
-                kind: "error",
-                title: "Task failed",
-                content: message,
-              },
-              this.context,
-            );
-            const next = completeMemberTask(
-              snapshotWithTrace,
-              {
-                taskId,
-                finalContent: `${member.name} failed to complete the task: ${message}`,
-              },
-              this.context,
-            );
-            await this.applySnapshot(previous, next);
+            await this.completeFailedTask({
+              task: currentTask,
+              member: this.snapshot.members[currentTask.memberId],
+              traceTitle: "Task failed",
+              errorMessage: message,
+            });
             this.logger?.error("task-error", {
               taskId,
               roomId: currentTask.roomId,
@@ -1042,41 +1035,26 @@ export class WorkspaceRuntime {
       const currentTask = this.snapshot.tasks[taskId];
       if (currentTask?.status === "running") {
         const currentMember = this.snapshot.members[currentTask.memberId];
-        const previous = this.snapshot;
         const runtimeError = error as RuntimeError;
-        const snapshotWithTrace = appendTaskTrace(
-          previous,
-          {
-            taskId,
-            roomId: currentTask.roomId,
-            memberId: currentTask.memberId,
-            kind: "error",
-            title: "Task crashed before ACP completion",
-            content: getErrorMessage(runtimeError),
-          },
-          this.context,
-        );
-        const next = completeMemberTask(
-          snapshotWithTrace,
-          {
-            taskId,
-            finalContent: `${currentMember.name} failed before returning a result: ${getErrorMessage(runtimeError)}`,
-          },
-          this.context,
-        );
-        await this.applySnapshot(previous, next);
+        const errorMessage = getErrorMessage(runtimeError);
+        await this.completeFailedTask({
+          task: currentTask,
+          member: currentMember,
+          traceTitle: "Task crashed before ACP completion",
+          errorMessage,
+        });
         this.logger?.error("task-crash", {
           taskId,
           roomId: currentTask.roomId,
           memberId: currentTask.memberId,
-          message: getErrorMessage(runtimeError),
+          message: errorMessage,
           runningTasks: this.runningTaskIds.size,
         });
         const observer = this.taskObservers.get(taskId);
         if (observer) {
           await observer.callbacks.onError?.({
             ...observer.route,
-            message: getErrorMessage(runtimeError),
+            message: errorMessage,
             messageId: this.snapshot.tasks[taskId]?.draftMessageId,
           });
           observer.resolve();
@@ -1175,6 +1153,47 @@ export class WorkspaceRuntime {
       },
     };
     await this.persistImmediately(this.snapshot);
+  }
+
+  private async completeFailedTask(args: {
+    task: WorkspaceSnapshot["tasks"][string];
+    member: WorkspaceSnapshot["members"][string];
+    traceTitle: string;
+    errorMessage: string;
+  }): Promise<void> {
+    const previous = this.snapshot;
+    const snapshotWithTrace = appendTaskTrace(
+      previous,
+      {
+        taskId: args.task.id,
+        roomId: args.task.roomId,
+        memberId: args.task.memberId,
+        kind: "error",
+        title: args.traceTitle,
+        content: args.errorMessage,
+      },
+      this.context,
+    );
+    const snapshotWithVisibleFailure = postMemberMessage(
+      snapshotWithTrace,
+      {
+        roomId: args.task.roomId,
+        memberId: args.member.id,
+        taskId: args.task.id,
+        content: buildVisibleTaskFailureContent(args.errorMessage),
+        mentionedMemberIds: [],
+        quotedMemberIds: [],
+      },
+      this.context,
+    );
+    const next = completeMemberTask(
+      snapshotWithVisibleFailure,
+      {
+        taskId: args.task.id,
+      },
+      this.context,
+    );
+    await this.applySnapshot(previous, next);
   }
 
   private syncWatchers(): void {

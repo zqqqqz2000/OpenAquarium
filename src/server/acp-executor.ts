@@ -13,7 +13,6 @@ import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { isPathInsideRoot, resolveAcpSessionWorkingDirectory, resolveProjectWorkingDirectory } from "./project-paths";
 import { TerminalRegistry } from "./terminal-registry";
 
-const ACP_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const ACP_CANCEL_TIMEOUT_MS = 5 * 1000;
 
 export interface MemberToolHost {
@@ -28,60 +27,6 @@ class TimeoutError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "TimeoutError";
-  }
-}
-
-class IdleTimeoutController {
-  private readonly timeoutPromise: Promise<never>;
-  private rejectTimeout?: (error: Error) => void;
-  private timer?: ReturnType<typeof setTimeout>;
-  private stopped = false;
-
-  constructor(
-    private readonly timeoutMs: number,
-    private readonly onTimeout: () => void,
-    private readonly label: string,
-  ) {
-    this.timeoutPromise = new Promise<never>((_resolve, reject) => {
-      this.rejectTimeout = reject;
-    });
-    this.touch();
-  }
-
-  touch(): void {
-    if (this.stopped) {
-      return;
-    }
-
-    if (this.timer) {
-      clearTimeout(this.timer);
-    }
-
-    this.timer = setTimeout(() => {
-      if (this.stopped) {
-        return;
-      }
-
-      this.stopped = true;
-      this.onTimeout();
-      this.rejectTimeout?.(new TimeoutError(`${this.label} timed out after ${this.timeoutMs}ms without activity`));
-    }, this.timeoutMs);
-  }
-
-  async race<T>(operation: Promise<T>): Promise<T> {
-    return Promise.race([operation, this.timeoutPromise]);
-  }
-
-  stop(): void {
-    if (this.stopped) {
-      return;
-    }
-
-    this.stopped = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
-    }
   }
 }
 
@@ -178,18 +123,10 @@ export class AcpMemberExecutor implements MemberExecutor {
 
     let finalContent = "";
     const tools = this.createWorkspaceTools(request);
-    const idleTimeout = new IdleTimeoutController(
-      ACP_IDLE_TIMEOUT_MS,
-      () => {
-        abortController.abort("timed_out");
-      },
-      `ACP turn for @${this.member.handle}`,
-    );
     const currentTurn = (async () => {
       try {
         await this.prepareProviderSession(tools);
         await this.persistSessionIdIfNeeded();
-        idleTimeout.touch();
         const result = streamText({
           abortSignal: abortController.signal,
           includeRawChunks: true,
@@ -197,7 +134,6 @@ export class AcpMemberExecutor implements MemberExecutor {
           prompt: request.prompt,
           tools,
           onChunk: async ({ chunk }) => {
-            idleTimeout.touch();
             switch (chunk.type) {
               case "text-delta":
                 finalContent = `${finalContent}${chunk.text}`;
@@ -229,8 +165,7 @@ export class AcpMemberExecutor implements MemberExecutor {
           },
         });
 
-        const [text, finishReason] = await idleTimeout.race(Promise.all([result.text, result.finishReason]));
-        idleTimeout.stop();
+        const [text, finishReason] = await Promise.all([result.text, result.finishReason]);
         if (abortController.signal.aborted) {
           return;
         }
@@ -241,12 +176,8 @@ export class AcpMemberExecutor implements MemberExecutor {
           return;
         }
 
-        if (error instanceof TimeoutError) {
-          await this.resetProvider();
-        }
         await callbacks.onError(getErrorMessage(error as RuntimeError));
       } finally {
-        idleTimeout.stop();
         if (this.currentAbortController === abortController) {
           this.currentAbortController = undefined;
           this.currentTurn = undefined;
