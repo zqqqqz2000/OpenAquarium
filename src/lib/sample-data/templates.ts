@@ -1,5 +1,6 @@
 import type { TeamTemplate } from "../../domain/model";
 import { createCodexAcpProvider } from "../acp";
+import { DEFAULT_CODEX_MODEL_PROFILE_ID } from "../provider-model-profiles";
 
 const ROOM_PROGRESS_PROMPT =
   "如果处理不会在一个短回合内结束，先发一条简短进度，再在关键里程碑、阻塞或计划变化时继续同步，避免让用户长时间等待。";
@@ -19,6 +20,7 @@ export const defaultTemplates: TeamTemplate[] = [
         prompt:
           `你是团队入口成员。先理解用户意图，再按需要 @其他成员。顺序协作时只委派当前该行动的成员，不要把后续成员一次性全叫上，也不要用重复 DM 催办已经清楚的 room 任务。你可以打断自己当前任务去响应最新群消息。${ROOM_PROGRESS_PROMPT}`,
         accentTone: "postit",
+        modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
         isEntryMember: true,
         observeAllRoomMessages: true,
@@ -44,6 +46,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "负责调研、信息汇总和提出备选方案。",
         prompt: `你专注于调研和信息整理，优先总结事实、风险和备选路径。收到清晰任务后只回复一次完成你自己的部分，不要额外催其他成员。${ROOM_PROGRESS_PROMPT}`,
         accentTone: "blueprint",
+        modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
         observeAllRoomMessages: false,
         skills: [
@@ -66,6 +69,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "负责把方案落成代码或自动化步骤。",
         prompt: `你只关心可执行实现、模块边界、测试和回归风险。收到清晰任务后只回复一次完成你自己的部分，不要额外催其他成员。${ROOM_PROGRESS_PROMPT}`,
         accentTone: "paper",
+        modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
         skills: [
           {
@@ -89,6 +93,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "记录决策、监控群聊变化，并在有增量时补发 digest。",
         prompt: `你负责记录、归档和周期性回看群消息，仅在有增量时动作。需要汇总时，先等上游要求的 room 回复实际出现，再统一收口；不要提前下场，也不要主动催办其他成员，除非当前任务明确要求你这么做。${ROOM_PROGRESS_PROMPT}`,
         accentTone: "correction",
+        modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
         observeAllRoomMessages: true,
         skills: [
@@ -119,6 +124,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "入口成员，负责把告警和用户反馈分配出去。",
         prompt: `你是事故处理入口成员。优先明确影响范围、时间线和当前 owner。${ROOM_PROGRESS_PROMPT}`,
         accentTone: "blueprint",
+        modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
         isEntryMember: true,
         observeAllRoomMessages: true,
@@ -138,6 +144,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "查看日志、指标和配置差异。",
         prompt: `你聚焦排障证据链，避免拍脑袋结论。${ROOM_PROGRESS_PROMPT}`,
         accentTone: "paper",
+        modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
         skills: [
           {
@@ -155,6 +162,7 @@ export const defaultTemplates: TeamTemplate[] = [
         summary: "写时间线和状态播报。",
         prompt: `你负责结构化记录事故时间线和对外播报。${ROOM_PROGRESS_PROMPT}`,
         accentTone: "postit",
+        modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
         observeAllRoomMessages: true,
         skills: [

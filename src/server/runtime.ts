@@ -1,12 +1,15 @@
 import path from "node:path";
 
-import type { TeamTemplate, WorkspaceSnapshot } from "../domain/model";
+import type { GlobalWorkspaceConfig, ProviderBinding, TeamMember, TeamTemplate, UpdateGlobalConfigInput, WorkspaceSnapshot } from "../domain/model";
 import {
   appendTaskTrace,
   completeMemberTask,
   createRoomInProject,
   createProjectWithRoom,
   createWorkspaceSnapshot,
+  deleteProject as deleteProjectFromWorkspace,
+  deleteRoom as deleteRoomFromWorkspace,
+  deleteTemplate as deleteTemplateFromWorkspace,
   extractMentionMemberIds,
   postMemberMessage,
   postMemberDraft,
@@ -16,12 +19,22 @@ import {
   toggleMemberMonitor,
   toggleWatcher,
   updateMemberConfig,
+  updateTemplate,
   updateMemberPrompt,
   upsertTaskTrace,
   upsertMemberWatcher,
 } from "../domain/workspace";
 import { createRuntimeContext, type MutationContext } from "../domain/identity";
-import type { CreateProjectInput, CreateRoomInput, MemberId, PostMemberMessageInput, UpsertWatcherInput, UpdateMemberConfigInput } from "../domain/model";
+import type {
+  CreateProjectInput,
+  CreateRoomInput,
+  MemberId,
+  PostMemberMessageInput,
+  TemplateStudioChatMessage,
+  UpsertWatcherInput,
+  UpdateMemberConfigInput,
+  UpdateTemplateInput,
+} from "../domain/model";
 import type { MemberExecutor, MemberExecutorFactory } from "./executor";
 import { AcpMemberExecutor } from "./acp-executor";
 import type { DiagnosticsLogger } from "./diagnostics";
@@ -29,11 +42,14 @@ import { summarizeWorkspaceSnapshot } from "./diagnostics";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { buildTaskPrompt } from "./prompt-builder";
 import { WorkspacePersistence } from "./persistence";
+import { OpenAquariumGlobalConfigManager } from "./global-config";
+import { TemplateStudioChatService, type TemplateStudioChatServiceLike } from "./template-studio-chat";
 import { generateTemplateFromBrief } from "./template-generator";
 import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
 import { getRoomTranscriptFilePath, syncRoomTranscriptFiles } from "./room-transcript-files";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
+import { createDefaultGlobalWorkspaceConfig, findProviderModelProfile, resolveProviderBindingFromProfile } from "../lib/provider-model-profiles";
 
 type SnapshotListener = (snapshot: WorkspaceSnapshot) => void;
 type TemplateGenerator = (brief: string, args: { workspaceRoot: string; references: TeamTemplate[] }) => Promise<TeamTemplate>;
@@ -63,6 +79,57 @@ interface TaskObserverEntry {
 
 function cloneTemplates(snapshot: WorkspaceSnapshot): TeamTemplate[] {
   return snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
+}
+
+function mergeGlobalTemplatesIntoSnapshot(snapshot: WorkspaceSnapshot, globalTemplates: TeamTemplate[]): WorkspaceSnapshot {
+  const globalTemplatesById = Object.fromEntries(globalTemplates.map((template) => [template.id, template]));
+  const referencedSnapshotTemplateIds = Array.from(
+    new Set(
+      Object.values(snapshot.rooms)
+        .map((room) => room.templateId)
+        .filter((templateId) => templateId in snapshot.templates && !(templateId in globalTemplatesById)),
+    ),
+  );
+  const mergedTemplateOrder = [
+    ...globalTemplates.map((template) => template.id),
+    ...referencedSnapshotTemplateIds,
+  ];
+
+  return {
+    ...snapshot,
+    templates: {
+      ...Object.fromEntries(referencedSnapshotTemplateIds.map((templateId) => [templateId, snapshot.templates[templateId]])),
+      ...globalTemplatesById,
+    },
+    templateOrder: mergedTemplateOrder,
+  };
+}
+
+function bindingSignature(binding: ProviderBinding): string {
+  return JSON.stringify({
+    kind: binding.kind,
+    label: binding.label,
+    command: binding.command,
+    args: binding.args,
+    env: binding.env,
+    workingDirectory: binding.workingDirectory,
+    capabilities: binding.capabilities,
+  });
+}
+
+function findChangedModelProfileIds(previous: GlobalWorkspaceConfig, next: GlobalWorkspaceConfig): Set<string> {
+  const previousBindings = new Map(previous.modelProfiles.map((profile) => [profile.id, bindingSignature(profile.binding)]));
+  const nextBindings = new Map(next.modelProfiles.map((profile) => [profile.id, bindingSignature(profile.binding)]));
+  const ids = new Set<string>([...previousBindings.keys(), ...nextBindings.keys()]);
+  const changed = new Set<string>();
+
+  ids.forEach((profileId) => {
+    if (previousBindings.get(profileId) !== nextBindings.get(profileId)) {
+      changed.add(profileId);
+    }
+  });
+
+  return changed;
 }
 
 function getIdSuffixValue(id: string): number | undefined {
@@ -119,9 +186,13 @@ export class WorkspaceRuntime {
   private readonly taskObservers = new Map<string, TaskObserverEntry>();
   private readonly persistence: WorkspacePersistence;
   private readonly workspaceRoot: string;
+  private readonly globalConfigManager: OpenAquariumGlobalConfigManager;
   private readonly executorFactory: MemberExecutorFactory;
+  private readonly templateStudioChatService: TemplateStudioChatServiceLike;
   private readonly templateGenerator: TemplateGenerator;
   private readonly logger?: DiagnosticsLogger;
+  private globalConfig: GlobalWorkspaceConfig;
+  private readonly executorKeys = new Map<MemberId, string>();
   private pendingProgressPersist = false;
   private pendingProgressPersistTimer: ReturnType<typeof setTimeout> | undefined;
   private persistenceChain: Promise<void> = Promise.resolve();
@@ -129,6 +200,9 @@ export class WorkspaceRuntime {
   constructor(args: {
     initialSnapshot: WorkspaceSnapshot;
     persistence: WorkspacePersistence;
+    globalConfigManager?: OpenAquariumGlobalConfigManager;
+    globalConfig?: GlobalWorkspaceConfig;
+    templateStudioChatService?: TemplateStudioChatServiceLike;
     workspaceRoot: string;
     executorFactory?: MemberExecutorFactory;
     templateGenerator?: TemplateGenerator;
@@ -139,6 +213,9 @@ export class WorkspaceRuntime {
     this.context = args.context ?? createRuntimeContext(10_000, "2026-03-09T10:00:00.000Z");
     this.persistence = args.persistence;
     this.workspaceRoot = args.workspaceRoot;
+    this.globalConfigManager = args.globalConfigManager ?? new OpenAquariumGlobalConfigManager();
+    this.globalConfig = args.globalConfig ?? createDefaultGlobalWorkspaceConfig(this.globalConfigManager.directory);
+    this.templateStudioChatService = args.templateStudioChatService ?? new TemplateStudioChatService();
     this.logger = args.logger;
     this.executorFactory =
       args.executorFactory ??
@@ -188,19 +265,28 @@ export class WorkspaceRuntime {
   static async create(args: {
     workspaceRoot: string;
     stateFilePath?: string;
+    configDirPath?: string;
+    templateStudioChatService?: TemplateStudioChatServiceLike;
     executorFactory?: MemberExecutorFactory;
     templateGenerator?: TemplateGenerator;
     logger?: DiagnosticsLogger;
   }): Promise<WorkspaceRuntime> {
+    const globalConfigManager = new OpenAquariumGlobalConfigManager(args.configDirPath);
+    const loadedGlobalConfig = await globalConfigManager.load();
     const persistence = new WorkspacePersistence(
       args.stateFilePath ?? path.join(args.workspaceRoot, ".openaquarium", "state.json"),
       args.logger,
     );
     const loadedSnapshot = await persistence.load();
-    const initialSnapshot = loadedSnapshot ?? createDefaultWorkspaceSnapshot();
+    const initialSnapshot = loadedSnapshot
+      ? mergeGlobalTemplatesIntoSnapshot(loadedSnapshot, loadedGlobalConfig.templates)
+      : createDefaultWorkspaceSnapshot("You", loadedGlobalConfig.templates);
     const runtime = new WorkspaceRuntime({
       initialSnapshot,
       persistence,
+      globalConfigManager,
+      globalConfig: loadedGlobalConfig.config,
+      templateStudioChatService: args.templateStudioChatService,
       workspaceRoot: args.workspaceRoot,
       executorFactory: args.executorFactory,
       templateGenerator: args.templateGenerator,
@@ -225,6 +311,10 @@ export class WorkspaceRuntime {
 
   getSnapshot(): WorkspaceSnapshot {
     return this.snapshot;
+  }
+
+  getGlobalConfig(): GlobalWorkspaceConfig {
+    return this.globalConfig;
   }
 
   subscribe(listener: SnapshotListener): () => void {
@@ -253,6 +343,20 @@ export class WorkspaceRuntime {
       snapshot: this.snapshot,
       roomId: this.snapshot.selection.roomId!,
     };
+  }
+
+  async deleteProject(projectId: string): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    const next = deleteProjectFromWorkspace(previous, projectId);
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
+  async deleteRoom(roomId: string): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    const next = deleteRoomFromWorkspace(previous, roomId);
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
   }
 
   async sendUserMessage(args: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot> {
@@ -364,8 +468,106 @@ export class WorkspaceRuntime {
   async updateMemberConfig(input: UpdateMemberConfigInput): Promise<WorkspaceSnapshot> {
     const previous = this.snapshot;
     const next = updateMemberConfig(previous, input);
+    const previousMember = previous.members[input.memberId];
+    const nextMember = next.members[input.memberId];
+    if (previousMember && nextMember && this.memberExecutionKey(previousMember) !== this.memberExecutionKey(nextMember)) {
+      next.members[input.memberId] = {
+        ...nextMember,
+        providerSessionId: undefined,
+      };
+      this.disposeExecutor(input.memberId);
+    }
     await this.applySnapshot(previous, next);
     return this.snapshot;
+  }
+
+  async updateTemplate(input: UpdateTemplateInput): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    const next = updateTemplate(previous, input);
+    await this.globalConfigManager.saveTemplates(
+      next.templateOrder.map((templateId) => next.templates[templateId]),
+    );
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
+  async deleteTemplate(templateId: string): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    const next = deleteTemplateFromWorkspace(previous, templateId);
+    await this.globalConfigManager.saveTemplates(
+      next.templateOrder.map((candidateTemplateId) => next.templates[candidateTemplateId]),
+    );
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
+  async updateGlobalConfig(input: UpdateGlobalConfigInput): Promise<GlobalWorkspaceConfig> {
+    const nextConfig = await this.globalConfigManager.saveConfig(input);
+    const changedProfileIds = findChangedModelProfileIds(this.globalConfig, nextConfig);
+    this.globalConfig = nextConfig;
+
+    if (changedProfileIds.size > 0) {
+      const previous = this.snapshot;
+      let next = previous;
+      let changedMembers = false;
+
+      Object.values(previous.members).forEach((member) => {
+        if (!member.modelProfileId || !changedProfileIds.has(member.modelProfileId)) {
+          return;
+        }
+
+        this.disposeExecutor(member.id);
+        if (!member.providerSessionId) {
+          return;
+        }
+
+        changedMembers = true;
+        next = {
+          ...next,
+          members: {
+            ...next.members,
+            [member.id]: {
+              ...next.members[member.id],
+              providerSessionId: undefined,
+            },
+          },
+        };
+      });
+
+      if (changedMembers) {
+        await this.applySnapshot(previous, next);
+      }
+    }
+
+    return this.globalConfig;
+  }
+
+  async chatTemplateStudio(input: {
+    templateId: string;
+    messages: TemplateStudioChatMessage[];
+    modelProfileId?: string;
+  }): Promise<{ assistantMessage: string; snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; modelProfileId: string }> {
+    const assistantReply = await this.templateStudioChatService.chat({
+      configDirectory: this.globalConfigManager.directory,
+      templateId: input.templateId,
+      messages: input.messages,
+      templates: cloneTemplates(this.snapshot),
+      globalConfig: this.globalConfig,
+      modelProfileId: input.modelProfileId,
+    });
+
+    const reloaded = await this.globalConfigManager.load();
+    this.globalConfig = reloaded.config;
+    const previous = this.snapshot;
+    const next = mergeGlobalTemplatesIntoSnapshot(previous, reloaded.templates);
+    await this.applySnapshot(previous, next);
+
+    return {
+      assistantMessage: assistantReply.assistantMessage,
+      modelProfileId: assistantReply.modelProfileId,
+      snapshot: this.snapshot,
+      globalConfig: this.globalConfig,
+    };
   }
 
   async setEntryMember(memberId: string): Promise<WorkspaceSnapshot> {
@@ -416,6 +618,9 @@ export class WorkspaceRuntime {
         ? previous.templateOrder
         : [...previous.templateOrder, nextTemplate.id],
     };
+    await this.globalConfigManager.saveTemplates(
+      next.templateOrder.map((templateId) => next.templates[templateId]),
+    );
     await this.applySnapshot(previous, next);
     return nextTemplate;
   }
@@ -458,9 +663,12 @@ export class WorkspaceRuntime {
     await this.persistImmediately(this.snapshot);
     await Promise.all([...this.executors.values()].map((executor) => executor.dispose()));
     this.executors.clear();
+    this.executorKeys.clear();
+    await this.templateStudioChatService.dispose();
   }
 
   private async applySnapshot(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): Promise<void> {
+    this.cleanupRemovedRuntimeState(previous, next);
     await syncRoomTranscriptFiles({
       workspaceRoot: this.workspaceRoot,
       previous,
@@ -472,6 +680,29 @@ export class WorkspaceRuntime {
     this.syncWatchers();
     this.emit();
     this.dispatchNewTasks(previous, this.snapshot);
+  }
+
+  private cleanupRemovedRuntimeState(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): void {
+    const nextMemberIds = new Set(Object.keys(next.members));
+    Object.keys(previous.members).forEach((memberId) => {
+      if (!nextMemberIds.has(memberId)) {
+        this.disposeExecutor(memberId);
+      }
+    });
+
+    const nextTaskIds = new Set(Object.keys(next.tasks));
+    [...this.runningTaskIds].forEach((taskId) => {
+      if (!nextTaskIds.has(taskId)) {
+        this.runningTaskIds.delete(taskId);
+      }
+    });
+
+    [...this.taskObservers.entries()].forEach(([taskId, observer]) => {
+      if (!nextTaskIds.has(taskId)) {
+        observer.resolve();
+        this.taskObservers.delete(taskId);
+      }
+    });
   }
 
   private emit(): void {
@@ -550,7 +781,7 @@ export class WorkspaceRuntime {
         workspaceRoot: this.workspaceRoot,
         project,
         room,
-        member,
+        member: this.resolveMemberForExecution(member),
         task,
         snapshot: this.snapshot,
         transcriptFilePath: getRoomTranscriptFilePath(this.workspaceRoot, room),
@@ -574,7 +805,7 @@ export class WorkspaceRuntime {
         {
           project,
           room,
-          member,
+          member: this.resolveMemberForExecution(member),
           task,
           snapshot: this.snapshot,
           prompt,
@@ -799,18 +1030,70 @@ export class WorkspaceRuntime {
   }
 
   private getExecutor(memberId: string, member: WorkspaceSnapshot["members"][string], room: WorkspaceSnapshot["rooms"][string], project: WorkspaceSnapshot["projects"][string]): MemberExecutor {
+    const executionKey = this.memberExecutionKey(member);
     const existing = this.executors.get(memberId);
-    if (existing) {
+    if (existing && this.executorKeys.get(memberId) === executionKey) {
       return existing;
     }
 
+    if (existing) {
+      void existing.dispose();
+      this.executors.delete(memberId);
+      this.executorKeys.delete(memberId);
+    }
+
     const executor = this.executorFactory({
-      member,
+      member: this.resolveMemberForExecution(member),
       room,
       project,
     });
     this.executors.set(memberId, executor);
+    this.executorKeys.set(memberId, executionKey);
     return executor;
+  }
+
+  private resolveMemberForExecution(member: TeamMember): TeamMember {
+    const resolvedProvider = resolveProviderBindingFromProfile(
+      member.provider,
+      this.globalConfig.modelProfiles,
+      member.modelProfileId,
+    );
+
+    if (resolvedProvider === member.provider) {
+      return member;
+    }
+
+    return {
+      ...member,
+      provider: resolvedProvider,
+    };
+  }
+
+  private memberExecutionKey(member: TeamMember): string {
+    const resolvedProvider = resolveProviderBindingFromProfile(
+      member.provider,
+      this.globalConfig.modelProfiles,
+      member.modelProfileId,
+    );
+    const resolvedProfile = findProviderModelProfile(this.globalConfig.modelProfiles, member.modelProfileId);
+
+    return JSON.stringify({
+      memberId: member.id,
+      modelProfileId: resolvedProfile?.id ?? null,
+      provider: resolvedProvider,
+      providerSessionId: member.providerSessionId ?? null,
+    });
+  }
+
+  private disposeExecutor(memberId: string): void {
+    const executor = this.executors.get(memberId);
+    if (!executor) {
+      return;
+    }
+
+    void executor.dispose();
+    this.executors.delete(memberId);
+    this.executorKeys.delete(memberId);
   }
 
   private async persistMemberProviderSession(memberId: string, sessionId?: string): Promise<void> {

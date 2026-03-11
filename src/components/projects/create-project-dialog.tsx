@@ -25,8 +25,13 @@ import {
 import { badgeToneProps } from "@/lib/ui-tone";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
 
-export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerClassName?: string; disabled?: boolean }) {
-  const { templates, triggerClassName, disabled = false } = props;
+export function CreateProjectDialog(props: {
+  templates: TeamTemplate[];
+  triggerClassName?: string;
+  triggerMode?: "default" | "icon";
+  disabled?: boolean;
+}) {
+  const { templates, triggerClassName, triggerMode = "default", disabled = false } = props;
   const navigate = useNavigate();
   const createProject = useWorkspaceStore((state) => state.createProject);
   const [open, setOpen] = useState(false);
@@ -38,10 +43,16 @@ export function CreateProjectDialog(props: { templates: TeamTemplate[]; triggerC
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button className={triggerClassName} disabled={disabled}>
-          <Plus size={18} />
-          New project
-        </Button>
+        {triggerMode === "icon" ? (
+          <Button className={triggerClassName} disabled={disabled} variant="ghost" size="icon-sm" aria-label="Create project">
+            <Plus size={18} />
+          </Button>
+        ) : (
+          <Button className={triggerClassName} disabled={disabled}>
+            <Plus size={18} />
+            New project
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="w-[min(92vw,720px)] max-w-[720px] sm:max-w-[720px]">
         <DialogHeader>

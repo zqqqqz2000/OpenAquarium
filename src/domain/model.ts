@@ -6,6 +6,7 @@ export type MessageId = string;
 export type TaskId = string;
 export type WatcherId = string;
 export type TraceId = string;
+export type ProviderModelProfileId = string;
 
 export type ProviderKind = "codex-acp" | "generic-acp";
 export type MemberStatus = "idle" | "running" | "interrupted";
@@ -23,6 +24,11 @@ export interface SkillDefinition {
   command: string;
 }
 
+export interface TemplateStudioChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface ProviderBinding {
   kind: ProviderKind;
   label: string;
@@ -31,6 +37,14 @@ export interface ProviderBinding {
   env: Record<string, string>;
   workingDirectory?: string;
   capabilities: string[];
+}
+
+export interface ProviderModelProfile {
+  id: ProviderModelProfileId;
+  name: string;
+  description: string;
+  providerType: "acp";
+  binding: ProviderBinding;
 }
 
 export interface WatchBlueprint {
@@ -45,6 +59,7 @@ export interface TeamMemberBlueprint {
   summary: string;
   prompt: string;
   accentTone: AccentTone;
+  modelProfileId?: ProviderModelProfileId;
   skills: SkillDefinition[];
   provider: ProviderBinding;
   isEntryMember?: boolean;
@@ -88,6 +103,7 @@ export interface TeamMember {
   summary: string;
   prompt: string;
   accentTone: AccentTone;
+  modelProfileId?: ProviderModelProfileId;
   skills: SkillDefinition[];
   provider: ProviderBinding;
   observeAllRoomMessages: boolean;
@@ -221,9 +237,29 @@ export interface UpdateMemberConfigInput {
   memberId: MemberId;
   summary: string;
   prompt: string;
+  modelProfileId?: ProviderModelProfileId;
   acceptsDirectMessages: boolean;
   skills: SkillDefinition[];
   provider: ProviderBinding;
+}
+
+export interface UpdateTemplateInput {
+  templateId: TemplateId;
+  name: string;
+  description: string;
+  accentTone: AccentTone;
+  members: TeamMemberBlueprint[];
+}
+
+export interface UpdateGlobalConfigInput {
+  modelProfiles: ProviderModelProfile[];
+  templateChatModelProfileId?: ProviderModelProfileId;
+}
+
+export interface GlobalWorkspaceConfig {
+  directory: string;
+  modelProfiles: ProviderModelProfile[];
+  templateChatModelProfileId?: ProviderModelProfileId;
 }
 
 export interface UpsertWatcherInput {

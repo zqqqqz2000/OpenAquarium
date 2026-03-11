@@ -14,6 +14,7 @@ import {
   postUserMessage,
   runWatcher,
   setEntryMember,
+  updateTemplate,
   updateMemberConfig,
   upsertMemberWatcher,
 } from "@/domain/workspace";
@@ -403,6 +404,7 @@ describe("workspace domain", () => {
       memberId: builder.id,
       summary: "新的 builder summary",
       prompt: "新的 builder prompt",
+      modelProfileId: "model-codex-acp-default",
       acceptsDirectMessages: false,
       skills: [
         {
@@ -440,11 +442,53 @@ describe("workspace domain", () => {
       context,
     );
 
-    expect(snapshot.members[builder.id].provider.command).toBe("claude-code");
+    expect(snapshot.members[builder.id].provider.command).toBe(builder.provider.command);
+    expect(snapshot.members[builder.id].modelProfileId).toBe("model-codex-acp-default");
     expect(snapshot.members[builder.id].skills).toHaveLength(1);
     expect(snapshot.rooms[roomId].entryMemberId).toBe(builder.id);
     expect(snapshot.members[builder.id].isEntryMember).toBe(true);
     expect(snapshot.rooms[roomId].watcherIds.some((watcherId) => snapshot.watchers[watcherId]?.memberId === builder.id)).toBe(true);
     expect(snapshot.members[builder.id].activeTaskId).toBeUndefined();
+  });
+
+  it("updates global template defaults without rewriting existing room members", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const room = snapshot.rooms[roomId];
+    const template = snapshot.templates[room.templateId];
+    const builderBlueprint = template.members.find((member) => member.handle === "builder");
+    const roomBuilder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
+
+    if (!builderBlueprint || !roomBuilder) {
+      throw new Error("Expected builder blueprint and builder room member");
+    }
+
+    snapshot = updateTemplate(snapshot, {
+      templateId: template.id,
+      name: "Product Pod v2",
+      description: "新的全局模板描述",
+      accentTone: "correction",
+      members: template.members.map((member) =>
+        member.id === builderBlueprint.id
+          ? {
+              ...member,
+              summary: "新的模板 builder summary",
+              prompt: "新的模板 builder prompt",
+              provider: {
+                ...member.provider,
+                command: "claude-code",
+              },
+            }
+          : member),
+    });
+
+    expect(snapshot.templates[template.id].name).toBe("Product Pod v2");
+    expect(snapshot.templates[template.id].accentTone).toBe("correction");
+    expect(snapshot.templates[template.id].members.find((member) => member.id === builderBlueprint.id)?.summary).toBe("新的模板 builder summary");
+    expect(snapshot.templates[template.id].members.find((member) => member.id === builderBlueprint.id)?.provider.command).toBe("claude-code");
+    expect(snapshot.members[roomBuilder.id].summary).not.toBe("新的模板 builder summary");
+    expect(snapshot.members[roomBuilder.id].provider.command).not.toBe("claude-code");
   });
 });

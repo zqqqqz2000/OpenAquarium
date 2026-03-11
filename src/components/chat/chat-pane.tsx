@@ -30,6 +30,7 @@ export function ChatPane(props: {
   connected: boolean;
   error?: string;
   onOpenMember: (memberId: string) => void;
+  onOpenTemplate?: () => void;
   onToggleLeftSidebar: () => void;
   onToggleRightSidebar: () => void;
 }) {
@@ -44,6 +45,7 @@ export function ChatPane(props: {
     connected,
     error,
     onOpenMember,
+    onOpenTemplate,
     onToggleLeftSidebar,
     onToggleRightSidebar,
   } = props;
@@ -164,6 +166,7 @@ export function ChatPane(props: {
             template={template}
             members={members}
             activeStreamSummary={roomChat.activeStreamSummary}
+            onOpenTemplate={onOpenTemplate}
             onToggleLeftSidebar={onToggleLeftSidebar}
             onToggleRightSidebar={onToggleRightSidebar}
           />
@@ -262,10 +265,21 @@ function RoomTopBar(props: {
   template?: TeamTemplate;
   members: TeamMember[];
   activeStreamSummary?: string;
+  onOpenTemplate?: () => void;
   onToggleLeftSidebar: () => void;
   onToggleRightSidebar: () => void;
 }) {
-  const { leftSidebarCollapsed, rightSidebarCollapsed, room, template, members, activeStreamSummary, onToggleLeftSidebar, onToggleRightSidebar } =
+  const {
+    leftSidebarCollapsed,
+    rightSidebarCollapsed,
+    room,
+    template,
+    members,
+    activeStreamSummary,
+    onOpenTemplate,
+    onToggleLeftSidebar,
+    onToggleRightSidebar,
+  } =
     props;
   const templateBadge = badgeToneProps(template?.accentTone ?? "paper");
   const watcherBadge = badgeToneProps("correction");
@@ -279,9 +293,17 @@ function RoomTopBar(props: {
         <div className="min-w-0 flex-1 space-y-2 pt-0.5">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <p className="m-0 text-3xl font-semibold tracking-tight">{room.name}</p>
-            <Badge variant={templateBadge.variant} className={templateBadge.className}>
-              {template?.name ?? "Template"}
-            </Badge>
+            {onOpenTemplate ? (
+              <button type="button" className="rounded-none border-0 bg-transparent p-0 text-left" onClick={onOpenTemplate}>
+                <Badge variant={templateBadge.variant} className={cn(templateBadge.className, "cursor-pointer")}>
+                  {template?.name ?? "Template"}
+                </Badge>
+              </button>
+            ) : (
+              <Badge variant={templateBadge.variant} className={templateBadge.className}>
+                {template?.name ?? "Template"}
+              </Badge>
+            )}
             <Badge variant={neutralBadge.variant} className={neutralBadge.className}>
               {members.length} members
             </Badge>

@@ -1,20 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
+import type { UpdateMemberConfigInput, UpdateTemplateInput, WorkspaceSnapshot } from "@/domain/model";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
+import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { createWorkspaceRemoteStore, type WorkspaceRemoteClient } from "@/store/workspace-remote-store";
 
 function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
   return {
-    getState: () => Promise.resolve(snapshot),
+    getState: () => Promise.resolve({ snapshot, globalConfig: createDefaultGlobalWorkspaceConfig() }),
     createProject: () => Promise.reject(new Error("not implemented")),
     createRoom: () => Promise.reject(new Error("not implemented")),
+    deleteProject: () => Promise.reject(new Error("not implemented")),
+    deleteRoom: () => Promise.reject(new Error("not implemented")),
     sendUserMessage: () => Promise.reject(new Error("not implemented")),
     updatePrompt: () => Promise.reject(new Error("not implemented")),
     updateMemberConfig: (input: UpdateMemberConfigInput) => {
       void input;
       return Promise.reject(new Error("not implemented"));
     },
+    updateTemplate: (input: UpdateTemplateInput) => {
+      void input;
+      return Promise.reject(new Error("not implemented"));
+    },
+    deleteTemplate: () => Promise.reject(new Error("not implemented")),
+    updateGlobalConfig: () => Promise.reject(new Error("not implemented")),
+    sendTemplateStudioChat: () => Promise.reject(new Error("not implemented")),
     setEntryMember: () => Promise.reject(new Error("not implemented")),
     upsertWatcher: () => Promise.reject(new Error("not implemented")),
     toggleMemberMonitoring: () => Promise.reject(new Error("not implemented")),

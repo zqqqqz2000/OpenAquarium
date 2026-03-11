@@ -1,7 +1,16 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 
-import type { TeamTemplate, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
+import type {
+  GlobalWorkspaceConfig,
+  TeamTemplate,
+  TemplateStudioChatMessage,
+  UpdateGlobalConfigInput,
+  UpdateMemberConfigInput,
+  UpdateTemplateInput,
+  WorkspaceSnapshot,
+} from "@/domain/model";
 import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
+import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { WorkspaceRuntimeClient } from "@/lib/runtime-client";
 
 function mergeIncomingSnapshot(current: WorkspaceSnapshot, incoming: WorkspaceSnapshot): WorkspaceSnapshot {
@@ -51,12 +60,15 @@ function getErrorMessage(error: RemoteStoreError): string {
 
 export interface WorkspaceRemoteStoreState {
   snapshot: WorkspaceSnapshot;
+  globalConfig: GlobalWorkspaceConfig;
   loading: boolean;
   connected: boolean;
   error?: string;
   hydrate(): Promise<void>;
   createProject(input: { projectName: string; templateId: string }): Promise<{ projectId: string; roomId: string }>;
   createRoom(input: { projectId: string; templateId: string }): Promise<{ roomId: string }>;
+  deleteProject(projectId: string): Promise<WorkspaceSnapshot>;
+  deleteRoom(roomId: string): Promise<WorkspaceSnapshot>;
   selectRoom(projectId: string, roomId: string): void;
   selectMember(memberId?: string): void;
   sendUserMessage(content: string, directMemberId?: string): Promise<void>;
@@ -65,6 +77,14 @@ export interface WorkspaceRemoteStoreState {
   runWatcher(watcherId: string): Promise<void>;
   updatePrompt(memberId: string, prompt: string): Promise<void>;
   updateMemberConfig(input: UpdateMemberConfigInput): Promise<void>;
+  updateTemplate(input: UpdateTemplateInput): Promise<void>;
+  deleteTemplate(templateId: string): Promise<void>;
+  updateGlobalConfig(input: UpdateGlobalConfigInput): Promise<void>;
+  sendTemplateStudioChat(input: {
+    templateId: string;
+    messages: TemplateStudioChatMessage[];
+    modelProfileId?: string;
+  }): Promise<{ assistantMessage: string; modelProfileId: string }>;
   setEntryMember(memberId: string): Promise<void>;
   upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number }): Promise<void>;
   generateTemplate(brief: string): Promise<TeamTemplate>;
@@ -73,7 +93,7 @@ export interface WorkspaceRemoteStoreState {
 }
 
 export interface WorkspaceRemoteClient {
-  getState(): Promise<WorkspaceSnapshot>;
+  getState(): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig }>;
   createProject(input: { projectName: string; templateId: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     projectId: string;
@@ -83,9 +103,19 @@ export interface WorkspaceRemoteClient {
     snapshot: WorkspaceSnapshot;
     roomId: string;
   }>;
+  deleteProject(projectId: string): Promise<WorkspaceSnapshot>;
+  deleteRoom(roomId: string): Promise<WorkspaceSnapshot>;
   sendUserMessage(input: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot>;
   updatePrompt(memberId: string, prompt: string): Promise<WorkspaceSnapshot>;
   updateMemberConfig(input: UpdateMemberConfigInput): Promise<WorkspaceSnapshot>;
+  updateTemplate(input: UpdateTemplateInput): Promise<WorkspaceSnapshot>;
+  deleteTemplate(templateId: string): Promise<WorkspaceSnapshot>;
+  updateGlobalConfig(input: UpdateGlobalConfigInput): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig }>;
+  sendTemplateStudioChat(input: {
+    templateId: string;
+    messages: TemplateStudioChatMessage[];
+    modelProfileId?: string;
+  }): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; assistantMessage: string; modelProfileId: string }>;
   setEntryMember(memberId: string): Promise<WorkspaceSnapshot>;
   upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number }): Promise<WorkspaceSnapshot>;
   toggleMemberMonitoring(memberId: string): Promise<WorkspaceSnapshot>;
@@ -117,13 +147,15 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
 
   return createStore<WorkspaceRemoteStoreState>((set, get) => ({
     snapshot: createDefaultWorkspaceSnapshot(),
+    globalConfig: createDefaultGlobalWorkspaceConfig(),
     loading: true,
     connected: false,
     async hydrate() {
       try {
-        const snapshot = await client.getState();
+        const { snapshot, globalConfig } = await client.getState();
         set((state) => ({
           snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+          globalConfig: globalConfig ?? state.globalConfig,
           loading: false,
           connected: true,
           error: undefined,
@@ -154,6 +186,20 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
       return {
         roomId: result.roomId,
       };
+    },
+    async deleteProject(projectId) {
+      const snapshot = await runMutation(set, () => client.deleteProject(projectId));
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+      }));
+      return snapshot;
+    },
+    async deleteRoom(roomId) {
+      const snapshot = await runMutation(set, () => client.deleteRoom(roomId));
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+      }));
+      return snapshot;
     },
     selectRoom(projectId, roomId) {
       set((state) => ({
@@ -223,6 +269,36 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
+    },
+    async updateTemplate(input) {
+      const snapshot = await runMutation(set, () => client.updateTemplate(input));
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+      }));
+    },
+    async deleteTemplate(templateId) {
+      const snapshot = await runMutation(set, () => client.deleteTemplate(templateId));
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+      }));
+    },
+    async updateGlobalConfig(input) {
+      const result = await runMutation(set, () => client.updateGlobalConfig(input));
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, result.snapshot),
+        globalConfig: result.globalConfig ?? state.globalConfig,
+      }));
+    },
+    async sendTemplateStudioChat(input) {
+      const result = await runMutation(set, () => client.sendTemplateStudioChat(input));
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, result.snapshot),
+        globalConfig: result.globalConfig ?? state.globalConfig,
+      }));
+      return {
+        assistantMessage: result.assistantMessage,
+        modelProfileId: result.modelProfileId,
+      };
     },
     async setEntryMember(memberId) {
       const snapshot = await runMutation(set, () => client.setEntryMember(memberId));

@@ -49,7 +49,7 @@ function sendJson(response: ServerResponse, statusCode: number, payload: JsonPay
   response.setHeader("content-type", "application/json; charset=utf-8");
   response.setHeader("access-control-allow-origin", "*");
   response.setHeader("access-control-allow-headers", "content-type");
-  response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
+  response.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
   response.end(JSON.stringify(payload));
 }
 
@@ -64,7 +64,14 @@ export async function handleWorkspaceJsonApiRequest(args: {
   if (method === "GET" && pathname === "/api/state") {
     return {
       statusCode: 200,
-      payload: { snapshot: runtime.getSnapshot() },
+      payload: { snapshot: runtime.getSnapshot(), globalConfig: runtime.getGlobalConfig() },
+    };
+  }
+
+  if (method === "GET" && pathname === "/api/config") {
+    return {
+      statusCode: 200,
+      payload: { globalConfig: runtime.getGlobalConfig() },
     };
   }
 
@@ -116,6 +123,110 @@ export async function handleWorkspaceJsonApiRequest(args: {
     };
   }
 
+  if (method === "POST" && pathname === "/api/template-studio/chat") {
+    const result = await runtime.chatTemplateStudio(body as {
+      templateId: string;
+      messages: Array<{
+        role: "user" | "assistant";
+        content: string;
+      }>;
+      modelProfileId?: string;
+    });
+    return {
+      statusCode: 200,
+      payload: result,
+    };
+  }
+
+  const templateConfigMatch = pathname.match(/^\/api\/templates\/([^/]+)\/config$/u);
+  if (method === "POST" && templateConfigMatch) {
+    const [, templateId] = templateConfigMatch;
+    if (!templateId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing template id" },
+      };
+    }
+    const snapshot = await runtime.updateTemplate({
+      templateId,
+      ...(body as {
+        name: string;
+        description: string;
+        accentTone: "paper" | "postit" | "blueprint" | "correction";
+        members: Array<{
+          id: string;
+          name: string;
+          handle: string;
+          summary: string;
+          prompt: string;
+          accentTone: "paper" | "postit" | "blueprint" | "correction";
+          skills: Array<{ id: string; name: string; description: string; command: string }>;
+          provider: {
+            kind: "codex-acp" | "generic-acp";
+            label: string;
+            command: string;
+            args: string[];
+            env: Record<string, string>;
+            workingDirectory?: string;
+            capabilities: string[];
+          };
+          isEntryMember?: boolean;
+          observeAllRoomMessages?: boolean;
+          acceptsDirectMessages?: boolean;
+          watch?: {
+            intervalMinutes: number;
+            enabledByDefault: boolean;
+          };
+        }>;
+      }),
+    });
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const templateDeleteMatch = pathname.match(/^\/api\/templates\/([^/]+)$/u);
+  if (method === "DELETE" && templateDeleteMatch) {
+    const [, templateId] = templateDeleteMatch;
+    if (!templateId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing template id" },
+      };
+    }
+    const snapshot = await runtime.deleteTemplate(templateId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  if (method === "POST" && pathname === "/api/config") {
+    const globalConfig = await runtime.updateGlobalConfig(body as {
+      modelProfiles: Array<{
+        id: string;
+        name: string;
+        description: string;
+        providerType: "acp";
+        binding: {
+          kind: "codex-acp" | "generic-acp";
+          label: string;
+          command: string;
+          args: string[];
+          env: Record<string, string>;
+          workingDirectory?: string;
+          capabilities: string[];
+        };
+      }>;
+      templateChatModelProfileId?: string;
+    });
+    return {
+      statusCode: 200,
+      payload: { globalConfig, snapshot: runtime.getSnapshot() },
+    };
+  }
+
   const roomMessageMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/messages$/u);
   if (method === "POST" && roomMessageMatch) {
     const [, roomId] = roomMessageMatch;
@@ -130,6 +241,38 @@ export async function handleWorkspaceJsonApiRequest(args: {
       content: (body as { content: string }).content,
       directMemberId: (body as { directMemberId?: string }).directMemberId,
     });
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const roomDeleteMatch = pathname.match(/^\/api\/rooms\/([^/]+)$/u);
+  if (method === "DELETE" && roomDeleteMatch) {
+    const [, roomId] = roomDeleteMatch;
+    if (!roomId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing room id" },
+      };
+    }
+    const snapshot = await runtime.deleteRoom(roomId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const projectDeleteMatch = pathname.match(/^\/api\/projects\/([^/]+)$/u);
+  if (method === "DELETE" && projectDeleteMatch) {
+    const [, projectId] = projectDeleteMatch;
+    if (!projectId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing project id" },
+      };
+    }
+    const snapshot = await runtime.deleteProject(projectId);
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -196,6 +339,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
       ...(body as {
         summary: string;
         prompt: string;
+        modelProfileId?: string;
         acceptsDirectMessages: boolean;
         skills: Array<{ id: string; name: string; description: string; command: string }>;
         provider: {
@@ -319,7 +463,7 @@ export async function startWorkspaceHttpServer(args: {
     try {
       response.setHeader("access-control-allow-origin", "*");
       response.setHeader("access-control-allow-headers", "content-type");
-      response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
+      response.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
 
       if (request.method === "OPTIONS") {
         response.statusCode = 204;
@@ -328,7 +472,10 @@ export async function startWorkspaceHttpServer(args: {
       }
 
       if (request.method === "GET" && url.pathname === "/api/state") {
-        const payload = { snapshot: buildTransportSnapshot(args.runtime.getSnapshot()) };
+        const payload = {
+          snapshot: buildTransportSnapshot(args.runtime.getSnapshot()),
+          globalConfig: args.runtime.getGlobalConfig(),
+        };
         if (args.logger?.shouldLog("api-state", 1_000) ?? false) {
           args.logger?.info("api-state", {
             bytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
@@ -336,6 +483,11 @@ export async function startWorkspaceHttpServer(args: {
           });
         }
         sendJson(response, 200, payload);
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/config") {
+        sendJson(response, 200, { globalConfig: args.runtime.getGlobalConfig() });
         return;
       }
 
@@ -384,6 +536,107 @@ export async function startWorkspaceHttpServer(args: {
         const body = await readJson<{ brief: string }>(request);
         const template = await args.runtime.generateTemplate(body.brief);
         sendJson(response, 200, { template, snapshot: buildTransportSnapshot(args.runtime.getSnapshot()) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/template-studio/chat") {
+        const body = await readJson<{
+          templateId: string;
+          messages: Array<{
+            role: "user" | "assistant";
+            content: string;
+          }>;
+          modelProfileId?: string;
+        }>(request);
+        const result = await args.runtime.chatTemplateStudio(body);
+        sendJson(response, 200, {
+          ...result,
+          snapshot: buildTransportSnapshot(result.snapshot),
+        });
+        return;
+      }
+
+      const templateDeleteMatch = url.pathname.match(/^\/api\/templates\/([^/]+)$/u);
+      if (request.method === "DELETE" && templateDeleteMatch) {
+        const [, templateId] = templateDeleteMatch;
+        if (!templateId) {
+          sendJson(response, 400, { error: "Missing template id" });
+          return;
+        }
+        const snapshot = await args.runtime.deleteTemplate(templateId);
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
+      const templateConfigMatch = url.pathname.match(/^\/api\/templates\/([^/]+)\/config$/u);
+      if (request.method === "POST" && templateConfigMatch) {
+        const [, templateId] = templateConfigMatch;
+        if (!templateId) {
+          sendJson(response, 400, { error: "Missing template id" });
+          return;
+        }
+        const body = await readJson<{
+          name: string;
+          description: string;
+          accentTone: "paper" | "postit" | "blueprint" | "correction";
+          members: Array<{
+            id: string;
+            name: string;
+            handle: string;
+            summary: string;
+            prompt: string;
+            accentTone: "paper" | "postit" | "blueprint" | "correction";
+            skills: Array<{ id: string; name: string; description: string; command: string }>;
+            provider: {
+              kind: "codex-acp" | "generic-acp";
+              label: string;
+              command: string;
+              args: string[];
+              env: Record<string, string>;
+              workingDirectory?: string;
+              capabilities: string[];
+            };
+            isEntryMember?: boolean;
+            observeAllRoomMessages?: boolean;
+            acceptsDirectMessages?: boolean;
+            watch?: {
+              intervalMinutes: number;
+              enabledByDefault: boolean;
+            };
+          }>;
+        }>(request);
+        const snapshot = await args.runtime.updateTemplate({
+          templateId,
+          ...body,
+        });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/config") {
+        const body = await readJson<{
+          modelProfiles: Array<{
+            id: string;
+            name: string;
+            description: string;
+            providerType: "acp";
+            binding: {
+              kind: "codex-acp" | "generic-acp";
+              label: string;
+              command: string;
+              args: string[];
+              env: Record<string, string>;
+              workingDirectory?: string;
+              capabilities: string[];
+            };
+          }>;
+          templateChatModelProfileId?: string;
+        }>(request);
+        const globalConfig = await args.runtime.updateGlobalConfig(body);
+        sendJson(response, 200, {
+          globalConfig,
+          snapshot: buildTransportSnapshot(args.runtime.getSnapshot()),
+        });
         return;
       }
 
@@ -495,6 +748,30 @@ export async function startWorkspaceHttpServer(args: {
         return;
       }
 
+      const roomDeleteMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)$/u);
+      if (request.method === "DELETE" && roomDeleteMatch) {
+        const [, roomId] = roomDeleteMatch;
+        if (!roomId) {
+          sendJson(response, 400, { error: "Missing room id" });
+          return;
+        }
+        const snapshot = await args.runtime.deleteRoom(roomId);
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
+      const projectDeleteMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/u);
+      if (request.method === "DELETE" && projectDeleteMatch) {
+        const [, projectId] = projectDeleteMatch;
+        if (!projectId) {
+          sendJson(response, 400, { error: "Missing project id" });
+          return;
+        }
+        const snapshot = await args.runtime.deleteProject(projectId);
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/internal/member-message") {
         const body = await readJson<{
           roomId: string;
@@ -546,6 +823,7 @@ export async function startWorkspaceHttpServer(args: {
         const body = await readJson<{
           summary: string;
           prompt: string;
+          modelProfileId?: string;
           acceptsDirectMessages: boolean;
           skills: Array<{ id: string; name: string; description: string; command: string }>;
           provider: {

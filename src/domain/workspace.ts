@@ -1,7 +1,9 @@
 import type {
+  AccentTone,
   ChatAuthor,
   ChatMessage,
   CompleteTaskInput,
+  ProjectId,
   CreateRoomInput,
   CreateProjectInput,
   MemberId,
@@ -10,16 +12,19 @@ import type {
   PostMemberMessageInput,
   PostMemberDraftInput,
   PostUserMessageInput,
+  ProviderBinding,
   RoomId,
   Room,
   SkillDefinition,
   TaskId,
   TaskTraceEntry,
+  TemplateId,
   TeamMember,
   TeamMemberBlueprint,
   TeamTemplate,
   UpsertWatcherInput,
   UpdateMemberConfigInput,
+  UpdateTemplateInput,
   WatchSubscription,
   WorkspaceSnapshot,
 } from "./model";
@@ -318,6 +323,7 @@ function instantiateMember(
     summary: blueprint.summary,
     prompt: blueprint.prompt,
     accentTone: blueprint.accentTone,
+    modelProfileId: blueprint.modelProfileId,
     skills: blueprint.skills,
     provider: blueprint.provider,
     observeAllRoomMessages: blueprint.observeAllRoomMessages ?? false,
@@ -443,6 +449,112 @@ export function createRoomInProject(
     roomId,
     memberId: memberIdByBlueprint[entryBlueprint.id],
   };
+  return snapshot;
+}
+
+function resolveSelection(snapshot: WorkspaceSnapshot, preferredProjectId?: ProjectId): WorkspaceSnapshot["selection"] {
+  const projectId =
+    (preferredProjectId && snapshot.projects[preferredProjectId] ? preferredProjectId : undefined)
+    ?? (snapshot.selection.projectId && snapshot.projects[snapshot.selection.projectId] ? snapshot.selection.projectId : undefined)
+    ?? snapshot.projectOrder[0];
+  const roomIds = projectId ? snapshot.roomOrderByProject[projectId] ?? [] : [];
+  const roomId =
+    (snapshot.selection.roomId && roomIds.includes(snapshot.selection.roomId) ? snapshot.selection.roomId : undefined)
+    ?? roomIds[0];
+  const room = roomId ? snapshot.rooms[roomId] : undefined;
+  const memberId = room
+    ? ((snapshot.selection.memberId && room.memberIds.includes(snapshot.selection.memberId)) ? snapshot.selection.memberId : room.entryMemberId)
+    : undefined;
+
+  return {
+    projectId,
+    roomId,
+    memberId,
+  };
+}
+
+function removeRoomArtifacts(snapshot: WorkspaceSnapshot, roomId: RoomId): void {
+  const room = snapshot.rooms[roomId];
+  if (!room) {
+    return;
+  }
+
+  (snapshot.messageOrderByRoom[roomId] ?? []).forEach((messageId) => {
+    delete snapshot.messages[messageId];
+  });
+  delete snapshot.messageOrderByRoom[roomId];
+
+  Object.values(snapshot.tasks)
+    .filter((task) => task.roomId === roomId)
+    .forEach((task) => {
+      (snapshot.taskTraceOrderByTask[task.id] ?? []).forEach((traceId) => {
+        delete snapshot.taskTraces[traceId];
+      });
+      delete snapshot.taskTraceOrderByTask[task.id];
+      delete snapshot.tasks[task.id];
+    });
+
+  room.watcherIds.forEach((watcherId) => {
+    delete snapshot.watchers[watcherId];
+  });
+  room.memberIds.forEach((memberId) => {
+    delete snapshot.members[memberId];
+  });
+  delete snapshot.rooms[roomId];
+}
+
+export function deleteRoom(current: WorkspaceSnapshot, roomId: RoomId): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const room = snapshot.rooms[roomId];
+
+  if (!room) {
+    throw new Error(`Unknown room "${roomId}"`);
+  }
+
+  removeRoomArtifacts(snapshot, roomId);
+  snapshot.roomOrderByProject[room.projectId] = (snapshot.roomOrderByProject[room.projectId] ?? []).filter((candidate) => candidate !== roomId);
+  snapshot.selection = resolveSelection(snapshot, room.projectId);
+
+  return snapshot;
+}
+
+export function deleteProject(current: WorkspaceSnapshot, projectId: ProjectId): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+
+  if (!snapshot.projects[projectId]) {
+    throw new Error(`Unknown project "${projectId}"`);
+  }
+
+  const roomIds = [...(snapshot.roomOrderByProject[projectId] ?? [])];
+  roomIds.forEach((roomId) => {
+    removeRoomArtifacts(snapshot, roomId);
+  });
+  delete snapshot.roomOrderByProject[projectId];
+  delete snapshot.projects[projectId];
+  snapshot.projectOrder = snapshot.projectOrder.filter((candidate) => candidate !== projectId);
+  snapshot.selection = resolveSelection(snapshot);
+
+  return snapshot;
+}
+
+export function deleteTemplate(current: WorkspaceSnapshot, templateId: TemplateId): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+
+  if (!snapshot.templates[templateId]) {
+    throw new Error(`Unknown template "${templateId}"`);
+  }
+
+  if (snapshot.templateOrder.length <= 1) {
+    throw new Error("At least one team template must remain.");
+  }
+
+  if (Object.values(snapshot.rooms).some((room) => room.templateId === templateId)) {
+    throw new Error("Cannot delete a team template that is still used by an existing room.");
+  }
+
+  delete snapshot.templates[templateId];
+  snapshot.templateOrder = snapshot.templateOrder.filter((candidate) => candidate !== templateId);
+
   return snapshot;
 }
 
@@ -671,6 +783,81 @@ function validateSkills(skills: SkillDefinition[]): SkillDefinition[] {
   });
 }
 
+function normalizeProviderBinding(provider: ProviderBinding): ProviderBinding {
+  if (!provider.label.trim() || !provider.command.trim()) {
+    throw new Error("Provider label and command are required");
+  }
+
+  return {
+    ...provider,
+    label: provider.label.trim(),
+    command: provider.command.trim(),
+    args: provider.args.map((arg) => arg.trim()).filter(Boolean),
+    capabilities: validateProviderCapabilities(provider.capabilities),
+  };
+}
+
+function validateAccentTone(accentTone: AccentTone): AccentTone {
+  return accentTone;
+}
+
+function validateTemplateMembers(members: TeamMemberBlueprint[]): TeamMemberBlueprint[] {
+  if (members.length === 0) {
+    throw new Error("A template requires at least one member");
+  }
+
+  const normalizedMembers = members.map((member) => {
+    if (!member.id.trim() || !member.name.trim() || !member.handle.trim()) {
+      throw new Error("Each template member requires an id, name, and handle");
+    }
+
+    const watch = member.watch
+      ? {
+          intervalMinutes: Math.round(member.watch.intervalMinutes),
+          enabledByDefault: member.watch.enabledByDefault,
+        }
+      : undefined;
+
+    if (watch && (!Number.isFinite(watch.intervalMinutes) || watch.intervalMinutes <= 0)) {
+      throw new Error(`Watcher interval for @${member.handle} must be a positive number`);
+    }
+
+    return {
+      ...member,
+      id: member.id.trim(),
+      name: member.name.trim(),
+      handle: member.handle.trim().replace(/^@/u, ""),
+      summary: member.summary.trim(),
+      prompt: member.prompt.trim(),
+      accentTone: validateAccentTone(member.accentTone),
+      modelProfileId: member.modelProfileId?.trim() || undefined,
+      skills: validateSkills(member.skills),
+      provider: normalizeProviderBinding(member.provider),
+      watch,
+    };
+  });
+
+  const entryMembers = normalizedMembers.filter((member) => member.isEntryMember === true);
+  if (entryMembers.length !== 1) {
+    throw new Error("A template must define exactly one entry member");
+  }
+
+  const seenIds = new Set<string>();
+  const seenHandles = new Set<string>();
+  normalizedMembers.forEach((member) => {
+    if (seenIds.has(member.id)) {
+      throw new Error(`Duplicate template member id "${member.id}"`);
+    }
+    if (seenHandles.has(member.handle)) {
+      throw new Error(`Duplicate template member handle "${member.handle}"`);
+    }
+    seenIds.add(member.id);
+    seenHandles.add(member.handle);
+  });
+
+  return normalizedMembers;
+}
+
 export function updateMemberConfig(current: WorkspaceSnapshot, input: UpdateMemberConfigInput): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
   const member = snapshot.members[input.memberId];
@@ -679,23 +866,37 @@ export function updateMemberConfig(current: WorkspaceSnapshot, input: UpdateMemb
     throw new Error(`Unknown member "${input.memberId}"`);
   }
 
-  if (!input.provider.label.trim() || !input.provider.command.trim()) {
-    throw new Error("Provider label and command are required");
-  }
-
   snapshot.members[input.memberId] = {
     ...member,
     summary: input.summary.trim(),
     prompt: input.prompt.trim(),
+    modelProfileId: input.modelProfileId?.trim() || undefined,
     acceptsDirectMessages: input.acceptsDirectMessages,
     skills: validateSkills(input.skills),
-    provider: {
-      ...input.provider,
-      label: input.provider.label.trim(),
-      command: input.provider.command.trim(),
-      args: input.provider.args.map((arg) => arg.trim()).filter(Boolean),
-      capabilities: validateProviderCapabilities(input.provider.capabilities),
-    },
+    provider: member.provider,
+  };
+
+  return snapshot;
+}
+
+export function updateTemplate(current: WorkspaceSnapshot, input: UpdateTemplateInput): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const template = snapshot.templates[input.templateId];
+
+  if (!template) {
+    throw new Error(`Unknown template "${input.templateId}"`);
+  }
+
+  if (!input.name.trim()) {
+    throw new Error("Template name is required");
+  }
+
+  snapshot.templates[input.templateId] = {
+    ...template,
+    name: input.name.trim(),
+    description: input.description.trim(),
+    accentTone: validateAccentTone(input.accentTone),
+    members: validateTemplateMembers(input.members),
   };
 
   return snapshot;

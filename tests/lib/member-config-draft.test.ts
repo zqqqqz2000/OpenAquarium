@@ -4,15 +4,12 @@ import { buildMemberConfigInput, buildWatcherConfigInput, createMemberConfigDraf
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
 describe("member config draft helpers", () => {
-  it("round-trips provider and skill edits into a member config payload", () => {
+  it("round-trips model profile selection and skill edits into a member config payload", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder")!;
     const draft = createMemberConfigDraft(builder);
-    draft.providerCommand = "claude-code";
-    draft.providerArgsText = "--stdio\n--model\nsonnet";
-    draft.providerCapabilitiesText = "prompt, cancel, loadSession";
-    draft.providerEnvText = "ANTHROPIC_API_KEY=test-key";
+    draft.modelProfileId = "model-codex-acp-default";
     draft.skills = [
       {
         id: "send-group",
@@ -24,10 +21,8 @@ describe("member config draft helpers", () => {
 
     const payload = buildMemberConfigInput(builder, draft);
 
-    expect(payload.provider.command).toBe("claude-code");
-    expect(payload.provider.args).toEqual(["--stdio", "--model", "sonnet"]);
-    expect(payload.provider.capabilities).toEqual(["prompt", "cancel", "loadSession"]);
-    expect(payload.provider.env).toEqual({ ANTHROPIC_API_KEY: "test-key" });
+    expect(payload.modelProfileId).toBe("model-codex-acp-default");
+    expect(payload.provider.command).toBe(builder.provider.command);
     expect(payload.skills[0]?.command).toContain("oa-room-send");
   });
 

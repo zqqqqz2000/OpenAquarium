@@ -1,8 +1,8 @@
 import { useState } from "react";
 
-import { Clock3, Eye, Hammer, KeyRound, Plus, ScanSearch, Star, Trash2 } from "lucide-react";
+import { Clock3, Eye, KeyRound, Plus, Settings2, Star, Trash2 } from "lucide-react";
 
-import type { Room, TeamMember, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
+import type { GlobalWorkspaceConfig, Room, TeamMember, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
 import { buildMemberCliCommands } from "@/domain/tooling";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { MemberSessionPane } from "@/components/members/member-session-pane";
@@ -29,9 +29,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { getMemberHistory } from "@/lib/message-feed";
 import { badgeToneProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
@@ -49,6 +57,7 @@ function FactTile(props: { label: string; value: string }) {
 
 export function MemberStudioDialog(props: {
   snapshot: WorkspaceSnapshot;
+  globalConfig?: GlobalWorkspaceConfig;
   room?: Room;
   member?: TeamMember;
   connected?: boolean;
@@ -63,6 +72,7 @@ export function MemberStudioDialog(props: {
 }) {
   const {
     snapshot,
+    globalConfig: incomingGlobalConfig,
     room,
     member,
     connected = true,
@@ -79,6 +89,7 @@ export function MemberStudioDialog(props: {
   const [watcherDrafts, setWatcherDrafts] = useState<Record<string, WatcherDraft>>({});
   const [errorByMember, setErrorByMember] = useState<Record<string, string | undefined>>({});
   const [activeTab, setActiveTab] = useState("session");
+  const globalConfig = incomingGlobalConfig ?? createDefaultGlobalWorkspaceConfig();
 
   if (!room || !member) {
     return null;
@@ -93,6 +104,9 @@ export function MemberStudioDialog(props: {
   const memberError = errorByMember[member.id];
   const memberToneBadge = badgeToneProps(member.accentTone);
   const isSessionTab = activeTab === "session";
+  const activeModelProfileName =
+    globalConfig.modelProfiles.find((profile) => profile.id === (configDraft.modelProfileId ?? member.modelProfileId))?.name
+    ?? member.provider.label;
 
   const patchConfigDraft = (patch: Partial<MemberConfigDraft>): void => {
     setConfigDrafts((current) => ({
@@ -169,7 +183,7 @@ export function MemberStudioDialog(props: {
                 {!isSessionTab ? <p className="m-0 text-sm leading-6 text-muted-foreground">{member.summary}</p> : null}
                 <div className="flex flex-wrap gap-2">
                   <Badge variant={memberToneBadge.variant} className={memberToneBadge.className}>
-                    {member.provider.label}
+                    {activeModelProfileName}
                   </Badge>
                   <Badge variant="secondary">{member.skills.length} skills</Badge>
                   {member.isEntryMember ? <Badge variant="outline">Entry member</Badge> : null}
@@ -227,9 +241,7 @@ export function MemberStudioDialog(props: {
               {[
                 ["session", "Session"],
                 ["history", "History"],
-                ["behavior", "Behavior"],
-                ["provider", "ACP"],
-                ["skills", "Skills"],
+                ["config", "Config"],
                 ["watcher", "Watcher"],
                 ["cli", "CLI"],
               ].map(([value, label]) => (
@@ -287,10 +299,21 @@ export function MemberStudioDialog(props: {
                 </Card>
               </TabsContent>
 
-              <TabsContent value="behavior" className="m-0">
+              <TabsContent value="config" className="m-0">
                 <Card>
                   <CardContent className="flex flex-col gap-4 p-4">
-                    <p className="m-0 text-lg font-semibold tracking-tight">Behavior</p>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Settings2 size={18} />
+                        <p className="m-0 text-lg font-semibold tracking-tight">Room config</p>
+                      </div>
+                      <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3">
+                        <p className="m-0 text-sm font-medium">Room-scoped member config</p>
+                        <p className="m-0 mt-1 text-sm leading-6 text-muted-foreground">
+                          这里改的是当前 room 下这个 member 的实例配置，不会同步回 team template。
+                        </p>
+                      </div>
+                    </div>
                     <label className="flex flex-col gap-2">
                       <span className="text-sm font-medium">Summary</span>
                       <Input value={configDraft.summary} onChange={(event) => patchConfigDraft({ summary: event.currentTarget.value })} />
@@ -302,6 +325,27 @@ export function MemberStudioDialog(props: {
                         value={configDraft.prompt}
                         onChange={(event) => patchConfigDraft({ prompt: event.currentTarget.value })}
                       />
+                    </label>
+                    <label className="flex flex-col gap-2">
+                      <span className="text-sm font-medium">Model profile</span>
+                      <Select
+                        value={configDraft.modelProfileId ?? globalConfig.modelProfiles[0]?.id}
+                        onValueChange={(value) => patchConfigDraft({ modelProfileId: value })}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select a global model profile" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {globalConfig.modelProfiles.map((profile) => (
+                            <SelectItem key={profile.id} value={profile.id}>
+                              {profile.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="m-0 text-xs leading-5 text-muted-foreground">
+                        Provider command/env now live in Template Studio &gt; Models. Room-level config only picks a model name.
+                      </p>
                     </label>
                     <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
                       <span className="flex items-center gap-2 text-sm font-medium">
@@ -325,130 +369,81 @@ export function MemberStudioDialog(props: {
                         onCheckedChange={() => void onToggleMonitor(member.id)}
                       />
                     </label>
-                  </CardContent>
-                </Card>
-              </TabsContent>
 
-              <TabsContent value="provider" className="m-0">
-                <Card>
-                  <CardContent className="flex flex-col gap-3 p-4">
-                    <div className="flex items-center gap-2">
-                      <ScanSearch size={18} />
-                      <p className="m-0 text-lg font-semibold tracking-tight">ACP provider</p>
-                    </div>
-                    <label className="flex flex-col gap-2">
-                      <span className="text-sm font-medium">Label</span>
-                      <Input value={configDraft.providerLabel} onChange={(event) => patchConfigDraft({ providerLabel: event.currentTarget.value })} />
-                    </label>
-                    <label className="flex flex-col gap-2">
-                      <span className="text-sm font-medium">Command</span>
-                      <Input value={configDraft.providerCommand} onChange={(event) => patchConfigDraft({ providerCommand: event.currentTarget.value })} />
-                    </label>
-                    <label className="flex flex-col gap-2">
-                      <span className="text-sm font-medium">Args (one per line)</span>
-                      <Textarea
-                        className="min-h-24"
-                        value={configDraft.providerArgsText}
-                        onChange={(event) => patchConfigDraft({ providerArgsText: event.currentTarget.value })}
-                      />
-                    </label>
-                    <label className="flex flex-col gap-2">
-                      <span className="text-sm font-medium">Capabilities (comma or newline separated)</span>
-                      <Textarea
-                        className="min-h-20"
-                        value={configDraft.providerCapabilitiesText}
-                        onChange={(event) => patchConfigDraft({ providerCapabilitiesText: event.currentTarget.value })}
-                      />
-                    </label>
-                    <label className="flex flex-col gap-2">
-                      <span className="text-sm font-medium">Working directory</span>
-                      <Input
-                        value={configDraft.providerWorkingDirectory}
-                        onChange={(event) => patchConfigDraft({ providerWorkingDirectory: event.currentTarget.value })}
-                        placeholder="/absolute/or/relative/path"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-2">
-                      <span className="text-sm font-medium">Environment (KEY=VALUE per line)</span>
-                      <Textarea
-                        className="min-h-24"
-                        value={configDraft.providerEnvText}
-                        onChange={(event) => patchConfigDraft({ providerEnvText: event.currentTarget.value })}
-                      />
-                    </label>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              <TabsContent value="skills" className="m-0">
-                <Card>
-                  <CardContent className="flex flex-col gap-3 p-4">
-                    <div className="flex items-center gap-2">
-                      <Hammer size={18} />
-                      <p className="m-0 text-lg font-semibold tracking-tight">Skill commands</p>
-                    </div>
-                    {configDraft.skills.map((skill, index) => (
-                      <div key={skill.id} className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-3">
-                        <div className="flex justify-between gap-3">
-                          <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Skill {index + 1}</p>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            type="button"
-                            onClick={() =>
+                    <div className="space-y-3 border-t border-border pt-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="m-0 text-lg font-semibold tracking-tight">Skill commands</p>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => patchConfigDraft({ skills: addEmptySkillDraft(configDraft.skills) })}
+                        >
+                          <Plus size={16} />
+                          Add skill
+                        </Button>
+                      </div>
+                      {configDraft.skills.map((skill, index) => (
+                        <div key={skill.id} className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-3">
+                          <div className="flex justify-between gap-3">
+                            <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Skill {index + 1}</p>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              type="button"
+                              onClick={() =>
+                                patchConfigDraft({
+                                  skills: configDraft.skills.filter((candidate) => candidate.id !== skill.id),
+                                })
+                              }
+                            >
+                              <Trash2 size={16} />
+                            </Button>
+                          </div>
+                          <Input
+                            value={skill.name}
+                            onChange={(event) =>
                               patchConfigDraft({
-                                skills: configDraft.skills.filter((candidate) => candidate.id !== skill.id),
+                                skills: configDraft.skills.map((candidate) =>
+                                  candidate.id === skill.id ? { ...candidate, name: event.currentTarget.value } : candidate,
+                                ),
                               })
                             }
-                          >
-                            <Trash2 size={16} />
-                          </Button>
+                            placeholder="Skill name"
+                          />
+                          <Input
+                            value={skill.description}
+                            onChange={(event) =>
+                              patchConfigDraft({
+                                skills: configDraft.skills.map((candidate) =>
+                                  candidate.id === skill.id ? { ...candidate, description: event.currentTarget.value } : candidate,
+                                ),
+                              })
+                            }
+                            placeholder="What this skill is for"
+                          />
+                          <Textarea
+                            className="min-h-20"
+                            value={skill.command}
+                            onChange={(event) =>
+                              patchConfigDraft({
+                                skills: configDraft.skills.map((candidate) =>
+                                  candidate.id === skill.id ? { ...candidate, command: event.currentTarget.value } : candidate,
+                                ),
+                              })
+                            }
+                            placeholder="./bin/oa-room-send --scope group"
+                          />
                         </div>
-                        <Input
-                          value={skill.name}
-                          onChange={(event) =>
-                            patchConfigDraft({
-                              skills: configDraft.skills.map((candidate) =>
-                                candidate.id === skill.id ? { ...candidate, name: event.currentTarget.value } : candidate,
-                              ),
-                            })
-                          }
-                          placeholder="Skill name"
-                        />
-                        <Input
-                          value={skill.description}
-                          onChange={(event) =>
-                            patchConfigDraft({
-                              skills: configDraft.skills.map((candidate) =>
-                                candidate.id === skill.id ? { ...candidate, description: event.currentTarget.value } : candidate,
-                              ),
-                            })
-                          }
-                          placeholder="What this skill is for"
-                        />
-                        <Textarea
-                          className="min-h-20"
-                          value={skill.command}
-                          onChange={(event) =>
-                            patchConfigDraft({
-                              skills: configDraft.skills.map((candidate) =>
-                                candidate.id === skill.id ? { ...candidate, command: event.currentTarget.value } : candidate,
-                              ),
-                            })
-                          }
-                          placeholder="./bin/oa-room-send --scope group"
-                        />
-                      </div>
-                    ))}
-                    <div className="flex justify-start">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => patchConfigDraft({ skills: addEmptySkillDraft(configDraft.skills) })}
-                      >
-                        <Plus size={16} />
-                        Add skill
-                      </Button>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                      {memberError ? (
+                        <p className="m-0 text-sm text-destructive">{memberError}</p>
+                      ) : (
+                        <p className="m-0 text-sm text-muted-foreground">保存后只更新当前 room 里的这个 member 实例。</p>
+                      )}
+                      <Button onClick={saveConfig}>Save member config</Button>
                     </div>
                   </CardContent>
                 </Card>
@@ -461,7 +456,7 @@ export function MemberStudioDialog(props: {
                       <Clock3 size={18} />
                       <p className="m-0 text-lg font-semibold tracking-tight">Watcher</p>
                     </div>
-                    <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                    <label className="flex flex-col gap-2">
                       <span className="text-sm font-medium">Enable scheduled watcher</span>
                       <Switch
                         aria-label="Enable watcher"
@@ -506,12 +501,6 @@ export function MemberStudioDialog(props: {
               </TabsContent>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-              {memberError ? (
-                <p className="m-0 text-sm text-destructive">{memberError}</p>
-              ) : null}
-              <Button onClick={saveConfig}>Save member config</Button>
-            </div>
           </Tabs>
         </div>
       </DialogContent>

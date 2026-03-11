@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createRuntimeContext } from "@/domain/identity";
 import { createProjectWithRoom, createWorkspaceSnapshot, postUserMessage } from "@/domain/workspace";
 import { defaultTemplates } from "@/lib/sample-data/templates";
+import { OpenAquariumGlobalConfigManager } from "@/server/global-config";
 import type { ExecutorCallbacks, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 import { WorkspacePersistence } from "@/server/persistence";
 import { getRoomTranscriptFilePath } from "@/server/room-transcript-files";
@@ -166,6 +167,64 @@ describe("WorkspaceRuntime", () => {
     });
   });
 
+  it("deletes a room and project while cleaning their runtime state", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-delete-"));
+    let disposeCount = 0;
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => ({
+        execute: async () => {
+          await new Promise<void>(() => undefined);
+        },
+        cancel: () => Promise.resolve(),
+        dispose: () => {
+          disposeCount += 1;
+          return Promise.resolve();
+        },
+      }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Delete Check",
+      templateId: "template-product-pod",
+    });
+    const roomBeforeDelete = runtime.getSnapshot().rooms[created.roomId];
+    if (!roomBeforeDelete) {
+      throw new Error("Expected created room");
+    }
+
+    await runtime.sendUserMessage({
+      roomId: created.roomId,
+      content: "先让 lead 开始处理",
+    });
+
+    await waitFor(() => {
+      const snapshot = runtime.getSnapshot();
+      expect(Object.values(snapshot.tasks).some((task) => task.roomId === created.roomId && task.status === "running")).toBe(true);
+    });
+
+    const roomSnapshot = await runtime.deleteRoom(created.roomId);
+    expect(roomSnapshot.rooms[created.roomId]).toBeUndefined();
+    expect(roomSnapshot.selection.projectId).toBe(created.projectId);
+    expect(roomSnapshot.selection.roomId).toBeUndefined();
+    roomBeforeDelete.memberIds.forEach((memberId) => {
+      expect(roomSnapshot.members[memberId]).toBeUndefined();
+    });
+    roomBeforeDelete.watcherIds.forEach((watcherId) => {
+      expect(roomSnapshot.watchers[watcherId]).toBeUndefined();
+    });
+    expect((roomSnapshot.messageOrderByRoom[created.roomId] ?? []).length).toBe(0);
+    expect(disposeCount).toBeGreaterThan(0);
+
+    const projectSnapshot = await runtime.deleteProject(created.projectId);
+    expect(projectSnapshot.projects[created.projectId]).toBeUndefined();
+    expect(projectSnapshot.roomOrderByProject[created.projectId]).toBeUndefined();
+    expect(projectSnapshot.selection.projectId).toBeUndefined();
+  });
+
   it("materializes room transcript files on startup from persisted state", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-transcript-"));
     const stateFilePath = path.join(workspaceRoot, ".openaquarium", "state.json");
@@ -205,6 +264,57 @@ describe("WorkspaceRuntime", () => {
 
     expect(transcript).toContain("把这条历史消息写入 transcript 文件。");
     expect(transcript).toContain(`# ${room.name}`);
+  });
+
+  it("prunes snapshot-only team templates that are no longer in global config and not used by any room", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-template-prune-"));
+    const stateFilePath = path.join(workspaceRoot, ".openaquarium", "state.json");
+    const persistence = new WorkspacePersistence(stateFilePath);
+    const snapshot = createWorkspaceSnapshot([
+      ...defaultTemplates,
+      {
+        id: "template-unused-browser-chat-check",
+        name: "Unused Browser Chat Check",
+        description: "stale template",
+        accentTone: "paper",
+        members: [
+          {
+            id: "unused-member",
+            name: "Unused Member",
+            handle: "unused",
+            summary: "unused",
+            prompt: "unused",
+            accentTone: "paper",
+            provider: {
+              kind: "codex-acp",
+              label: "Codex ACP",
+              command: "npx",
+              args: ["@zed-industries/codex-acp"],
+              env: {},
+              capabilities: ["prompt", "cancel", "loadSession"],
+            },
+            isEntryMember: true,
+            observeAllRoomMessages: false,
+            acceptsDirectMessages: true,
+            skills: [],
+          },
+        ],
+      },
+    ]);
+    await persistence.save(snapshot);
+
+    const runtime = await WorkspaceRuntime.create({
+      workspaceRoot,
+      stateFilePath,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    expect(runtime.getSnapshot().templateOrder).not.toContain("template-unused-browser-chat-check");
+    expect(runtime.getSnapshot().templates["template-unused-browser-chat-check"]).toBeUndefined();
   });
 
   it("captures an error trace when execution crashes before ACP completes", async () => {
@@ -345,13 +455,14 @@ describe("WorkspaceRuntime", () => {
 
     const snapshot = runtime.getSnapshot();
     const roomTasks = Object.values(snapshot.tasks).filter((task) => task.roomId === created.roomId);
-    const routedHandles = roomTasks
+    const routedTasks = roomTasks.filter((task) => ["research", "builder"].includes(snapshot.members[task.memberId].handle));
+    const routedHandles = routedTasks
       .filter((task) => ["research", "builder"].includes(snapshot.members[task.memberId].handle))
       .map((task) => snapshot.members[task.memberId].handle)
       .sort();
 
     expect(routedHandles).toEqual(["builder", "research"]);
-    expect(roomTasks.every((task) => task.status !== "running")).toBe(true);
+    expect(routedTasks.every((task) => task.status !== "running")).toBe(true);
   });
 
   it("continues id allocation after restart instead of colliding with persisted state", async () => {
@@ -493,5 +604,82 @@ describe("WorkspaceRuntime", () => {
 
     expect(digestMessages).toHaveLength(0);
     expect(snapshot.watchers[watcherId]?.lastConsumedMessageId).toBeUndefined();
+  });
+
+  it("reloads templates from the global config directory after template studio chat writes them", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-template-chat-"));
+    const configDirPath = path.join(workspaceRoot, ".config");
+    const globalConfigManager = new OpenAquariumGlobalConfigManager(configDirPath);
+    const loaded = await globalConfigManager.load();
+    const templateStudioChatService = {
+      chat: ({ templates, templateId }: { templates: typeof loaded.templates; templateId: string }) => {
+        const nextTemplates = templates.map((template) =>
+          template.id === templateId
+            ? {
+                ...template,
+                description: "Updated from template studio chat",
+              }
+            : template,
+        );
+
+        return globalConfigManager.saveTemplates(nextTemplates).then(() => ({
+          assistantMessage: "Updated template description.",
+          modelProfileId: loaded.config.templateChatModelProfileId ?? loaded.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
+        }));
+      },
+      dispose: () => Promise.resolve(),
+    };
+    const runtime = await WorkspaceRuntime.create({
+      workspaceRoot,
+      stateFilePath: path.join(workspaceRoot, ".openaquarium", "state.json"),
+      configDirPath,
+      templateStudioChatService,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const templateId = runtime.getSnapshot().templateOrder[0];
+    expect(templateId).toBeDefined();
+    if (!templateId) {
+      throw new Error("Expected template id");
+    }
+
+    const result = await runtime.chatTemplateStudio({
+      templateId,
+      messages: [{ role: "user", content: "Update the template description." }],
+    });
+
+    expect(result.assistantMessage).toBe("Updated template description.");
+    expect(runtime.getSnapshot().templates[templateId]?.description).toBe("Updated from template studio chat");
+  });
+
+  it("blocks deleting a team template that is still referenced by a room", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-template-delete-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    await runtime.createProject({
+      projectName: "Template Delete Guard",
+      templateId: "template-product-pod",
+    });
+
+    await expect(runtime.deleteTemplate("template-product-pod")).rejects.toThrow(
+      "Cannot delete a team template that is still used by an existing room.",
+    );
+
+    const snapshot = await runtime.deleteTemplate("template-incident-pod");
+    expect(snapshot.templates["template-incident-pod"]).toBeUndefined();
+    expect(snapshot.templateOrder).not.toContain("template-incident-pod");
   });
 });

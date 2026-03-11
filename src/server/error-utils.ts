@@ -1,6 +1,21 @@
 export type RuntimeError = Error | { code?: string | number; message?: string } | string | number | boolean | null | undefined;
 
 export function getErrorMessage(error: RuntimeError): string {
+  if (typeof error === "object" && error !== null) {
+    const nestedDataMessage =
+      "data" in error
+      && typeof error.data === "object"
+      && error.data !== null
+      && "message" in error.data
+      && typeof error.data.message === "string"
+        ? error.data.message
+        : undefined;
+
+    if (nestedDataMessage && nestedDataMessage.trim().length > 0) {
+      return nestedDataMessage;
+    }
+  }
+
   if (error instanceof Error) {
     return error.message;
   }

@@ -6,6 +6,7 @@ import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
 import { createRuntimeContext } from "@/domain/identity";
 import { postUserMessage } from "@/domain/workspace";
 import type { UpdateMemberConfigInput } from "@/domain/model";
+import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
 describe("MemberStudioDialog", () => {
@@ -23,6 +24,7 @@ describe("MemberStudioDialog", () => {
     render(
       <MemberStudioDialog
         snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         room={room}
         member={builder}
         onClose={vi.fn()}
@@ -36,14 +38,11 @@ describe("MemberStudioDialog", () => {
 
     expect(screen.queryByText("深配置收进这里。主聊天页只保留概览和入口动作。")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: "Behavior" }));
+    await user.click(screen.getByRole("tab", { name: "Config" }));
     await user.clear(screen.getByRole("textbox", { name: /Summary/i }));
     await user.type(screen.getByRole("textbox", { name: /Summary/i }), "Builder summary v2");
     await user.clear(screen.getByRole("textbox", { name: /Prompt/i }));
     await user.type(screen.getByRole("textbox", { name: /Prompt/i }), "新的 builder prompt");
-    await user.click(screen.getByRole("tab", { name: "ACP" }));
-    await user.clear(screen.getByRole("textbox", { name: /Command/i }));
-    await user.type(screen.getByRole("textbox", { name: /Command/i }), "claude-code");
     await user.click(screen.getByRole("button", { name: /Save member config/i }));
     await user.click(screen.getByRole("button", { name: /Make entry member/i }));
     await user.click(screen.getByRole("tab", { name: "Watcher" }));
@@ -57,8 +56,9 @@ describe("MemberStudioDialog", () => {
       memberId: builder.id,
       summary: "Builder summary v2",
       prompt: "新的 builder prompt",
+      modelProfileId: "model-codex-acp-default",
     });
-    expect(savedConfig?.provider.command).toBe("claude-code");
+    expect(savedConfig?.provider.command).toBe(builder.provider.command);
     expect(onSetEntryMember).toHaveBeenCalledWith(builder.id);
     expect(onSaveWatcher).toHaveBeenCalledWith({
       memberId: builder.id,
@@ -66,6 +66,9 @@ describe("MemberStudioDialog", () => {
       intervalMinutes: 6,
     });
     expect(onRunWatcher).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "Config" }));
+    expect(screen.getByText("这里改的是当前 room 下这个 member 的实例配置，不会同步回 team template。")).toBeInTheDocument();
+    expect(screen.getByText(/Provider command\/env now live in Template Studio > Models/i)).toBeInTheDocument();
   });
 
   it("shows member-specific processing history", async () => {
@@ -100,6 +103,7 @@ describe("MemberStudioDialog", () => {
     render(
       <MemberStudioDialog
         snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         room={room}
         member={lead}
         onClose={vi.fn()}
@@ -150,6 +154,7 @@ describe("MemberStudioDialog", () => {
     render(
       <MemberStudioDialog
         snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         room={room}
         member={lead}
         onClose={vi.fn()}
@@ -188,6 +193,7 @@ describe("MemberStudioDialog", () => {
     render(
       <MemberStudioDialog
         snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         room={room}
         member={lead}
         onClose={vi.fn()}
@@ -211,5 +217,36 @@ describe("MemberStudioDialog", () => {
     await user.click(screen.getByRole("button", { name: /Send/i }));
 
     expect(onSendDirectMessage).toHaveBeenCalledWith("先同步一个当前进度。", lead.id);
+  });
+
+  it("shows the save button only on the config tab", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const lead = members.find((member) => member.handle === "lead")!;
+
+    render(
+      <MemberStudioDialog
+        snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        room={room}
+        member={lead}
+        onClose={vi.fn()}
+        onToggleMonitor={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSetEntryMember={vi.fn()}
+        onSaveWatcher={vi.fn()}
+        onRunWatcher={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Save member config/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Config" }));
+    expect(screen.getByRole("button", { name: /Save member config/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "History" }));
+    expect(screen.queryByRole("button", { name: /Save member config/i })).not.toBeInTheDocument();
   });
 });

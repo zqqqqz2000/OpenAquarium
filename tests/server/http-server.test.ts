@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
+import { OpenAquariumGlobalConfigManager } from "@/server/global-config";
 import { WorkspacePersistence } from "@/server/persistence";
 import { handleWorkspaceJsonApiRequest } from "@/server/http-server";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
@@ -36,10 +37,22 @@ describe("workspace http api routing", () => {
 
   it("serves state and accepts member/message configuration mutations", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-"));
+    const configDirPath = path.join(workspaceRoot, ".config");
+    const globalConfigManager = new OpenAquariumGlobalConfigManager(configDirPath);
+    const loadedGlobalConfig = await globalConfigManager.load();
     const executorFactory: MemberExecutorFactory = () => new EchoExecutor();
     const runtime = new WorkspaceRuntime({
       initialSnapshot: createEmptyRuntimeSnapshot(),
       persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      globalConfigManager,
+      globalConfig: loadedGlobalConfig.config,
+      templateStudioChatService: {
+        chat: () => Promise.resolve({
+          assistantMessage: "Template updated from chat.",
+          modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
+        }),
+        dispose: () => Promise.resolve(),
+      },
       workspaceRoot,
       executorFactory,
       templateGenerator: (brief) => Promise.resolve({
@@ -118,11 +131,15 @@ describe("workspace http api routing", () => {
         selection: { projectId?: string; roomId?: string };
         rooms: Record<string, { memberIds: string[] }>;
       };
+      globalConfig: {
+        modelProfiles: Array<{ id: string }>;
+      };
     };
     const projectId = statePayload.snapshot.selection.projectId;
     const roomId = statePayload.snapshot.selection.roomId;
     expect(projectId).toBeDefined();
     expect(roomId).toBeDefined();
+    expect(statePayload.globalConfig.modelProfiles.length).toBeGreaterThan(0);
     if (!projectId || !roomId) {
       throw new Error("Expected project and room ids");
     }
@@ -161,6 +178,7 @@ describe("workspace http api routing", () => {
       body: {
         summary: "Builder v2",
         prompt: "新的 builder prompt",
+        modelProfileId: loadedGlobalConfig.config.modelProfiles[0]?.id,
         acceptsDirectMessages: false,
         skills: [
           {
@@ -182,7 +200,9 @@ describe("workspace http api routing", () => {
         },
       },
     });
-    const configPayload = configResult?.payload as { snapshot: { members: Record<string, { provider: { command: string }; summary: string }> } };
+    const configPayload = configResult?.payload as {
+      snapshot: { members: Record<string, { provider: { command: string }; summary: string; modelProfileId?: string }> };
+    };
 
     const entryResult = await handleWorkspaceJsonApiRequest({
       runtime,
@@ -219,6 +239,33 @@ describe("workspace http api routing", () => {
       template: { id: string; name: string };
       snapshot: { templates: Record<string, { description: string }> };
     };
+    const existingTemplate = runtime.getSnapshot().templates["template-product-pod"];
+    const templateConfigResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: `/api/templates/${existingTemplate.id}/config`,
+      body: {
+        name: "Product Pod v2",
+        description: "新的模板描述",
+        accentTone: "correction",
+        members: existingTemplate.members.map((member) =>
+          member.handle === "builder"
+            ? {
+                ...member,
+                summary: "新的模板 builder summary",
+                provider: {
+                  ...member.provider,
+                  command: "claude-code",
+                },
+              }
+            : member),
+      },
+    });
+    const templateConfigPayload = templateConfigResult?.payload as {
+      snapshot: {
+        templates: Record<string, { name: string; accentTone: string; members: Array<{ handle: string; summary: string; provider: { command: string } }> }>;
+      };
+    };
 
     const createRoomResult = await handleWorkspaceJsonApiRequest({
       runtime,
@@ -232,10 +279,38 @@ describe("workspace http api routing", () => {
       roomId: string;
       snapshot: { rooms: Record<string, { name: string; projectId: string; topic: string }> };
     };
+    const globalConfigResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/config",
+      body: {
+        modelProfiles: loadedGlobalConfig.config.modelProfiles,
+        templateChatModelProfileId: loadedGlobalConfig.config.templateChatModelProfileId,
+      },
+    });
+    const globalConfigPayload = globalConfigResult?.payload as {
+      globalConfig: {
+        templateChatModelProfileId?: string;
+      };
+    };
+    const templateChatResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/template-studio/chat",
+      body: {
+        templateId: existingTemplate.id,
+        messages: [{ role: "user", content: "Update the template with chat." }],
+      },
+    });
+    const templateChatPayload = templateChatResult?.payload as {
+      assistantMessage: string;
+      modelProfileId: string;
+    };
 
     expect(contents.some((content) => content.includes("@builder"))).toBe(true);
-    expect(configPayload.snapshot.members[builderId]?.provider.command).toBe("claude-code");
+    expect(configPayload.snapshot.members[builderId]?.provider.command).toBe(runtime.getSnapshot().members[builderId]?.provider.command);
     expect(configPayload.snapshot.members[builderId]?.summary).toBe("Builder v2");
+    expect(configPayload.snapshot.members[builderId]?.modelProfileId).toBe(loadedGlobalConfig.config.modelProfiles[0]?.id);
     expect(entryPayload.snapshot.rooms[roomId].entryMemberId).toBe(builderId);
     expect(
       watcherPayload.snapshot.rooms[roomId].watcherIds.some(
@@ -245,9 +320,15 @@ describe("workspace http api routing", () => {
     ).toBe(true);
     expect(templatePayload.template.id).toBe("template-http-generated");
     expect(templatePayload.snapshot.templates["template-http-generated"]?.description).toBe("生成一个新的协作模板");
+    expect(templateConfigPayload.snapshot.templates[existingTemplate.id]?.name).toBe("Product Pod v2");
+    expect(templateConfigPayload.snapshot.templates[existingTemplate.id]?.accentTone).toBe("correction");
+    expect(templateConfigPayload.snapshot.templates[existingTemplate.id]?.members.find((member) => member.handle === "builder")?.summary).toBe("新的模板 builder summary");
+    expect(templateConfigPayload.snapshot.templates[existingTemplate.id]?.members.find((member) => member.handle === "builder")?.provider.command).toBe("claude-code");
     expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.projectId).toBe(projectId);
     expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.name).toBe("New room");
     expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.topic).toBe("");
+    expect(globalConfigPayload.globalConfig.templateChatModelProfileId).toBe(loadedGlobalConfig.config.templateChatModelProfileId);
+    expect(templateChatPayload.assistantMessage).toBe("Template updated from chat.");
   });
 
   it("rejects legacy firstPrompt payloads for project and room creation", async () => {
@@ -295,5 +376,55 @@ describe("workspace http api routing", () => {
       statusCode: 400,
       payload: { error: "firstPrompt is no longer supported. Create the room first, then send the first message." },
     });
+  });
+
+  it("supports deleting templates, rooms, and projects through the JSON API", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-delete-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Delete API",
+      templateId: "template-product-pod",
+    });
+
+    const deleteTemplateResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "DELETE",
+      pathname: "/api/templates/template-incident-pod",
+    });
+    const deleteTemplatePayload = deleteTemplateResult?.payload as {
+      snapshot: { templates: Record<string, { id: string }> };
+    };
+
+    const deleteRoomResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "DELETE",
+      pathname: `/api/rooms/${created.roomId}`,
+    });
+    const deleteRoomPayload = deleteRoomResult?.payload as {
+      snapshot: { rooms: Record<string, { id: string }>; selection: { roomId?: string; projectId?: string } };
+    };
+
+    const deleteProjectResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "DELETE",
+      pathname: `/api/projects/${created.projectId}`,
+    });
+    const deleteProjectPayload = deleteProjectResult?.payload as {
+      snapshot: { projects: Record<string, { id: string }>; selection: { projectId?: string } };
+    };
+
+    expect(deleteTemplatePayload.snapshot.templates["template-incident-pod"]).toBeUndefined();
+    expect(deleteRoomPayload.snapshot.rooms[created.roomId]).toBeUndefined();
+    expect(deleteRoomPayload.snapshot.selection.projectId).toBe(created.projectId);
+    expect(deleteRoomPayload.snapshot.selection.roomId).toBeUndefined();
+    expect(deleteProjectPayload.snapshot.projects[created.projectId]).toBeUndefined();
+    expect(deleteProjectPayload.snapshot.selection.projectId).toBeUndefined();
   });
 });

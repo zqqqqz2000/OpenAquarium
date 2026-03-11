@@ -73,12 +73,14 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
     ...template,
     members: template.members.map((member): TeamMemberBlueprint => ({
       ...member,
+      modelProfileId: member.modelProfileId,
       provider: normalizeProvider(member.provider),
     })),
   });
 
   const normalizeMember = (member: TeamMember): TeamMember => ({
     ...member,
+    modelProfileId: member.modelProfileId,
     provider: normalizeProvider(member.provider),
     providerSessionId: member.providerSessionId,
   });

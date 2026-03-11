@@ -1,4 +1,12 @@
-import type { TeamTemplate, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
+import type {
+  GlobalWorkspaceConfig,
+  TeamTemplate,
+  TemplateStudioChatMessage,
+  UpdateGlobalConfigInput,
+  UpdateMemberConfigInput,
+  UpdateTemplateInput,
+  WorkspaceSnapshot,
+} from "@/domain/model";
 
 export function resolveWorkspaceRuntimeBaseUrl(): string {
   const configured = import.meta.env.VITE_OA_SERVER_URL as string | undefined;
@@ -12,9 +20,22 @@ function resolveWebSocketUrl(baseUrl: string): string {
   return url.toString();
 }
 
+function extractErrorMessage(responseText: string): string {
+  try {
+    const parsed = JSON.parse(responseText) as { error?: string };
+    if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
+      return parsed.error;
+    }
+  } catch {
+    // Fall back to raw text when the server did not return JSON.
+  }
+
+  return responseText;
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(extractErrorMessage(await response.text()));
   }
 
   return (await response.json()) as T;
@@ -23,9 +44,8 @@ async function parseJson<T>(response: Response): Promise<T> {
 export class WorkspaceRuntimeClient {
   readonly baseUrl = resolveWorkspaceRuntimeBaseUrl();
 
-  async getState(): Promise<WorkspaceSnapshot> {
-    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(await fetch(`${this.baseUrl}/api/state`));
-    return payload.snapshot;
+  async getState(): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig }> {
+    return parseJson(await fetch(`${this.baseUrl}/api/state`));
   }
 
   async createProject(input: { projectName: string; templateId: string }): Promise<{
@@ -55,6 +75,24 @@ export class WorkspaceRuntimeClient {
         }),
       }),
     );
+  }
+
+  async deleteProject(projectId: string): Promise<WorkspaceSnapshot> {
+    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+      await fetch(`${this.baseUrl}/api/projects/${projectId}`, {
+        method: "DELETE",
+      }),
+    );
+    return payload.snapshot;
+  }
+
+  async deleteRoom(roomId: string): Promise<WorkspaceSnapshot> {
+    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+      await fetch(`${this.baseUrl}/api/rooms/${roomId}`, {
+        method: "DELETE",
+      }),
+    );
+    return payload.snapshot;
   }
 
   async sendUserMessage(input: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot> {
@@ -87,6 +125,7 @@ export class WorkspaceRuntimeClient {
         body: JSON.stringify({
           summary: input.summary,
           prompt: input.prompt,
+          modelProfileId: input.modelProfileId,
           acceptsDirectMessages: input.acceptsDirectMessages,
           skills: input.skills,
           provider: input.provider,
@@ -94,6 +133,55 @@ export class WorkspaceRuntimeClient {
       }),
     );
     return payload.snapshot;
+  }
+
+  async updateTemplate(input: UpdateTemplateInput): Promise<WorkspaceSnapshot> {
+    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+      await fetch(`${this.baseUrl}/api/templates/${input.templateId}/config`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: input.name,
+          description: input.description,
+          accentTone: input.accentTone,
+          members: input.members,
+        }),
+      }),
+    );
+    return payload.snapshot;
+  }
+
+  async deleteTemplate(templateId: string): Promise<WorkspaceSnapshot> {
+    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+      await fetch(`${this.baseUrl}/api/templates/${templateId}`, {
+        method: "DELETE",
+      }),
+    );
+    return payload.snapshot;
+  }
+
+  async updateGlobalConfig(input: UpdateGlobalConfigInput): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig }> {
+    return parseJson(
+      await fetch(`${this.baseUrl}/api/config`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    );
+  }
+
+  async sendTemplateStudioChat(input: {
+    templateId: string;
+    messages: TemplateStudioChatMessage[];
+    modelProfileId?: string;
+  }): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; assistantMessage: string; modelProfileId: string }> {
+    return parseJson(
+      await fetch(`${this.baseUrl}/api/template-studio/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    );
   }
 
   async setEntryMember(memberId: string): Promise<WorkspaceSnapshot> {

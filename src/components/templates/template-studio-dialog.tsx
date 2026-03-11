@@ -1,0 +1,1080 @@
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+
+import { Bot, LoaderCircle, MessageSquare, Plus, Save, Settings2, Sparkles, Star, Trash2, X } from "lucide-react";
+
+import type {
+  GlobalWorkspaceConfig,
+  TeamTemplate,
+  TemplateStudioChatMessage,
+  UpdateGlobalConfigInput,
+  UpdateTemplateInput,
+} from "@/domain/model";
+import { addEmptyModelProfileDraft, buildGlobalConfigInput, createGlobalConfigDraft, type ModelProfileDraft } from "@/lib/global-config-draft";
+import { addEmptySkillDraft, type SkillDraft } from "@/lib/member-config-draft";
+import { buildTemplateConfigInput, createTemplateConfigDraft, type TemplateConfigDraft, type TemplateMemberDraft } from "@/lib/template-config-draft";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
+import { badgeToneProps } from "@/lib/ui-tone";
+import { cn } from "@/lib/utils";
+
+const ACCENT_TONES = ["paper", "postit", "blueprint", "correction"] as const;
+
+interface TemplateStudioChatEntry {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+}
+
+function ScopeNote(props: { directory: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-border/80 bg-muted/25 px-4 py-3">
+      <p className="m-0 text-sm font-medium">Global team template config</p>
+      <p className="m-0 mt-1 text-sm leading-6 text-muted-foreground">
+        这里改的是 team template 本身，只影响之后新建的 room。当前 room 里的 member 实例不会被回写。
+      </p>
+      <p className="m-0 mt-2 text-xs text-muted-foreground">Config directory: {props.directory}</p>
+    </div>
+  );
+}
+
+function SkillEditor(props: {
+  skill: SkillDraft;
+  index: number;
+  onChange: (nextSkill: SkillDraft) => void;
+  onRemove: () => void;
+}) {
+  const { skill, index, onChange, onRemove } = props;
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-3">
+      <div className="flex justify-between gap-3">
+        <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Skill {index + 1}</p>
+        <Button variant="ghost" size="icon-sm" type="button" onClick={onRemove}>
+          <Trash2 size={16} />
+        </Button>
+      </div>
+      <Input value={skill.name} onChange={(event) => onChange({ ...skill, name: event.currentTarget.value })} placeholder="Skill name" />
+      <Input
+        value={skill.description}
+        onChange={(event) => onChange({ ...skill, description: event.currentTarget.value })}
+        placeholder="What this skill is for"
+      />
+      <Textarea
+        className="min-h-20"
+        value={skill.command}
+        onChange={(event) => onChange({ ...skill, command: event.currentTarget.value })}
+        placeholder="./bin/oa-room-send --scope group"
+      />
+    </div>
+  );
+}
+
+function resolveProfileLabel(args: {
+  modelProfileId?: string;
+  providerLabel: string;
+  globalConfig: GlobalWorkspaceConfig;
+}): string {
+  if (args.modelProfileId) {
+    return args.globalConfig.modelProfiles.find((profile) => profile.id === args.modelProfileId)?.name ?? args.modelProfileId;
+  }
+
+  return `${args.providerLabel} (legacy)`;
+}
+
+function ModelProfileEditor(props: {
+  draft: ModelProfileDraft;
+  disableRemove: boolean;
+  onChange: (patch: Partial<ModelProfileDraft>) => void;
+  onRemove: () => void;
+}) {
+  const { draft, disableRemove, onChange, onRemove } = props;
+
+  return (
+    <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="m-0 text-lg font-semibold tracking-tight">Model profile</p>
+            <p className="m-0 text-sm text-muted-foreground">Provider config is global. Templates only point at these model names.</p>
+          </div>
+          <Button size="sm" variant="ghost" disabled={disableRemove} onClick={onRemove}>
+            <Trash2 size={16} />
+            Remove
+          </Button>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="flex flex-col gap-2">
+            <span className="text-sm font-medium">Profile name</span>
+            <Input value={draft.name} onChange={(event) => onChange({ name: event.currentTarget.value })} />
+          </label>
+          <label className="flex flex-col gap-2">
+            <span className="text-sm font-medium">Provider kind</span>
+            <Select value={draft.providerKind} onValueChange={(value) => onChange({ providerKind: value as ModelProfileDraft["providerKind"] })}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select provider kind" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="codex-acp">codex-acp</SelectItem>
+                <SelectItem value="generic-acp">generic-acp</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+        </div>
+
+        <label className="flex flex-col gap-2">
+          <span className="text-sm font-medium">Description</span>
+          <Textarea className="min-h-20" value={draft.description} onChange={(event) => onChange({ description: event.currentTarget.value })} />
+        </label>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="flex flex-col gap-2">
+            <span className="text-sm font-medium">Provider label</span>
+            <Input value={draft.providerLabel} onChange={(event) => onChange({ providerLabel: event.currentTarget.value })} />
+          </label>
+          <label className="flex flex-col gap-2">
+            <span className="text-sm font-medium">Provider command</span>
+            <Input value={draft.providerCommand} onChange={(event) => onChange({ providerCommand: event.currentTarget.value })} />
+          </label>
+        </div>
+
+        <label className="flex flex-col gap-2">
+          <span className="text-sm font-medium">Args (one per line)</span>
+          <Textarea className="min-h-24" value={draft.providerArgsText} onChange={(event) => onChange({ providerArgsText: event.currentTarget.value })} />
+        </label>
+        <label className="flex flex-col gap-2">
+          <span className="text-sm font-medium">Capabilities (comma or newline separated)</span>
+          <Textarea className="min-h-20" value={draft.providerCapabilitiesText} onChange={(event) => onChange({ providerCapabilitiesText: event.currentTarget.value })} />
+        </label>
+        <label className="flex flex-col gap-2">
+          <span className="text-sm font-medium">Working directory</span>
+          <Input value={draft.providerWorkingDirectory} onChange={(event) => onChange({ providerWorkingDirectory: event.currentTarget.value })} />
+        </label>
+        <label className="flex flex-col gap-2">
+          <span className="text-sm font-medium">Environment (KEY=VALUE per line)</span>
+          <Textarea className="min-h-24" value={draft.providerEnvText} onChange={(event) => onChange({ providerEnvText: event.currentTarget.value })} />
+        </label>
+      </div>
+    </section>
+  );
+}
+
+export function TemplateStudioDialog(props: {
+  open: boolean;
+  templates: TeamTemplate[];
+  selectedTemplateId?: string;
+  globalConfig?: GlobalWorkspaceConfig;
+  onClose: () => void;
+  deletingTemplateId?: string;
+  onDeleteTemplate: (templateId: string) => void | Promise<void>;
+  onSaveConfig: (input: UpdateTemplateInput) => void | Promise<void>;
+  onSaveGlobalConfig: (input: UpdateGlobalConfigInput) => void | Promise<void>;
+  onSendChat: (input: {
+    templateId: string;
+    messages: TemplateStudioChatMessage[];
+    modelProfileId?: string;
+  }) => Promise<{ assistantMessage: string; modelProfileId: string }>;
+}) {
+  const {
+    open,
+    templates,
+    selectedTemplateId,
+    globalConfig: incomingGlobalConfig,
+    onClose,
+    deletingTemplateId,
+    onDeleteTemplate,
+    onSaveConfig,
+    onSaveGlobalConfig,
+    onSendChat,
+  } = props;
+  const globalConfig = incomingGlobalConfig ?? createDefaultGlobalWorkspaceConfig();
+  const templatesById = useMemo(() => Object.fromEntries(templates.map((template) => [template.id, template])), [templates]);
+  const [activeTab, setActiveTab] = useState("templates");
+  const [activeTemplateId, setActiveTemplateId] = useState<string | undefined>(selectedTemplateId ?? templates[0]?.id);
+  const [templateDrafts, setTemplateDrafts] = useState<Record<string, TemplateConfigDraft>>({});
+  const [activeMemberIds, setActiveMemberIds] = useState<Record<string, string>>({});
+  const [templateErrorById, setTemplateErrorById] = useState<Record<string, string | undefined>>({});
+  const [globalConfigDraft, setGlobalConfigDraft] = useState(() => createGlobalConfigDraft(globalConfig));
+  const [activeModelProfileId, setActiveModelProfileId] = useState<string | undefined>(globalConfig.modelProfiles[0]?.id);
+  const [globalConfigError, setGlobalConfigError] = useState<string | undefined>(undefined);
+  const [chatMessagesByTemplate, setChatMessagesByTemplate] = useState<Record<string, TemplateStudioChatEntry[]>>({});
+  const [chatInputByTemplate, setChatInputByTemplate] = useState<Record<string, string>>({});
+  const [chatModelProfileIdByTemplate, setChatModelProfileIdByTemplate] = useState<Record<string, string | undefined>>({});
+  const [chatErrorByTemplate, setChatErrorByTemplate] = useState<Record<string, string | undefined>>({});
+  const [pendingChatByTemplate, setPendingChatByTemplate] = useState<Record<string, boolean>>({});
+  const [pendingDeleteTemplateId, setPendingDeleteTemplateId] = useState<string | undefined>(undefined);
+  const [templateDeleteError, setTemplateDeleteError] = useState<string | undefined>(undefined);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [savingGlobalConfig, setSavingGlobalConfig] = useState(false);
+  const [sendingChat, setSendingChat] = useState(false);
+  const wasOpenRef = useRef(false);
+  const previousSelectedTemplateIdRef = useRef<string | undefined>(undefined);
+  const chatLogRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const openedNow = open && !wasOpenRef.current;
+    const selectedTemplateChanged = selectedTemplateId !== previousSelectedTemplateIdRef.current;
+
+    wasOpenRef.current = open;
+    previousSelectedTemplateIdRef.current = selectedTemplateId;
+
+    if (!open) {
+      return;
+    }
+
+    if ((openedNow || selectedTemplateChanged) && selectedTemplateId && templatesById[selectedTemplateId]) {
+      setActiveTemplateId(selectedTemplateId);
+      return;
+    }
+
+    if (!activeTemplateId || !templatesById[activeTemplateId]) {
+      setActiveTemplateId((selectedTemplateId && templatesById[selectedTemplateId]) ? selectedTemplateId : templates[0]?.id);
+    }
+  }, [activeTemplateId, open, selectedTemplateId, templates, templatesById]);
+
+  useEffect(() => {
+    setTemplateDrafts(Object.fromEntries(templates.map((template) => [template.id, createTemplateConfigDraft(template)])));
+  }, [templates]);
+
+  useEffect(() => {
+    setGlobalConfigDraft(createGlobalConfigDraft(globalConfig));
+    setActiveModelProfileId((current) => current ?? globalConfig.modelProfiles[0]?.id);
+  }, [globalConfig]);
+
+  useEffect(() => {
+    if (!activeTemplateId || chatModelProfileIdByTemplate[activeTemplateId]) {
+      return;
+    }
+
+    setChatModelProfileIdByTemplate((current) => ({
+      ...current,
+      [activeTemplateId]: globalConfig.templateChatModelProfileId ?? globalConfig.modelProfiles[0]?.id,
+    }));
+  }, [activeTemplateId, chatModelProfileIdByTemplate, globalConfig.modelProfiles, globalConfig.templateChatModelProfileId]);
+
+  useEffect(() => {
+    if (pendingDeleteTemplateId && !templatesById[pendingDeleteTemplateId]) {
+      setPendingDeleteTemplateId(undefined);
+    }
+  }, [pendingDeleteTemplateId, templatesById]);
+
+  const selectedTemplate = activeTemplateId ? templatesById[activeTemplateId] : undefined;
+  const selectedTemplateDraft = selectedTemplate ? templateDrafts[selectedTemplate.id] ?? createTemplateConfigDraft(selectedTemplate) : undefined;
+  const activeMemberId = selectedTemplate ? activeMemberIds[selectedTemplate.id] ?? selectedTemplateDraft?.members[0]?.id : undefined;
+  const activeMember =
+    selectedTemplateDraft?.members.find((member) => member.id === activeMemberId) ?? selectedTemplateDraft?.members[0];
+  const templateBadge = selectedTemplateDraft ? badgeToneProps(selectedTemplateDraft.accentTone) : undefined;
+  const activeChatMessages = selectedTemplate ? chatMessagesByTemplate[selectedTemplate.id] ?? [] : [];
+  const activeChatMessageCount = activeChatMessages.length;
+  const activeChatInput = selectedTemplate ? chatInputByTemplate[selectedTemplate.id] ?? "" : "";
+  const activeChatPending = selectedTemplate ? pendingChatByTemplate[selectedTemplate.id] ?? false : false;
+  const activeChatModelProfileId = selectedTemplate
+    ? chatModelProfileIdByTemplate[selectedTemplate.id] ?? globalConfig.templateChatModelProfileId ?? globalConfig.modelProfiles[0]?.id
+    : undefined;
+  const activeModelProfile = globalConfigDraft.modelProfiles.find((profile) => profile.id === activeModelProfileId) ?? globalConfigDraft.modelProfiles[0];
+
+  useEffect(() => {
+    const container = chatLogRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
+  }, [activeChatMessageCount, activeChatPending, selectedTemplate?.id]);
+
+  if (!open) {
+    return null;
+  }
+
+  const patchTemplateDraft = (templateId: string, patch: Partial<TemplateConfigDraft>): void => {
+    const template = templatesById[templateId];
+    if (!template) {
+      return;
+    }
+
+    setTemplateDrafts((current) => {
+      const base = current[templateId] ?? createTemplateConfigDraft(template);
+      return {
+        ...current,
+        [templateId]: {
+          ...base,
+          ...patch,
+        },
+      };
+    });
+  };
+
+  const patchMemberDraft = (templateId: string, memberId: string, patch: Partial<TemplateMemberDraft>): void => {
+    const template = templatesById[templateId];
+    if (!template) {
+      return;
+    }
+
+    setTemplateDrafts((current) => {
+      const base = current[templateId] ?? createTemplateConfigDraft(template);
+      return {
+        ...current,
+        [templateId]: {
+          ...base,
+          members: base.members.map((member) => (member.id === memberId ? { ...member, ...patch } : member)),
+        },
+      };
+    });
+  };
+
+  const setEntryMember = (templateId: string, memberId: string): void => {
+    const template = templatesById[templateId];
+    if (!template) {
+      return;
+    }
+
+    setTemplateDrafts((current) => {
+      const base = current[templateId] ?? createTemplateConfigDraft(template);
+      return {
+        ...current,
+        [templateId]: {
+          ...base,
+          members: base.members.map((member) => ({
+            ...member,
+            isEntryMember: member.id === memberId,
+          })),
+        },
+      };
+    });
+  };
+
+  const saveTemplateConfig = async (): Promise<void> => {
+    if (!selectedTemplate || !selectedTemplateDraft) {
+      return;
+    }
+
+    try {
+      setSavingTemplate(true);
+      setTemplateErrorById((current) => ({
+        ...current,
+        [selectedTemplate.id]: undefined,
+      }));
+      await onSaveConfig(buildTemplateConfigInput(selectedTemplate, selectedTemplateDraft));
+    } catch (error) {
+      setTemplateErrorById((current) => ({
+        ...current,
+        [selectedTemplate.id]: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  const saveGlobalConfig = async (): Promise<void> => {
+    try {
+      setSavingGlobalConfig(true);
+      setGlobalConfigError(undefined);
+      await onSaveGlobalConfig(buildGlobalConfigInput(globalConfig, globalConfigDraft));
+    } catch (error) {
+      setGlobalConfigError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingGlobalConfig(false);
+    }
+  };
+
+  const sendTemplateChat = async (): Promise<void> => {
+    if (!selectedTemplate || activeChatInput.trim().length === 0) {
+      return;
+    }
+
+    const templateId = selectedTemplate.id;
+    const content = activeChatInput.trim();
+    const nextMessages: TemplateStudioChatEntry[] = [
+      ...(chatMessagesByTemplate[templateId] ?? []),
+      {
+        id: `user-${crypto.randomUUID()}`,
+        role: "user",
+        content,
+      },
+    ];
+    setSendingChat(true);
+    setChatErrorByTemplate((current) => ({
+      ...current,
+      [templateId]: undefined,
+    }));
+    setChatInputByTemplate((current) => ({
+      ...current,
+      [templateId]: "",
+    }));
+    setPendingChatByTemplate((current) => ({
+      ...current,
+      [templateId]: true,
+    }));
+    setChatMessagesByTemplate((current) => ({
+      ...current,
+      [templateId]: nextMessages,
+    }));
+
+    try {
+      const result = await onSendChat({
+        templateId,
+        messages: nextMessages.map(({ role, content: messageContent }) => ({
+          role,
+          content: messageContent,
+        })),
+        modelProfileId: activeChatModelProfileId,
+      });
+      setChatModelProfileIdByTemplate((current) => ({
+        ...current,
+        [templateId]: result.modelProfileId,
+      }));
+      setChatMessagesByTemplate((current) => ({
+        ...current,
+        [templateId]: [
+          ...(current[templateId] ?? []),
+          {
+            id: `assistant-${crypto.randomUUID()}`,
+            role: "assistant",
+            content: result.assistantMessage,
+          },
+        ],
+      }));
+    } catch (error) {
+      setChatErrorByTemplate((current) => ({
+        ...current,
+        [templateId]: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setPendingChatByTemplate((current) => ({
+        ...current,
+        [templateId]: false,
+      }));
+      setSendingChat(false);
+    }
+  };
+
+  const handleDeleteTemplate = async (templateId: string): Promise<void> => {
+    try {
+      setTemplateDeleteError(undefined);
+      await onDeleteTemplate(templateId);
+      if (pendingDeleteTemplateId === templateId) {
+        setPendingDeleteTemplateId(undefined);
+      }
+    } catch (error) {
+      setTemplateDeleteError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleChatComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+
+    event.preventDefault();
+    void sendTemplateChat();
+  };
+
+  return (
+    <Dialog open onOpenChange={(nextOpen) => (!nextOpen ? onClose() : undefined)}>
+      <DialogContent className="grid h-[94vh] w-[min(96vw,1360px)] max-w-[1360px] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[1360px]" showCloseButton={false}>
+        <div className="border-b border-border px-5 py-4">
+          <DialogHeader className="flex-row items-start justify-between gap-4">
+            <div className="space-y-1">
+              <DialogTitle className="text-2xl font-semibold tracking-tight">Team Template Studio</DialogTitle>
+              <DialogDescription className="sr-only">Edit global team templates, provider models, and template chat instructions.</DialogDescription>
+              <p className="m-0 text-sm text-muted-foreground">Global config lives in {globalConfig.directory}.</p>
+            </div>
+            <DialogClose asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Close template studio">
+                <span aria-hidden>×</span>
+              </Button>
+            </DialogClose>
+          </DialogHeader>
+        </div>
+
+        <div className="grid min-h-0 gap-0 overflow-hidden p-3 lg:grid-cols-[300px_minmax(0,1fr)] lg:p-4">
+          <div className="flex min-h-0 flex-col overflow-hidden border-b border-border/60 pb-3 lg:border-r lg:border-b-0 lg:pb-0 lg:pr-4">
+            <section className="shrink-0 border-b border-border/60 pb-4" data-testid="template-summary-card">
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Settings2 size={18} />
+                    <p className="m-0 text-lg font-semibold tracking-tight">Workspace defaults</p>
+                  </div>
+                  <p className="m-0 text-sm leading-6 text-muted-foreground">
+                    这里统一管理 team templates、Template Studio chat 和全局 provider model profiles。
+                  </p>
+                </div>
+                <ScopeNote directory={globalConfig.directory} />
+              </div>
+            </section>
+
+            <section className="min-h-0 flex-1 pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="m-0 text-base font-semibold tracking-tight">Team templates</p>
+                <Badge variant="outline">{templates.length}</Badge>
+              </div>
+              {templateDeleteError ? <p className="m-0 mt-3 text-sm text-destructive">{templateDeleteError}</p> : null}
+              <div className="mt-3 min-h-0 overflow-y-auto pr-1" data-testid="template-list-scroll">
+                <div className="flex flex-col gap-2">
+                  {templates.map((template) => {
+                    const tone = badgeToneProps(template.accentTone);
+                    const isActive = template.id === selectedTemplate?.id;
+                    const confirmingDelete = pendingDeleteTemplateId === template.id;
+
+                    return (
+                      <div
+                        key={template.id}
+                        className={cn(
+                          "flex items-start gap-2 rounded-xl border border-border/70 px-3 py-3 transition-colors",
+                          isActive && "border-ring bg-accent/10",
+                        )}
+                      >
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-left"
+                          onClick={() => {
+                            setTemplateDeleteError(undefined);
+                            setPendingDeleteTemplateId(undefined);
+                            setActiveTemplateId(template.id);
+                          }}
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="m-0 text-sm font-semibold">{template.name}</p>
+                            <Badge variant={tone.variant} className={tone.className}>
+                              {template.members.length}
+                            </Badge>
+                          </div>
+                          <p className="m-0 mt-2 text-sm leading-6 text-muted-foreground">{template.description}</p>
+                        </button>
+                        {confirmingDelete ? (
+                          <div className="flex shrink-0 items-center gap-1">
+                            <Button type="button" variant="ghost" size="icon-xs" aria-label={`Cancel deleting ${template.name}`} onClick={() => setPendingDeleteTemplateId(undefined)}>
+                              <X size={14} />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="icon-xs"
+                              aria-label={`Delete ${template.name}`}
+                              disabled={deletingTemplateId === template.id}
+                              onClick={() => void handleDeleteTemplate(template.id)}
+                            >
+                              {deletingTemplateId === template.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`Delete ${template.name}`}
+                            onClick={() => {
+                              setTemplateDeleteError(undefined);
+                              setPendingDeleteTemplateId(template.id);
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-col overflow-hidden lg:pl-4">
+            <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b bg-transparent p-0">
+              <TabsTrigger value="templates" className="rounded-none px-3 py-2">
+                <Settings2 size={16} />
+                Team templates
+              </TabsTrigger>
+              <TabsTrigger value="chat" className="rounded-none px-3 py-2">
+                <MessageSquare size={16} />
+                Chat
+              </TabsTrigger>
+              <TabsTrigger value="models" className="rounded-none px-3 py-2">
+                <Sparkles size={16} />
+                Models
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="templates" className="m-0 min-h-0 overflow-hidden">
+              {!selectedTemplate || !selectedTemplateDraft ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a team template to edit.</div>
+              ) : (
+                <div className="grid h-full min-h-0 gap-4 pt-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+                  <section className="min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
+                    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="m-0 text-base font-semibold tracking-tight">Team template members</p>
+                        <Badge variant="outline">{selectedTemplateDraft.members.length}</Badge>
+                      </div>
+                      <div className="min-h-0 overflow-y-auto pr-1" data-testid="template-members-scroll">
+                        <div className="flex flex-col gap-2">
+                          {selectedTemplateDraft.members.map((member) => {
+                            const memberBadge = badgeToneProps(member.accentTone);
+                            const sourceMember = selectedTemplate.members.find((candidate) => candidate.id === member.id);
+                            const modelProfileLabel = resolveProfileLabel({
+                              modelProfileId: member.modelProfileId,
+                              providerLabel: sourceMember?.provider.label ?? "Provider",
+                              globalConfig,
+                            });
+
+                            return (
+                              <button
+                                key={member.id}
+                                type="button"
+                                className={cn(
+                                  "rounded-xl border border-border/70 px-3 py-3 text-left transition-colors hover:bg-muted/60",
+                                  member.id === activeMember?.id && "border-ring bg-accent/10",
+                                )}
+                                onClick={() => setActiveMemberIds((current) => ({ ...current, [selectedTemplate.id]: member.id }))}
+                              >
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="m-0 text-sm font-semibold">{member.name}</p>
+                                  <Badge variant="outline">@{member.handle}</Badge>
+                                  {member.isEntryMember ? <Badge variant="secondary">Entry</Badge> : null}
+                                  <Badge variant={memberBadge.variant} className={memberBadge.className}>
+                                    {modelProfileLabel}
+                                  </Badge>
+                                </div>
+                                <p className="m-0 mt-2 text-sm text-muted-foreground">{member.summary}</p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <div className="min-h-0 overflow-y-auto pr-1">
+                    <div className="flex flex-col gap-4 pb-4">
+                      <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
+                        <div className="flex flex-col gap-4">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="m-0 text-lg font-semibold tracking-tight">{selectedTemplateDraft.name}</p>
+                            {templateBadge ? (
+                              <Badge variant={templateBadge.variant} className={templateBadge.className}>
+                                {selectedTemplateDraft.members.length} members
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <label className="flex flex-col gap-2">
+                            <span className="text-sm font-medium">Team template name</span>
+                            <Input value={selectedTemplateDraft.name} onChange={(event) => patchTemplateDraft(selectedTemplate.id, { name: event.currentTarget.value })} />
+                          </label>
+                          <label className="flex flex-col gap-2">
+                            <span className="text-sm font-medium">Description</span>
+                            <Textarea
+                              className="min-h-24"
+                              value={selectedTemplateDraft.description}
+                              onChange={(event) => patchTemplateDraft(selectedTemplate.id, { description: event.currentTarget.value })}
+                            />
+                          </label>
+                          <label className="flex flex-col gap-2">
+                            <span className="text-sm font-medium">Accent tone</span>
+                            <Select value={selectedTemplateDraft.accentTone} onValueChange={(value) => patchTemplateDraft(selectedTemplate.id, { accentTone: value as TeamTemplate["accentTone"] })}>
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Select accent tone" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {ACCENT_TONES.map((accentTone) => (
+                                  <SelectItem key={accentTone} value={accentTone}>
+                                    {accentTone}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </label>
+                        </div>
+                      </section>
+
+                      {activeMember ? (
+                        <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
+                          <div className="flex flex-col gap-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="m-0 text-lg font-semibold tracking-tight">Member defaults</p>
+                                <p className="m-0 text-sm text-muted-foreground">Template members point at global model profiles instead of inline provider config.</p>
+                              </div>
+                              {activeMember.isEntryMember ? (
+                                <Badge variant="secondary">Entry member</Badge>
+                              ) : (
+                                <Button size="sm" variant="secondary" onClick={() => setEntryMember(selectedTemplate.id, activeMember.id)}>
+                                  <Star size={16} />
+                                  Set as entry member
+                                </Button>
+                              )}
+                            </div>
+
+                            <div className="grid gap-4 md:grid-cols-2">
+                              <label className="flex flex-col gap-2">
+                                <span className="text-sm font-medium">Name</span>
+                                <Input value={activeMember.name} onChange={(event) => patchMemberDraft(selectedTemplate.id, activeMember.id, { name: event.currentTarget.value })} />
+                              </label>
+                              <label className="flex flex-col gap-2">
+                                <span className="text-sm font-medium">Handle</span>
+                                <Input value={activeMember.handle} onChange={(event) => patchMemberDraft(selectedTemplate.id, activeMember.id, { handle: event.currentTarget.value })} />
+                              </label>
+                            </div>
+
+                            <label className="flex flex-col gap-2">
+                              <span className="text-sm font-medium">Summary</span>
+                              <Input value={activeMember.summary} onChange={(event) => patchMemberDraft(selectedTemplate.id, activeMember.id, { summary: event.currentTarget.value })} />
+                            </label>
+
+                            <label className="flex flex-col gap-2">
+                              <span className="text-sm font-medium">Prompt</span>
+                              <Textarea
+                                className="min-h-36"
+                                value={activeMember.prompt}
+                                onChange={(event) => patchMemberDraft(selectedTemplate.id, activeMember.id, { prompt: event.currentTarget.value })}
+                              />
+                            </label>
+
+                            <label className="flex flex-col gap-2">
+                              <span className="text-sm font-medium">Model profile</span>
+                              <Select
+                                value={activeMember.modelProfileId ?? globalConfig.modelProfiles[0]?.id}
+                                onValueChange={(value) => patchMemberDraft(selectedTemplate.id, activeMember.id, { modelProfileId: value })}
+                              >
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="Select a global model profile" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {globalConfig.modelProfiles.map((profile) => (
+                                    <SelectItem key={profile.id} value={profile.id}>
+                                      {profile.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </label>
+
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                                <span className="text-sm font-medium">Accept direct messages</span>
+                                <Switch
+                                  aria-label="Template accept direct messages"
+                                  checked={activeMember.acceptsDirectMessages}
+                                  onCheckedChange={(checked) => patchMemberDraft(selectedTemplate.id, activeMember.id, { acceptsDirectMessages: checked })}
+                                />
+                              </label>
+                              <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                                <span className="text-sm font-medium">Monitor all room messages</span>
+                                <Switch
+                                  aria-label="Template monitor all room messages"
+                                  checked={activeMember.observeAllRoomMessages}
+                                  onCheckedChange={(checked) => patchMemberDraft(selectedTemplate.id, activeMember.id, { observeAllRoomMessages: checked })}
+                                />
+                              </label>
+                            </div>
+
+                            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_11rem]">
+                              <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                                <span className="text-sm font-medium">Watcher enabled by default</span>
+                                <Switch
+                                  aria-label="Template watcher enabled"
+                                  checked={activeMember.watchEnabled}
+                                  onCheckedChange={(checked) => patchMemberDraft(selectedTemplate.id, activeMember.id, { watchEnabled: checked })}
+                                />
+                              </label>
+                              <label className="flex flex-col gap-2">
+                                <span className="text-sm font-medium">Watcher interval</span>
+                                <Input
+                                  inputMode="numeric"
+                                  value={activeMember.watchIntervalMinutes}
+                                  onChange={(event) => patchMemberDraft(selectedTemplate.id, activeMember.id, { watchIntervalMinutes: event.currentTarget.value })}
+                                />
+                              </label>
+                            </div>
+
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="m-0 text-sm font-medium">Skills</p>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  type="button"
+                                  onClick={() =>
+                                    patchMemberDraft(selectedTemplate.id, activeMember.id, {
+                                      skills: addEmptySkillDraft(activeMember.skills),
+                                    })}
+                                >
+                                  <Plus size={16} />
+                                  Add skill
+                                </Button>
+                              </div>
+                              <div className="flex flex-col gap-3">
+                                {activeMember.skills.map((skill, index) => (
+                                  <SkillEditor
+                                    key={skill.id}
+                                    skill={skill}
+                                    index={index}
+                                    onChange={(nextSkill) =>
+                                      patchMemberDraft(selectedTemplate.id, activeMember.id, {
+                                        skills: activeMember.skills.map((candidate) => (candidate.id === skill.id ? nextSkill : candidate)),
+                                      })}
+                                    onRemove={() =>
+                                      patchMemberDraft(selectedTemplate.id, activeMember.id, {
+                                        skills: activeMember.skills.filter((candidate) => candidate.id !== skill.id),
+                                      })}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </section>
+                      ) : null}
+
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                        {templateErrorById[selectedTemplate.id] ? <p className="m-0 text-sm text-destructive">{templateErrorById[selectedTemplate.id]}</p> : <div />}
+                        <Button onClick={() => void saveTemplateConfig()} disabled={savingTemplate}>
+                          <Save size={16} />
+                          Save team template config
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="chat" className="m-0 min-h-0 overflow-hidden">
+              {!selectedTemplate ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a team template to chat about.</div>
+              ) : (
+                <div className="flex h-full min-h-0 flex-col gap-4 pt-4">
+                  <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Bot size={18} />
+                        <p className="m-0 text-base font-semibold tracking-tight">Team template chat</p>
+                      </div>
+                      <p className="m-0 text-sm leading-6 text-muted-foreground">
+                        By default, the model edits the selected team template, <span className="font-medium">{selectedTemplate.name}</span>. You can also explicitly ask it to create a new team template or change a different one. It can read and update the files under {globalConfig.directory}, and each new turn includes the prior chat history.
+                      </p>
+                    </div>
+                  </section>
+
+                  <section className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
+                    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+                      <div ref={chatLogRef} className="min-h-0 flex-1 overflow-y-auto pr-1" data-testid="template-chat-log" aria-live="polite">
+                        {activeChatMessages.length === 0 ? (
+                          <div className="flex h-full min-h-[16rem] items-center justify-center rounded-xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                            Short requests work too. Try “把 checker 改成 QA reviewer”, “加一个 scribe 负责总结”, or “新建一个只包含 lead 和 builder 的 team template”.
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-3">
+                            {activeChatMessages.map((message) => (
+                              <div
+                                key={message.id}
+                                className={cn(
+                                  "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm",
+                                  message.role === "user"
+                                    ? "ml-auto bg-primary text-primary-foreground"
+                                    : "bg-muted text-foreground",
+                                )}
+                              >
+                                {message.content}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {activeChatPending ? (
+                          <div className="mt-3 max-w-[85%] rounded-2xl border border-border/70 bg-muted/60 px-4 py-3 text-sm text-foreground shadow-sm" data-testid="template-chat-pending">
+                            <div className="flex items-start gap-3">
+                              <LoaderCircle size={16} className="mt-0.5 animate-spin text-muted-foreground" />
+                              <div className="space-y-1">
+                                <p className="m-0 font-medium">Updating team template…</p>
+                                <p className="m-0 text-sm text-muted-foreground">
+                                  Codex ACP may take around 30 seconds while it reads and edits the config files.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                      {chatErrorByTemplate[selectedTemplate.id] ? (
+                        <p className="m-0 text-sm text-destructive">{chatErrorByTemplate[selectedTemplate.id]}</p>
+                      ) : null}
+                      <div className="border-t border-border pt-3">
+                        <Textarea
+                          aria-label="Template chat input"
+                          className="min-h-24 border-0 bg-transparent p-0 shadow-none focus-visible:ring-0"
+                          placeholder="Tell Team Template Studio what to change. Press Enter to send, Shift+Enter for newline."
+                          value={activeChatInput}
+                          onChange={(event) => {
+                            const nextValue = event.currentTarget.value;
+                            setChatInputByTemplate((current) => ({
+                              ...current,
+                              [selectedTemplate.id]: nextValue,
+                            }));
+                          }}
+                          onKeyDown={handleChatComposerKeyDown}
+                        />
+                        <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem_auto] md:items-end">
+                          <p className="m-0 text-xs text-muted-foreground">
+                            The model can read `templates.json` and `template.schema.json` under {globalConfig.directory}. Keep the prompt short: by default it edits the selected template, and if you want a new template just say so directly.
+                          </p>
+                          <label className="flex flex-col gap-2">
+                            <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Chat model</span>
+                            <Select
+                              value={activeChatModelProfileId}
+                              onValueChange={(value) =>
+                                setChatModelProfileIdByTemplate((current) => ({
+                                  ...current,
+                                  [selectedTemplate.id]: value,
+                                }))}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Select chat model" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {globalConfig.modelProfiles.map((profile) => (
+                                  <SelectItem key={profile.id} value={profile.id}>
+                                    {profile.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </label>
+                          <Button onClick={() => void sendTemplateChat()} disabled={sendingChat || activeChatInput.trim().length === 0}>
+                            {activeChatPending ? <LoaderCircle size={16} className="animate-spin" /> : <MessageSquare size={16} />}
+                            {activeChatPending ? "Updating team template..." : "Send change request"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="models" className="m-0 min-h-0 overflow-hidden">
+              <div className="grid h-full min-h-0 gap-4 pt-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+                <section className="min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
+                  <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="m-0 text-base font-semibold tracking-tight">Model profiles</p>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          const draft = addEmptyModelProfileDraft();
+                          setGlobalConfigDraft((current) => ({
+                            ...current,
+                            modelProfiles: [...current.modelProfiles, draft],
+                          }));
+                          setActiveModelProfileId(draft.id);
+                        }}
+                      >
+                        <Plus size={16} />
+                        Add model
+                      </Button>
+                    </div>
+
+                    <label className="flex flex-col gap-2">
+                      <span className="text-sm font-medium">Default Team Template Studio chat model</span>
+                      <Select
+                        value={globalConfigDraft.templateChatModelProfileId ?? globalConfigDraft.modelProfiles[0]?.id}
+                        onValueChange={(value) => setGlobalConfigDraft((current) => ({ ...current, templateChatModelProfileId: value }))}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select default model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {globalConfigDraft.modelProfiles.map((profile) => (
+                            <SelectItem key={profile.id} value={profile.id}>
+                              {profile.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+
+                    <div className="min-h-0 overflow-y-auto pr-1" data-testid="template-models-scroll">
+                      <div className="flex flex-col gap-2">
+                        {globalConfigDraft.modelProfiles.map((profile) => (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            className={cn(
+                              "rounded-xl border border-border/70 px-3 py-3 text-left transition-colors hover:bg-muted/60",
+                              profile.id === activeModelProfile?.id && "border-ring bg-accent/10",
+                            )}
+                            onClick={() => setActiveModelProfileId(profile.id)}
+                          >
+                            <p className="m-0 text-sm font-semibold">{profile.name}</p>
+                            <p className="m-0 mt-1 text-xs uppercase tracking-[0.12em] text-muted-foreground">{profile.providerKind}</p>
+                            <p className="m-0 mt-2 text-sm leading-6 text-muted-foreground">{profile.description}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <div className="min-h-0 overflow-y-auto pr-1">
+                  <div className="flex flex-col gap-4 pb-4">
+                    {activeModelProfile ? (
+                      <ModelProfileEditor
+                        draft={activeModelProfile}
+                        disableRemove={globalConfigDraft.modelProfiles.length <= 1}
+                        onChange={(patch) =>
+                          setGlobalConfigDraft((current) => ({
+                            ...current,
+                            modelProfiles: current.modelProfiles.map((profile) =>
+                              profile.id === activeModelProfile.id ? { ...profile, ...patch } : profile,
+                            ),
+                          }))}
+                        onRemove={() => {
+                          const nextProfiles = globalConfigDraft.modelProfiles.filter((profile) => profile.id !== activeModelProfile.id);
+                          setGlobalConfigDraft((current) => ({
+                            ...current,
+                            modelProfiles: nextProfiles,
+                            templateChatModelProfileId:
+                              current.templateChatModelProfileId === activeModelProfile.id
+                                ? nextProfiles[0]?.id
+                                : current.templateChatModelProfileId,
+                          }));
+                          setActiveModelProfileId(nextProfiles[0]?.id);
+                        }}
+                      />
+                    ) : null}
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                      {globalConfigError ? <p className="m-0 text-sm text-destructive">{globalConfigError}</p> : <div />}
+                      <Button onClick={() => void saveGlobalConfig()} disabled={savingGlobalConfig}>
+                        <Save size={16} />
+                        Save global config
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

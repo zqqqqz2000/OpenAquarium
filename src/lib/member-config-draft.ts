@@ -1,4 +1,4 @@
-import type { ProviderBinding, SkillDefinition, TeamMember, UpdateMemberConfigInput, WatchSubscription } from "@/domain/model";
+import type { ProviderBinding, ProviderModelProfileId, SkillDefinition, TeamMember, UpdateMemberConfigInput, WatchSubscription } from "@/domain/model";
 
 export interface SkillDraft {
   id: string;
@@ -7,16 +7,20 @@ export interface SkillDraft {
   command: string;
 }
 
-export interface MemberConfigDraft {
-  summary: string;
-  prompt: string;
-  acceptsDirectMessages: boolean;
+export interface ProviderConfigDraftFields {
   providerLabel: string;
   providerCommand: string;
   providerArgsText: string;
   providerCapabilitiesText: string;
   providerWorkingDirectory: string;
   providerEnvText: string;
+}
+
+export interface MemberConfigDraft {
+  summary: string;
+  prompt: string;
+  modelProfileId?: ProviderModelProfileId;
+  acceptsDirectMessages: boolean;
   skills: SkillDraft[];
 }
 
@@ -25,21 +29,21 @@ export interface WatcherDraft {
   intervalMinutes: string;
 }
 
-function splitLines(text: string): string[] {
+export function splitLines(text: string): string[] {
   return text
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
 }
 
-function splitCapabilities(text: string): string[] {
+export function splitCapabilities(text: string): string[] {
   return text
     .split(/[,\n]/u)
     .map((token) => token.trim())
     .filter(Boolean);
 }
 
-function parseEnvText(text: string): Record<string, string> {
+export function parseEnvText(text: string): Record<string, string> {
   return splitLines(text).reduce<Record<string, string>>((env, line) => {
     const separatorIndex = line.indexOf("=");
     if (separatorIndex <= 0) {
@@ -56,7 +60,7 @@ function parseEnvText(text: string): Record<string, string> {
   }, {});
 }
 
-function toSkillDefinitions(skills: SkillDraft[]): SkillDefinition[] {
+export function toSkillDefinitions(skills: SkillDraft[]): SkillDefinition[] {
   return skills
     .map((skill) => ({
       id: skill.id.trim(),
@@ -81,15 +85,8 @@ export function createMemberConfigDraft(member: TeamMember): MemberConfigDraft {
   return {
     summary: member.summary,
     prompt: member.prompt,
+    modelProfileId: member.modelProfileId,
     acceptsDirectMessages: member.acceptsDirectMessages,
-    providerLabel: member.provider.label,
-    providerCommand: member.provider.command,
-    providerArgsText: member.provider.args.join("\n"),
-    providerCapabilitiesText: member.provider.capabilities.join(", "),
-    providerWorkingDirectory: member.provider.workingDirectory ?? "",
-    providerEnvText: Object.entries(member.provider.env)
-      .map(([key, value]) => `${key}=${value}`)
-      .join("\n"),
     skills: member.skills.map((skill) => ({
       id: skill.id,
       name: skill.name,
@@ -118,7 +115,7 @@ export function addEmptySkillDraft(skills: SkillDraft[]): SkillDraft[] {
   ];
 }
 
-export function buildProviderFromDraft(existingProvider: ProviderBinding, draft: MemberConfigDraft): ProviderBinding {
+export function buildProviderFromDraft(existingProvider: ProviderBinding, draft: ProviderConfigDraftFields): ProviderBinding {
   return {
     ...existingProvider,
     label: draft.providerLabel.trim(),
@@ -135,9 +132,10 @@ export function buildMemberConfigInput(member: TeamMember, draft: MemberConfigDr
     memberId: member.id,
     summary: draft.summary.trim(),
     prompt: draft.prompt.trim(),
+    modelProfileId: draft.modelProfileId?.trim() || undefined,
     acceptsDirectMessages: draft.acceptsDirectMessages,
     skills: toSkillDefinitions(draft.skills),
-    provider: buildProviderFromDraft(member.provider, draft),
+    provider: member.provider,
   };
 }
 
