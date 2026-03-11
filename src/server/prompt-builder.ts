@@ -8,6 +8,7 @@ import {
   resolveProjectWorkingDirectory,
   rewriteCommandForProjectContext,
 } from "./project-paths";
+import { getMemberHistoryFilePath, getRoomContextDirectoryPath, getRoomTranscriptFilePath } from "./room-transcript-files";
 
 const FULL_PROMPT_TRANSCRIPT_LIMIT = 14;
 const DELTA_PROMPT_TRANSCRIPT_LIMIT = 6;
@@ -111,6 +112,52 @@ function collectDeltaMessages(snapshot: WorkspaceSnapshot, room: Room, previousT
   return visibleMessages.slice(-DELTA_PROMPT_TRANSCRIPT_LIMIT);
 }
 
+function formatTaskSourceMessage(sourceMessage: ChatMessage): string {
+  if (sourceMessage.transport === "watch-digest") {
+    return "(private watcher digest; see Watcher Context below)";
+  }
+
+  return sourceMessage.content;
+}
+
+function buildWatcherContextSections(sourceMessage: ChatMessage): string[] {
+  if (sourceMessage.transport !== "watch-digest") {
+    return [];
+  }
+
+  return [
+    "",
+    "[Watcher Context]",
+    "This task was triggered by a private watcher digest. The unseen room activity below was not posted into the room for others. Decide yourself whether any visible room reply is actually needed.",
+    sourceMessage.content,
+  ];
+}
+
+function buildRoomContextFileSections(workspaceRoot: string, room: Room, snapshot: WorkspaceSnapshot, transcriptFilePath?: string): string[] {
+  const roomContextDirectoryPath = getRoomContextDirectoryPath(workspaceRoot, room);
+  const resolvedTranscriptFilePath = transcriptFilePath ?? getRoomTranscriptFilePath(workspaceRoot, room);
+  const memberHistoryFiles = room.memberIds
+    .map((memberId) => snapshot.members[memberId])
+    .filter((member): member is TeamMember => member !== undefined)
+    .map((member) => `@${member.handle}: ${getMemberHistoryFilePath(workspaceRoot, room, member)}`);
+
+  return [
+    "[Shared Room Context]",
+    `room context directory: ${roomContextDirectoryPath}`,
+    `room transcript file: ${resolvedTranscriptFilePath}`,
+    "member history files:",
+    ...(memberHistoryFiles.length > 0 ? memberHistoryFiles : ["(none)"]),
+  ];
+}
+
+function buildMemberReferenceSyntaxSections(): string[] {
+  return [
+    "[Member Reference Syntax]",
+    "@handle: active routing. That member immediately receives the message as work and may be interrupted to act on it. Use @handle only when you want that member to start working now.",
+    "\"handle: passive reference or quote only. Use it when explaining, citing, or comparing members for the user or team. It does not notify the member, does not route work, and does not start a task for them.",
+  ];
+}
+
 function buildSharedSections(args: {
   workspaceRoot: string;
   project: Project;
@@ -162,14 +209,18 @@ function buildSharedSections(args: {
     `OpenAquarium runtime root: ${workspaceRoot}`,
     `room: ${room.name}`,
     `topic: ${room.topic}`,
-    transcriptFilePath ? `room transcript file: ${transcriptFilePath}` : undefined,
+    "",
+    ...buildRoomContextFileSections(workspaceRoot, room, snapshot, transcriptFilePath),
+    "",
+    ...buildMemberReferenceSyntaxSections(),
     "",
     "[Task]",
     `taskId: ${task.id}`,
     `title: ${task.title}`,
-    `source message: ${sourceMessage.content}`,
+    `source message: ${formatTaskSourceMessage(sourceMessage)}`,
     `source transport: ${sourceMessage.transport}`,
     `routing note: ${routingNote}`,
+    ...buildWatcherContextSections(sourceMessage),
     "",
     "[Preferred Tools]",
     preferredTools,
@@ -208,18 +259,20 @@ function buildFullPrompt(args: {
     "",
     "[Communication Rules]",
     "1. If you need to speak in the room or DM someone, prefer the dedicated ACP tools listed below instead of generic shell commands.",
-    "2. Any @handle mention in a group message routes that teammate. Use \"handle when you want to reference or quote someone without assigning them work.",
-    "3. Do not assume hidden roles. The prompt and skills define each member's current job.",
-    "4. Keep room messages concise and actionable, but do not stay silent on long tasks.",
-    "5. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
-    "6. Prefer group messages for user-facing progress updates; use direct messages for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
-    "7. If work is sequential, only @ the member(s) who should act now. Do not route downstream members early just because they will be needed later.",
-    "8. Do not DM teammates just to repeat the same public instruction that is already clear in the room. Use DM only for private coordination, blockers, or a single targeted nudge after checking room state.",
-    "9. If you are a watcher or scribe waiting on upstream replies, stay quiet until the required room messages actually exist; do not proactively chase teammates unless the current task explicitly asks you to.",
-    "10. Once you have completed your scoped visible reply, stop. Do not keep generating follow-up chatter unless a new routed message or blocker requires it.",
-    "11. Do not paste your reasoning, tool narration, or step-by-step plan into room or DM messages.",
-    "12. Do not send the same room or DM content twice. If a send result is unclear, inspect room state first and only retry if the message is actually missing.",
-    "13. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
+    "2. `@handle` is an active assignment. The mentioned teammate immediately gets that message as work and may be interrupted to act on it.",
+    "3. `\"handle` is only a reference or quote for explanation. It does not notify that member, does not route work, and does not start a task for them.",
+    "4. Do not assume hidden roles. The prompt and skills define each member's current job.",
+    "5. Keep room messages concise and actionable, but do not stay silent on long tasks.",
+    "6. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
+    "7. Prefer group messages for user-facing progress updates; use direct messages for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
+    "8. If work is sequential, only @ the member(s) who should act now. Do not route downstream members early just because they will be needed later.",
+    "9. Do not DM teammates just to repeat the same public instruction that is already clear in the room. Use DM only for private coordination, blockers, or a single targeted nudge after checking room state.",
+    "10. If you are a watcher or scribe waiting on upstream replies, stay quiet until the required room messages actually exist; do not proactively chase teammates unless the current task explicitly asks you to.",
+    "11. Once you have completed your scoped visible reply, stop. Do not keep generating follow-up chatter unless a new routed message or blocker requires it.",
+    "12. Do not paste your reasoning, tool narration, or step-by-step plan into room or DM messages.",
+    "13. Do not send the same room or DM content twice. If a send result is unclear, inspect room state first and only retry if the message is actually missing.",
+    "14. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
+    "15. Treat the shared room context directory as the durable source for room transcript and per-member histories. Read the relevant files when watcher context reports unseen messages or member state changes.",
     "",
     "[Member Skills]",
     member.skills.map((skill) => `- ${skill.name}: ${skill.description}\n  command: ${skill.command}`).join("\n") || "(none)",
@@ -266,11 +319,12 @@ function buildDeltaPrompt(args: {
     deltaMessages || "(none)",
     "",
     "[Critical Rules]",
-    "1. Any @handle mention routes that teammate. Use \"handle for non-routing references or quotes.",
-    "2. Send progress updates for work that lasts more than a short turn.",
-    "3. Do not leak reasoning or tool narration into user-visible messages.",
-    "4. Do not resend the same room or DM content unless room state confirms it is missing.",
-    "5. Read the transcript file when you need older context than the delta shown here.",
+    "1. `@handle` is active routing: that teammate immediately receives the message as work and may be interrupted to act on it.",
+    "2. `\"handle` is only a reference or quote. It does not notify the member, does not route work, and does not start a task.",
+    "3. Send progress updates for work that lasts more than a short turn.",
+    "4. Do not leak reasoning or tool narration into user-visible messages.",
+    "5. Do not resend the same room or DM content unless room state confirms it is missing.",
+    "6. Read the shared room context files when you need older context than the delta shown here, especially for watcher-triggered state changes.",
     "",
     "[Instruction]",
     "Continue from the existing member session with only the new information above. Respond using tools when you need visible output, and finish once the current task is actually handled.",

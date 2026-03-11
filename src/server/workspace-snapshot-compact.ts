@@ -233,6 +233,7 @@ function normalizeWatcherCursor(
         {
           ...watcher,
           lastConsumedMessageId,
+          lastConsumedStateAt: watcher.lastConsumedStateAt,
         },
       ];
     }),

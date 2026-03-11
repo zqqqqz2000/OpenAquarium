@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createRuntimeContext } from "@/domain/identity";
 import type { ChatMessage } from "@/domain/model";
 import {
+  appendTaskTrace,
   completeMemberTask,
   createProjectWithRoom,
   createWorkspaceSnapshot,
@@ -253,7 +254,53 @@ describe("workspace domain", () => {
 
     expect(digestMessages).toHaveLength(1);
     expect(digestMessages[0].content).toContain("这是一个新的房间消息");
+    expect(digestMessages[0].visibility).toBe("internal");
+    const watcherMemberId = secondRun.watchers[watcherId].memberId;
+    const watcherTask = Object.values(secondRun.tasks).find(
+      (task) => task.memberId === watcherMemberId && task.sourceMessageId === digestMessages[0].id,
+    );
+    expect(watcherTask?.title).toBe("Review watcher digest");
     expect(secondRun.watchers[watcherId].lastConsumedMessageId).toBeDefined();
+  });
+
+  it("triggers a watcher when member state changes even without a new room message", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const watcherId = snapshot.rooms[roomId].watcherIds[0];
+    const lead = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead");
+
+    if (!lead?.activeTaskId) {
+      throw new Error("Expected an active lead task");
+    }
+
+    snapshot = runWatcher(snapshot, watcherId, context);
+    snapshot = appendTaskTrace(
+      snapshot,
+      {
+        taskId: lead.activeTaskId,
+        roomId,
+        memberId: lead.id,
+        kind: "status",
+        title: "ACP status",
+        content: "Plan updated (2 step(s))",
+      },
+      context,
+    );
+
+    const next = runWatcher(snapshot, watcherId, context);
+    const digestMessages = (next.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => next.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(digestMessages).toHaveLength(1);
+    expect(digestMessages[0].content).toContain("[Member state changes]");
+    expect(digestMessages[0].content).toContain("@lead status: Plan updated (2 step(s))");
+    expect(digestMessages[0].content).not.toContain("[Unseen messages]");
+    expect(next.watchers[watcherId].lastConsumedStateAt).toBeDefined();
   });
 
   it("filters template ack placeholders without blocking later real updates", () => {

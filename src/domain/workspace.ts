@@ -1070,6 +1070,15 @@ function formatDigestLine(snapshot: WorkspaceSnapshot, messageId: MessageId): st
   return `[${stamp}] ${message.author.label}: ${message.content}${mentionSuffix}${quoteSuffix}`;
 }
 
+function truncateWatcherStateContent(content: string, maxLength = 180): string {
+  const normalized = content.trim().replace(/\s+/gu, " ");
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
 function normalizeWatcherMessageContent(content: string): string {
   return content.trim().replace(/\s+/gu, " ").toLowerCase();
 }
@@ -1104,11 +1113,25 @@ function isDigestLikeMessageContent(content: string): boolean {
 
   return (
     normalized.startsWith("new room activity since last poll:")
+    || normalized.startsWith("watcher activity since last watch:")
     || normalized.startsWith("本轮 watcher digest")
     || normalized.includes("已消费 watcher digest")
     || normalized.includes("这轮 watcher digest")
     || normalized.includes("watcher digest 仅新增")
   );
+}
+
+function isWatcherTriggeredTask(snapshot: WorkspaceSnapshot, taskId: TaskId | undefined): boolean {
+  if (!taskId) {
+    return false;
+  }
+
+  const task = snapshot.tasks[taskId];
+  if (!task) {
+    return false;
+  }
+
+  return snapshot.messages[task.sourceMessageId]?.transport === "watch-digest";
 }
 
 function shouldExcludeFromWatcherDigest(snapshot: WorkspaceSnapshot, messageId: MessageId): boolean {
@@ -1127,15 +1150,89 @@ function shouldExcludeFromWatcherDigest(snapshot: WorkspaceSnapshot, messageId: 
   );
 }
 
+function shouldExcludeWatcherStateTrace(snapshot: WorkspaceSnapshot, trace: TaskTraceEntry): boolean {
+  return trace.kind === "task-prompt" || isWatcherTriggeredTask(snapshot, trace.taskId);
+}
+
+function collectWatcherStateChanges(snapshot: WorkspaceSnapshot, watcher: WatchSubscription): TaskTraceEntry[] {
+  return Object.values(snapshot.taskTraces)
+    .filter((trace) => trace.roomId === watcher.roomId)
+    .filter((trace) => watcher.lastConsumedStateAt === undefined || trace.createdAt > watcher.lastConsumedStateAt)
+    .filter((trace) => !shouldExcludeWatcherStateTrace(snapshot, trace))
+    .sort((left, right) => {
+      const createdAtOrder = left.createdAt.localeCompare(right.createdAt);
+      return createdAtOrder !== 0 ? createdAtOrder : left.id.localeCompare(right.id);
+    });
+}
+
+function findLatestWatcherStateChangeAt(snapshot: WorkspaceSnapshot, watcher: WatchSubscription): string | undefined {
+  return Object.values(snapshot.taskTraces)
+    .filter((trace) => trace.roomId === watcher.roomId)
+    .filter((trace) => !shouldExcludeWatcherStateTrace(snapshot, trace))
+    .sort((left, right) => {
+      const createdAtOrder = right.createdAt.localeCompare(left.createdAt);
+      return createdAtOrder !== 0 ? createdAtOrder : right.id.localeCompare(left.id);
+    })[0]?.createdAt;
+}
+
+function formatWatcherStateDigestLine(snapshot: WorkspaceSnapshot, trace: TaskTraceEntry): string {
+  const stamp = trace.createdAt.slice(11, 16);
+  const memberHandle = snapshot.members[trace.memberId]?.handle ?? trace.memberId;
+  const taskTitle = snapshot.tasks[trace.taskId]?.title ?? trace.title;
+
+  switch (trace.kind) {
+    case "task-started":
+      return `[${stamp}] @${memberHandle} started: ${taskTitle}`;
+    case "interrupted":
+      return `[${stamp}] @${memberHandle} interrupted: ${truncateWatcherStateContent(trace.content)}`;
+    case "draft":
+      return `[${stamp}] @${memberHandle} draft: ${truncateWatcherStateContent(trace.content)}`;
+    case "status":
+      return `[${stamp}] @${memberHandle} status: ${truncateWatcherStateContent(trace.content)}`;
+    case "completed":
+      return `[${stamp}] @${memberHandle} completed: ${truncateWatcherStateContent(trace.content)}`;
+    case "error":
+      return `[${stamp}] @${memberHandle} error: ${truncateWatcherStateContent(trace.content)}`;
+    case "task-prompt":
+      return `[${stamp}] @${memberHandle} prompt refreshed`;
+    default:
+      return `[${stamp}] @${memberHandle} ${trace.kind}: ${truncateWatcherStateContent(trace.content)}`;
+  }
+}
+
+function buildWatcherDigestContent(
+  snapshot: WorkspaceSnapshot,
+  newMessageIds: MessageId[],
+  stateChanges: TaskTraceEntry[],
+): string {
+  const sections = ["Watcher activity since last watch:"];
+
+  if (newMessageIds.length > 0) {
+    sections.push("", "[Unseen messages]");
+    sections.push(...newMessageIds.map((messageId) => `- ${formatDigestLine(snapshot, messageId)}`));
+  }
+
+  if (stateChanges.length > 0) {
+    sections.push("", "[Member state changes]");
+    sections.push(...stateChanges.map((trace) => `- ${formatWatcherStateDigestLine(snapshot, trace)}`));
+  }
+
+  return sections.join("\n");
+}
+
 function advanceWatcherCursor(
   snapshot: WorkspaceSnapshot,
   watcher: WatchSubscription,
   watcherId: string,
-  lastConsumedMessageId: MessageId | undefined,
+  nextCursor: {
+    lastConsumedMessageId?: MessageId;
+    lastConsumedStateAt?: string;
+  },
 ): void {
   snapshot.watchers[watcherId] = {
     ...watcher,
-    lastConsumedMessageId,
+    lastConsumedMessageId: nextCursor.lastConsumedMessageId,
+    lastConsumedStateAt: nextCursor.lastConsumedStateAt,
   };
 }
 
@@ -1150,27 +1247,48 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
   const roomMessageIds = snapshot.messageOrderByRoom[watcher.roomId] ?? [];
   const validRoomMessageIds = roomMessageIds.filter((messageId) => snapshot.messages[messageId]?.roomId === watcher.roomId);
   const latestRoomMessageId = validRoomMessageIds[validRoomMessageIds.length - 1];
+  const latestStateChangeAt = findLatestWatcherStateChangeAt(snapshot, watcher);
+  const watcherStateCursor = watcher.lastConsumedStateAt ?? latestStateChangeAt;
+  const watcherWithResolvedStateCursor =
+    watcher.lastConsumedStateAt === watcherStateCursor
+      ? watcher
+      : {
+          ...watcher,
+          lastConsumedStateAt: watcherStateCursor,
+        };
 
-  if (!watcher.lastConsumedMessageId) {
-    advanceWatcherCursor(snapshot, watcher, watcherId, latestRoomMessageId);
+  if (!watcher.lastConsumedMessageId && watcher.lastConsumedStateAt === undefined) {
+    advanceWatcherCursor(snapshot, watcher, watcherId, {
+      lastConsumedMessageId: latestRoomMessageId,
+      lastConsumedStateAt: latestStateChangeAt,
+    });
     return snapshot;
   }
 
-  const startIndex = validRoomMessageIds.indexOf(watcher.lastConsumedMessageId) + 1;
+  const startIndex = watcher.lastConsumedMessageId ? validRoomMessageIds.indexOf(watcher.lastConsumedMessageId) + 1 : 0;
   if (startIndex <= 0) {
-    advanceWatcherCursor(snapshot, watcher, watcherId, latestRoomMessageId);
+    advanceWatcherCursor(snapshot, watcher, watcherId, {
+      lastConsumedMessageId: latestRoomMessageId,
+      lastConsumedStateAt: latestStateChangeAt ?? watcher.lastConsumedStateAt,
+    });
     return snapshot;
   }
 
   const observedMessageIds = validRoomMessageIds.slice(startIndex);
   const newMessageIds = observedMessageIds.filter((messageId) => !shouldExcludeFromWatcherDigest(snapshot, messageId));
+  const stateChanges = collectWatcherStateChanges(snapshot, watcherWithResolvedStateCursor);
+  const nextCursor = {
+    lastConsumedMessageId:
+      observedMessageIds.length > 0 ? observedMessageIds[observedMessageIds.length - 1] : watcher.lastConsumedMessageId,
+    lastConsumedStateAt: stateChanges[stateChanges.length - 1]?.createdAt ?? watcherWithResolvedStateCursor.lastConsumedStateAt,
+  };
 
-  if (observedMessageIds.length === 0) {
+  if (observedMessageIds.length === 0 && stateChanges.length === 0) {
     return snapshot;
   }
 
-  if (newMessageIds.length === 0) {
-    advanceWatcherCursor(snapshot, watcher, watcherId, observedMessageIds[observedMessageIds.length - 1]);
+  if (newMessageIds.length === 0 && stateChanges.length === 0) {
+    advanceWatcherCursor(snapshot, watcher, watcherId, nextCursor);
     return snapshot;
   }
 
@@ -1179,18 +1297,21 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
     id: context.createId("message"),
     roomId: watcher.roomId,
     author: buildSystemAuthor("Watcher"),
-    content: `New room activity since last poll:\n${newMessageIds.map((messageId) => `- ${formatDigestLine(snapshot, messageId)}`).join("\n")}`,
+    content: buildWatcherDigestContent(snapshot, newMessageIds, stateChanges),
     createdAt: now,
     transport: "watch-digest",
     status: "sent",
-    visibility: "public",
+    visibility: "internal",
     mentionedMemberIds: [],
     quotedMemberIds: [],
     recipientMemberIds: [watcher.memberId],
   };
 
   insertMessage(snapshot, digestMessage);
-  advanceWatcherCursor(snapshot, watcher, watcherId, digestMessage.id);
+  advanceWatcherCursor(snapshot, watcher, watcherId, {
+    lastConsumedMessageId: digestMessage.id,
+    lastConsumedStateAt: nextCursor.lastConsumedStateAt,
+  });
   routeMessage(snapshot, digestMessage, now, context.createId);
 
   return snapshot;

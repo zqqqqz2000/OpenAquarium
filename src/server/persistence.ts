@@ -115,6 +115,7 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
         {
           ...watcher,
           lastConsumedMessageId,
+          lastConsumedStateAt: watcher.lastConsumedStateAt,
         },
       ];
     }),

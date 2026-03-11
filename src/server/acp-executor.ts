@@ -230,7 +230,7 @@ export class AcpMemberExecutor implements MemberExecutor {
 
     return acpTools({
       oa_send_group_message: tool({
-        description: "Send a message into the current room as this member. Prefer this tool over shelling out. Any @handle mention in the message routes work to that teammate.",
+        description: "Send a message into the current room as this member. Prefer this tool over shelling out. Any @handle mention actively routes work to that teammate. Use \"handle only as a passive reference or quote; it does not notify or route them.",
         inputSchema: z.object({
           content: z.string().min(1),
         }),

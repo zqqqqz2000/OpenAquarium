@@ -122,6 +122,7 @@ export interface WatchSubscription {
   intervalMinutes: number;
   enabled: boolean;
   lastConsumedMessageId?: MessageId;
+  lastConsumedStateAt?: string;
 }
 
 export interface ChatAuthor {

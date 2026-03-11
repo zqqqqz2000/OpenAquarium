@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { createRuntimeContext } from "@/domain/identity";
-import { postUserMessage } from "@/domain/workspace";
+import { postUserMessage, runWatcher } from "@/domain/workspace";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { buildTaskPrompt } from "@/server/prompt-builder";
+import { getRoomContextDirectoryPath } from "@/server/room-transcript-files";
 
 describe("buildTaskPrompt", () => {
   it("tells members to publish progress updates during longer tasks", () => {
@@ -84,8 +85,10 @@ describe("buildTaskPrompt", () => {
 
     expect(prompt).toContain("prompt mode: delta");
     expect(prompt).toContain("room transcript file: /tmp/room-transcript.md");
+    expect(prompt).toContain(`room context directory: ${getRoomContextDirectoryPath(process.cwd(), snapshot.rooms[room.id])}`);
     expect(prompt).toContain("Recent Delta Transcript");
-    expect(prompt).toContain("Use \"handle for non-routing references or quotes.");
+    expect(prompt).toContain("\"handle: passive reference or quote only.");
+    expect(prompt).toContain("It does not notify the member, does not route work");
   });
 
   it("rewrites OpenAquarium notification commands to absolute paths when a project path is set", () => {
@@ -114,5 +117,54 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain(`project path: ${project.path}`);
     expect(prompt).toContain(`project working directory: ${project.path}`);
     expect(prompt).toContain(`${process.cwd()}/bin/oa-room-send --scope group`);
+  });
+
+  it("includes private unseen watcher context without treating it as a room message", () => {
+    const context = createRuntimeContext(700, "2026-03-10T12:45:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const scribe = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((candidate) => candidate.handle === "scribe");
+
+    if (!scribe) {
+      throw new Error("Expected the scribe member");
+    }
+
+    const watcherId = room.watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === scribe.id);
+    if (!watcherId) {
+      throw new Error("Expected a watcher for the scribe member");
+    }
+
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "这里有一条 watcher 还没见过的新消息。",
+      },
+      context,
+    );
+    snapshot = runWatcher(snapshot, watcherId, context);
+
+    const nextScribe = snapshot.members[scribe.id];
+    const currentTask = nextScribe.activeTaskId ? snapshot.tasks[nextScribe.activeTaskId] : undefined;
+    if (!currentTask) {
+      throw new Error("Expected a watcher task for the scribe member");
+    }
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room: snapshot.rooms[room.id],
+      member: nextScribe,
+      task: currentTask,
+      snapshot,
+    });
+
+    expect(prompt).toContain("private watcher digest");
+    expect(prompt).toContain("was not posted into the room for others");
+    expect(prompt).toContain("这里有一条 watcher 还没见过的新消息。");
+    expect(prompt).toContain("member history files:");
   });
 });
