@@ -19,6 +19,7 @@ import {
   toggleMemberMonitor,
   toggleWatcher,
   updateMemberConfig,
+  updateRoomTeam as updateRoomTeamInWorkspace,
   updateTemplate,
   updateMemberPrompt,
   upsertTaskTrace,
@@ -30,6 +31,7 @@ import type {
   CreateRoomInput,
   MemberId,
   PostMemberMessageInput,
+  UpdateRoomTeamInput,
   TemplateStudioChatMessage,
   UpsertWatcherInput,
   UpdateMemberConfigInput,
@@ -51,6 +53,7 @@ import { normalizeProjectPath, resolveProjectWorkingDirectory } from "./project-
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
 import { createDefaultGlobalWorkspaceConfig, findProviderModelProfile, resolveProviderBindingFromProfile } from "../lib/provider-model-profiles";
+import { resolveRoomTeamSummary } from "../lib/room-team";
 import type { TemplateStudioUIMessage } from "../lib/template-studio-ui-message";
 
 type SnapshotListener = (snapshot: WorkspaceSnapshot) => void;
@@ -93,6 +96,46 @@ function buildVisibleTaskFailureContent(message: string): string {
     .replace(/@([\p{L}\p{N}_-]+)/gu, "at $1");
 
   return compactMessage.length > 0 ? `任务执行失败：${compactMessage}` : "任务执行失败。";
+}
+
+function describeTaskStatusTrace(summary: string): {
+  append: boolean;
+  title: string;
+  content: string;
+} {
+  const trimmedSummary = summary.trim();
+  const toolCalledMatch = /^(.+?)\s+\(called\)$/u.exec(trimmedSummary);
+  if (toolCalledMatch?.[1]) {
+    return {
+      append: true,
+      title: "Tool call",
+      content: toolCalledMatch[1],
+    };
+  }
+
+  const toolCompletedMatch = /^(.+?)\s+\(completed\)$/u.exec(trimmedSummary);
+  if (toolCompletedMatch?.[1]) {
+    return {
+      append: true,
+      title: "Tool completed",
+      content: toolCompletedMatch[1],
+    };
+  }
+
+  const reasoningMatch = /^Reasoning:\s*(.+)$/u.exec(trimmedSummary);
+  if (reasoningMatch?.[1]) {
+    return {
+      append: false,
+      title: "Reasoning",
+      content: reasoningMatch[1],
+    };
+  }
+
+  return {
+    append: false,
+    title: "ACP status",
+    content: trimmedSummary,
+  };
 }
 
 function cloneTemplates(snapshot: WorkspaceSnapshot): TeamTemplate[] {
@@ -507,6 +550,29 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
+  async updateRoomTeam(input: UpdateRoomTeamInput): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    const next = updateRoomTeamInWorkspace(previous, input, this.context);
+
+    Object.keys(previous.members).forEach((memberId) => {
+      const previousMember = previous.members[memberId];
+      const nextMember = next.members[memberId];
+      if (!previousMember || !nextMember) {
+        return;
+      }
+
+      if (this.memberExecutionKey(previousMember) !== this.memberExecutionKey(nextMember)) {
+        next.members[memberId] = {
+          ...nextMember,
+          providerSessionId: undefined,
+        };
+      }
+    });
+
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
   async updateTemplate(input: UpdateTemplateInput): Promise<WorkspaceSnapshot> {
     const previous = this.snapshot;
     const next = updateTemplate(previous, input);
@@ -706,6 +772,7 @@ export class WorkspaceRuntime {
       .filter((line): line is string => Boolean(line))
       .join("\n");
 
+    const roomTeam = resolveRoomTeamSummary(this.snapshot, room);
     const members = room.memberIds
       .map((memberId) => this.snapshot.members[memberId])
       .map((member) => `- ${member.name} (@${member.handle}) status=${member.status} entry=${member.isEntryMember}`)
@@ -719,6 +786,8 @@ export class WorkspaceRuntime {
       "",
       `room: ${room.name}`,
       `topic: ${room.topic}`,
+      `team: ${roomTeam.name}`,
+      `teamDescription: ${roomTeam.description}`,
       "",
       "[members]",
       members || "(none)",
@@ -754,9 +823,14 @@ export class WorkspaceRuntime {
   }
 
   private cleanupRemovedRuntimeState(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): void {
-    const nextMemberIds = new Set(Object.keys(next.members));
-    Object.keys(previous.members).forEach((memberId) => {
-      if (!nextMemberIds.has(memberId)) {
+    Object.entries(previous.members).forEach(([memberId, previousMember]) => {
+      const nextMember = next.members[memberId];
+      const nextRoom = nextMember ? next.rooms[nextMember.roomId] : undefined;
+      const memberRemovedOrArchived = !nextMember || Boolean(nextMember.archivedAt);
+      const executionChanged = nextMember ? this.memberExecutionKey(previousMember) !== this.memberExecutionKey(nextMember) : false;
+      const noLongerActiveInRoom = nextMember ? !nextRoom?.memberIds.includes(memberId) : true;
+
+      if (memberRemovedOrArchived || executionChanged || noLongerActiveInRoom) {
         this.disposeExecutor(memberId);
       }
     });
@@ -925,18 +999,34 @@ export class WorkspaceRuntime {
             if (!currentTask || currentTask.status !== "running") {
               return;
             }
-            this.snapshot = compactWorkspaceSnapshot(upsertTaskTrace(
-              this.snapshot,
-              {
-                taskId,
-                roomId: currentTask.roomId,
-                memberId: currentTask.memberId,
-                kind: "status",
-                title: "ACP status",
-                content: summary,
-              },
-              this.context,
-            ));
+            const statusTrace = describeTaskStatusTrace(summary);
+            this.snapshot = compactWorkspaceSnapshot(
+              statusTrace.append
+                ? appendTaskTrace(
+                    this.snapshot,
+                    {
+                      taskId,
+                      roomId: currentTask.roomId,
+                      memberId: currentTask.memberId,
+                      kind: "status",
+                      title: statusTrace.title,
+                      content: statusTrace.content,
+                    },
+                    this.context,
+                  )
+                : upsertTaskTrace(
+                    this.snapshot,
+                    {
+                      taskId,
+                      roomId: currentTask.roomId,
+                      memberId: currentTask.memberId,
+                      kind: "status",
+                      title: statusTrace.title,
+                      content: statusTrace.content,
+                    },
+                    this.context,
+                  ),
+            );
             this.scheduleProgressPersistence();
             this.emit();
             this.logger?.info("task-status", {

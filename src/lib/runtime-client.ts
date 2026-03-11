@@ -1,5 +1,6 @@
 import type {
   GlobalWorkspaceConfig,
+  UpdateRoomTeamInput,
   TeamTemplate,
   TemplateStudioChatMessage,
   UpdateGlobalConfigInput,
@@ -154,6 +155,22 @@ export class WorkspaceRuntimeClient {
           name: input.name,
           description: input.description,
           accentTone: input.accentTone,
+          members: input.members,
+        }),
+      }),
+    );
+    return payload.snapshot;
+  }
+
+  async updateRoomTeam(input: UpdateRoomTeamInput): Promise<WorkspaceSnapshot> {
+    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+      await fetch(`${this.baseUrl}/api/rooms/${input.roomId}/team`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          teamName: input.teamName,
+          teamDescription: input.teamDescription,
+          teamAccentTone: input.teamAccentTone,
           members: input.members,
         }),
       }),

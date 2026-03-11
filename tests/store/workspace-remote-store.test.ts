@@ -20,6 +20,7 @@ function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
       void input;
       return Promise.reject(new Error("not implemented"));
     },
+    updateRoomTeam: () => Promise.reject(new Error("not implemented")),
     updateTemplate: (input: UpdateTemplateInput) => {
       void input;
       return Promise.reject(new Error("not implemented"));

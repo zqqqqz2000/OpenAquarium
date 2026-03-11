@@ -287,6 +287,55 @@ export async function handleWorkspaceJsonApiRequest(args: {
     };
   }
 
+  const roomTeamMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/team$/u);
+  if (method === "POST" && roomTeamMatch) {
+    const [, roomId] = roomTeamMatch;
+    if (!roomId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing room id" },
+      };
+    }
+    const snapshot = await runtime.updateRoomTeam({
+      roomId,
+      ...(body as {
+        teamName: string;
+        teamDescription: string;
+        teamAccentTone: "paper" | "postit" | "blueprint" | "correction";
+        members: Array<{
+          memberId: string;
+          name: string;
+          handle: string;
+          summary: string;
+          prompt: string;
+          accentTone: "paper" | "postit" | "blueprint" | "correction";
+          modelProfileId?: string;
+          skills: Array<{ id: string; name: string; description: string; command: string }>;
+          provider: {
+            kind: "codex-acp" | "generic-acp";
+            label: string;
+            command: string;
+            args: string[];
+            env: Record<string, string>;
+            workingDirectory?: string;
+            capabilities: string[];
+          };
+          isEntryMember?: boolean;
+          observeAllRoomMessages?: boolean;
+          acceptsDirectMessages?: boolean;
+          watch?: {
+            enabled: boolean;
+            intervalMinutes: number;
+          };
+        }>;
+      }),
+    });
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
   const projectDeleteMatch = pathname.match(/^\/api\/projects\/([^/]+)$/u);
   if (method === "DELETE" && projectDeleteMatch) {
     const [, projectId] = projectDeleteMatch;
@@ -851,6 +900,52 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
         const snapshot = await args.runtime.deleteRoom(roomId);
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
+      const roomTeamMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/team$/u);
+      if (request.method === "POST" && roomTeamMatch) {
+        const [, roomId] = roomTeamMatch;
+        if (!roomId) {
+          sendJson(response, 400, { error: "Missing room id" });
+          return;
+        }
+        const body = await readJson<{
+          teamName: string;
+          teamDescription: string;
+          teamAccentTone: "paper" | "postit" | "blueprint" | "correction";
+          members: Array<{
+            memberId: string;
+            name: string;
+            handle: string;
+            summary: string;
+            prompt: string;
+            accentTone: "paper" | "postit" | "blueprint" | "correction";
+            modelProfileId?: string;
+            skills: Array<{ id: string; name: string; description: string; command: string }>;
+            provider: {
+              kind: "codex-acp" | "generic-acp";
+              label: string;
+              command: string;
+              args: string[];
+              env: Record<string, string>;
+              workingDirectory?: string;
+              capabilities: string[];
+            };
+            isEntryMember?: boolean;
+            observeAllRoomMessages?: boolean;
+            acceptsDirectMessages?: boolean;
+            watch?: {
+              enabled: boolean;
+              intervalMinutes: number;
+            };
+          }>;
+        }>(request);
+        const snapshot = await args.runtime.updateRoomTeam({
+          roomId,
+          ...body,
+        });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }

@@ -160,26 +160,13 @@ describe("workspace http api routing", () => {
     }
     const memberId = room.memberIds[0];
     expect(memberId).toBeDefined();
+    const researchId = room.memberIds[1];
+    expect(researchId).toBeDefined();
     const builderId = room.memberIds[2];
     expect(builderId).toBeDefined();
-    if (!builderId) {
-      throw new Error("Expected builder id");
+    if (!builderId || !researchId) {
+      throw new Error("Expected builder and research ids");
     }
-
-    const memberMessageResult = await handleWorkspaceJsonApiRequest({
-      runtime,
-      method: "POST",
-      pathname: "/api/internal/member-message",
-      body: {
-        roomId,
-        memberId,
-        content: "@builder 请看这里",
-      },
-    });
-    const payload = memberMessageResult?.payload as { snapshot: { messageOrderByRoom: Record<string, string[]>; messages: Record<string, { content: string }> } };
-    const contents = (payload.snapshot.messageOrderByRoom[roomId] ?? []).map(
-      (messageId) => payload.snapshot.messages[messageId]?.content ?? "",
-    );
 
     const configResult = await handleWorkspaceJsonApiRequest({
       runtime,
@@ -213,6 +200,9 @@ describe("workspace http api routing", () => {
     const configPayload = configResult?.payload as {
       snapshot: { members: Record<string, { provider: { command: string }; summary: string; modelProfileId?: string }> };
     };
+    expect(configPayload.snapshot.members[builderId]?.provider.command).toBe(runtime.getSnapshot().members[builderId]?.provider.command);
+    expect(configPayload.snapshot.members[builderId]?.summary).toBe("Builder v2");
+    expect(configPayload.snapshot.members[builderId]?.modelProfileId).toBe(loadedGlobalConfig.config.modelProfiles[0]?.id);
 
     const entryResult = await handleWorkspaceJsonApiRequest({
       runtime,
@@ -220,6 +210,7 @@ describe("workspace http api routing", () => {
       pathname: `/api/members/${builderId}/entry`,
     });
     const entryPayload = entryResult?.payload as { snapshot: { rooms: Record<string, { entryMemberId: string }> } };
+    expect(entryPayload.snapshot.rooms[roomId].entryMemberId).toBe(builderId);
 
     const watcherResult = await handleWorkspaceJsonApiRequest({
       runtime,
@@ -236,6 +227,97 @@ describe("workspace http api routing", () => {
         watchers: Record<string, { memberId: string; intervalMinutes: number }>;
       };
     };
+    expect(
+      watcherPayload.snapshot.rooms[roomId].watcherIds.some(
+        (watcherId) => watcherPayload.snapshot.watchers[watcherId]?.memberId === builderId
+          && watcherPayload.snapshot.watchers[watcherId]?.intervalMinutes === 6,
+      ),
+    ).toBe(true);
+    const roomTeamResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: `/api/rooms/${roomId}/team`,
+      body: {
+        teamName: "HTTP Room Team",
+        teamDescription: "只对当前 room 生效",
+        teamAccentTone: "blueprint",
+        members: room.memberIds
+          .filter((candidate) => candidate !== researchId)
+          .map((candidate) => runtime.getSnapshot().members[candidate])
+          .filter(Boolean)
+          .map((member) =>
+            member.id === builderId
+              ? {
+                  memberId: member.id,
+                  name: member.name,
+                  handle: member.handle,
+                  summary: "HTTP builder summary",
+                  prompt: member.prompt,
+                  accentTone: member.accentTone,
+                  modelProfileId: member.modelProfileId,
+                  skills: member.skills,
+                  provider: member.provider,
+                  isEntryMember: member.isEntryMember,
+                  observeAllRoomMessages: member.observeAllRoomMessages,
+                  acceptsDirectMessages: member.acceptsDirectMessages,
+                  watch: {
+                    enabled: true,
+                    intervalMinutes: 6,
+                  },
+                }
+              : {
+                  memberId: member.id,
+                  name: member.name,
+                  handle: member.handle,
+                  summary: member.summary,
+                  prompt: member.prompt,
+                  accentTone: member.accentTone,
+                  modelProfileId: member.modelProfileId,
+                  skills: member.skills,
+                  provider: member.provider,
+                  isEntryMember: member.isEntryMember,
+                  observeAllRoomMessages: member.observeAllRoomMessages,
+                  acceptsDirectMessages: member.acceptsDirectMessages,
+                },
+          )
+          .concat([
+            {
+              memberId: "qa-temp",
+              name: "Signal Heron",
+              handle: "qa",
+              summary: "HTTP QA",
+              prompt: "检查当前 room 的回归风险。",
+              accentTone: "paper" as const,
+              modelProfileId: loadedGlobalConfig.config.modelProfiles[0]?.id,
+              skills: [],
+              provider: runtime.getSnapshot().members[builderId].provider,
+              isEntryMember: false,
+              observeAllRoomMessages: false,
+              acceptsDirectMessages: true,
+            },
+          ]),
+      },
+    });
+    const roomTeamPayload = roomTeamResult?.payload as {
+      snapshot: {
+        rooms: Record<string, { teamName?: string; teamDescription?: string; teamAccentTone?: string; memberIds: string[] }>;
+        members: Record<string, { handle: string; summary: string; archivedAt?: string }>;
+      };
+    };
+    const memberMessageResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/internal/member-message",
+      body: {
+        roomId,
+        memberId,
+        content: "@builder 请看这里",
+      },
+    });
+    const payload = memberMessageResult?.payload as { snapshot: { messageOrderByRoom: Record<string, string[]>; messages: Record<string, { content: string }> } };
+    const contents = (payload.snapshot.messageOrderByRoom[roomId] ?? []).map(
+      (messageId) => payload.snapshot.messages[messageId]?.content ?? "",
+    );
 
     const templateResult = await handleWorkspaceJsonApiRequest({
       runtime,
@@ -318,16 +400,16 @@ describe("workspace http api routing", () => {
     };
 
     expect(contents.some((content) => content.includes("@builder"))).toBe(true);
-    expect(configPayload.snapshot.members[builderId]?.provider.command).toBe(runtime.getSnapshot().members[builderId]?.provider.command);
-    expect(configPayload.snapshot.members[builderId]?.summary).toBe("Builder v2");
-    expect(configPayload.snapshot.members[builderId]?.modelProfileId).toBe(loadedGlobalConfig.config.modelProfiles[0]?.id);
-    expect(entryPayload.snapshot.rooms[roomId].entryMemberId).toBe(builderId);
+    expect(roomTeamPayload.snapshot.rooms[roomId]?.teamName).toBe("HTTP Room Team");
+    expect(roomTeamPayload.snapshot.rooms[roomId]?.teamDescription).toBe("只对当前 room 生效");
+    expect(roomTeamPayload.snapshot.rooms[roomId]?.teamAccentTone).toBe("blueprint");
+    expect(roomTeamPayload.snapshot.members[researchId]?.archivedAt).toBeDefined();
     expect(
-      watcherPayload.snapshot.rooms[roomId].watcherIds.some(
-        (watcherId) => watcherPayload.snapshot.watchers[watcherId]?.memberId === builderId
-          && watcherPayload.snapshot.watchers[watcherId]?.intervalMinutes === 6,
+      roomTeamPayload.snapshot.rooms[roomId]?.memberIds.some(
+        (activeMemberId) => roomTeamPayload.snapshot.members[activeMemberId]?.handle === "qa",
       ),
     ).toBe(true);
+    expect(roomTeamPayload.snapshot.members[builderId]?.summary).toBe("HTTP builder summary");
     expect(templatePayload.template.id).toBe("template-http-generated");
     expect(templatePayload.snapshot.templates["template-http-generated"]?.description).toBe("生成一个新的协作模板");
     expect(templateConfigPayload.snapshot.templates[existingTemplate.id]?.name).toBe("Product Pod v2");

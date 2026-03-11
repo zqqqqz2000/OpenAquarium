@@ -6,6 +6,7 @@ import type {
   TemplateStudioChatMessage,
   UpdateGlobalConfigInput,
   UpdateMemberConfigInput,
+  UpdateRoomTeamInput,
   UpdateTemplateInput,
   WorkspaceSnapshot,
 } from "@/domain/model";
@@ -78,6 +79,7 @@ export interface WorkspaceRemoteStoreState {
   runWatcher(watcherId: string): Promise<void>;
   updatePrompt(memberId: string, prompt: string): Promise<void>;
   updateMemberConfig(input: UpdateMemberConfigInput): Promise<void>;
+  updateRoomTeam(input: UpdateRoomTeamInput): Promise<WorkspaceSnapshot>;
   updateTemplate(input: UpdateTemplateInput): Promise<void>;
   deleteTemplate(templateId: string): Promise<void>;
   updateGlobalConfig(input: UpdateGlobalConfigInput): Promise<void>;
@@ -111,6 +113,7 @@ export interface WorkspaceRemoteClient {
   sendUserMessage(input: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot>;
   updatePrompt(memberId: string, prompt: string): Promise<WorkspaceSnapshot>;
   updateMemberConfig(input: UpdateMemberConfigInput): Promise<WorkspaceSnapshot>;
+  updateRoomTeam(input: UpdateRoomTeamInput): Promise<WorkspaceSnapshot>;
   updateTemplate(input: UpdateTemplateInput): Promise<WorkspaceSnapshot>;
   deleteTemplate(templateId: string): Promise<WorkspaceSnapshot>;
   updateGlobalConfig(input: UpdateGlobalConfigInput): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig }>;
@@ -275,6 +278,13 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));
+    },
+    async updateRoomTeam(input) {
+      const snapshot = await runMutation(set, () => client.updateRoomTeam(input));
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+      }));
+      return snapshot;
     },
     async updateTemplate(input) {
       const snapshot = await runMutation(set, () => client.updateTemplate(input));

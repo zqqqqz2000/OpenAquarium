@@ -15,6 +15,7 @@ import {
   postUserMessage,
   runWatcher,
   setEntryMember,
+  updateRoomTeam,
   updateTemplate,
   updateMemberConfig,
   upsertMemberWatcher,
@@ -537,5 +538,104 @@ describe("workspace domain", () => {
     expect(snapshot.templates[template.id].members.find((member) => member.id === builderBlueprint.id)?.provider.command).toBe("claude-code");
     expect(snapshot.members[roomBuilder.id].summary).not.toBe("新的模板 builder summary");
     expect(snapshot.members[roomBuilder.id].provider.command).not.toBe("claude-code");
+  });
+
+  it("keeps room team metadata and composition local to the room", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const room = snapshot.rooms[roomId];
+    const roomMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const lead = roomMembers.find((member) => member.handle === "lead");
+    const builder = roomMembers.find((member) => member.handle === "builder");
+    const research = roomMembers.find((member) => member.handle === "research");
+
+    if (!lead || !builder || !research) {
+      throw new Error("Expected lead, builder, and research members");
+    }
+
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: research.id,
+        content: "这是 research 留下的一条历史消息。",
+      },
+      context,
+    );
+    const historyMessageId = snapshot.messageOrderByRoom[roomId]?.at(-1);
+
+    snapshot = updateRoomTeam(
+      snapshot,
+      {
+        roomId,
+        teamName: "Room Tiger Team",
+        teamDescription: "只对当前 room 生效的本地团队配置。",
+        teamAccentTone: "correction",
+        members: [
+          {
+            memberId: lead.id,
+            name: lead.name,
+            handle: lead.handle,
+            summary: lead.summary,
+            prompt: lead.prompt,
+            accentTone: lead.accentTone,
+            modelProfileId: lead.modelProfileId,
+            skills: lead.skills,
+            provider: lead.provider,
+            isEntryMember: true,
+            observeAllRoomMessages: lead.observeAllRoomMessages,
+            acceptsDirectMessages: lead.acceptsDirectMessages,
+          },
+          {
+            memberId: builder.id,
+            name: builder.name,
+            handle: builder.handle,
+            summary: "Room-local builder summary",
+            prompt: builder.prompt,
+            accentTone: builder.accentTone,
+            modelProfileId: builder.modelProfileId,
+            skills: builder.skills,
+            provider: builder.provider,
+            observeAllRoomMessages: builder.observeAllRoomMessages,
+            acceptsDirectMessages: builder.acceptsDirectMessages,
+            watch: {
+              enabled: true,
+              intervalMinutes: 9,
+            },
+          },
+          {
+            memberId: "qa-temp",
+            name: "Signal Heron",
+            handle: "qa",
+            summary: "负责当前 room 的质量检查。",
+            prompt: "检查当前 room 里的实现和回归风险。",
+            accentTone: "blueprint",
+            modelProfileId: builder.modelProfileId,
+            skills: builder.skills,
+            provider: builder.provider,
+            observeAllRoomMessages: false,
+            acceptsDirectMessages: true,
+          },
+        ],
+      },
+      context,
+    );
+
+    const nextRoom = snapshot.rooms[roomId];
+    const nextMembers = nextRoom.memberIds.map((memberId) => snapshot.members[memberId]);
+    const qa = nextMembers.find((member) => member.handle === "qa");
+
+    expect(nextRoom.teamName).toBe("Room Tiger Team");
+    expect(nextRoom.teamDescription).toBe("只对当前 room 生效的本地团队配置。");
+    expect(nextRoom.teamAccentTone).toBe("correction");
+    expect(snapshot.templates[room.templateId].name).toBe("Product Pod");
+    expect(nextMembers.some((member) => member.id === research.id)).toBe(false);
+    expect(snapshot.members[research.id].archivedAt).toBeDefined();
+    expect(snapshot.messages[historyMessageId!]?.author.id).toBe(research.id);
+    expect(nextMembers.find((member) => member.id === builder.id)?.summary).toBe("Room-local builder summary");
+    expect(nextRoom.watcherIds.some((watcherId) => snapshot.watchers[watcherId]?.memberId === builder.id)).toBe(true);
+    expect(qa?.roomId).toBe(roomId);
   });
 });

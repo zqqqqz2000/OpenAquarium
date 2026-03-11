@@ -110,7 +110,7 @@ function TemplateDeleteTrigger(props: {
           </AlertDialogMedia>
           <AlertDialogTitle>{`Delete ${template.name}?`}</AlertDialogTitle>
           <AlertDialogDescription>
-            This removes the template from workspace defaults. Existing rooms keep their current members.
+            This removes the template from workspace defaults. Existing rooms keep their copied team config.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -893,7 +893,7 @@ export function TemplateStudioDialog(props: {
               </div>
             </section>
 
-            <section className="min-h-0 flex-1 pt-4">
+            <section className="flex min-h-0 flex-1 flex-col pt-4">
               <div className="flex items-center justify-between gap-3">
                 <p className="m-0 text-base font-semibold tracking-tight">Team templates</p>
                 <Badge variant="outline">{templates.length}</Badge>

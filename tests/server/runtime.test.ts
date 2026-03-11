@@ -743,7 +743,7 @@ describe("WorkspaceRuntime", () => {
     expect(runtime.getSnapshot().templates[templateId]?.description).toBe("Updated from template studio chat");
   });
 
-  it("blocks deleting a team template that is still referenced by a room", async () => {
+  it("deletes a team template without breaking existing room-local team data", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-template-delete-"));
     const runtime = new WorkspaceRuntime({
       initialSnapshot: createEmptyRuntimeSnapshot(),
@@ -761,12 +761,105 @@ describe("WorkspaceRuntime", () => {
       templateId: "template-product-pod",
     });
 
-    await expect(runtime.deleteTemplate("template-product-pod")).rejects.toThrow(
-      "Cannot delete a team template that is still used by an existing room.",
-    );
+    const projectRoomId = runtime.getSnapshot().selection.roomId!;
+    const beforeDeleteRoom = runtime.getSnapshot().rooms[projectRoomId];
+    expect(beforeDeleteRoom.teamName).toBe("Product Pod");
 
-    const snapshot = await runtime.deleteTemplate("template-incident-pod");
-    expect(snapshot.templates["template-incident-pod"]).toBeUndefined();
-    expect(snapshot.templateOrder).not.toContain("template-incident-pod");
+    const deletedProductTemplateSnapshot = await runtime.deleteTemplate("template-product-pod");
+    expect(deletedProductTemplateSnapshot.templates["template-product-pod"]).toBeUndefined();
+    expect(deletedProductTemplateSnapshot.rooms[projectRoomId]?.teamName).toBe("Product Pod");
+    expect(deletedProductTemplateSnapshot.rooms[projectRoomId]?.memberIds.length).toBeGreaterThan(0);
+
+    await expect(runtime.deleteTemplate("template-incident-pod")).rejects.toThrow("At least one team template must remain.");
+  });
+
+  it("updates a room-local team without mutating the source template", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-room-team-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    await runtime.createProject({
+      projectName: "Room Team Runtime",
+      templateId: "template-product-pod",
+    });
+
+    const before = runtime.getSnapshot();
+    const roomId = before.selection.roomId!;
+    const room = before.rooms[roomId];
+    const roomMembers = room.memberIds.map((memberId) => before.members[memberId]);
+    const lead = roomMembers.find((member) => member.handle === "lead");
+    const builder = roomMembers.find((member) => member.handle === "builder");
+    const research = roomMembers.find((member) => member.handle === "research");
+
+    if (!lead || !builder || !research) {
+      throw new Error("Expected lead, builder, and research members");
+    }
+
+    const snapshot = await runtime.updateRoomTeam({
+      roomId,
+      teamName: "Runtime Room Team",
+      teamDescription: "room local only",
+      teamAccentTone: "blueprint",
+      members: [
+        {
+          memberId: lead.id,
+          name: lead.name,
+          handle: lead.handle,
+          summary: lead.summary,
+          prompt: lead.prompt,
+          accentTone: lead.accentTone,
+          modelProfileId: lead.modelProfileId,
+          skills: lead.skills,
+          provider: lead.provider,
+          isEntryMember: true,
+          observeAllRoomMessages: lead.observeAllRoomMessages,
+          acceptsDirectMessages: lead.acceptsDirectMessages,
+        },
+        {
+          memberId: builder.id,
+          name: builder.name,
+          handle: builder.handle,
+          summary: "Runtime-local builder",
+          prompt: builder.prompt,
+          accentTone: builder.accentTone,
+          modelProfileId: builder.modelProfileId,
+          skills: builder.skills,
+          provider: builder.provider,
+          observeAllRoomMessages: builder.observeAllRoomMessages,
+          acceptsDirectMessages: builder.acceptsDirectMessages,
+          watch: {
+            enabled: true,
+            intervalMinutes: 11,
+          },
+        },
+        {
+          memberId: "qa-temp",
+          name: "Signal Heron",
+          handle: "qa",
+          summary: "runtime QA",
+          prompt: "check runtime regressions",
+          accentTone: "paper",
+          modelProfileId: builder.modelProfileId,
+          skills: builder.skills,
+          provider: builder.provider,
+          observeAllRoomMessages: false,
+          acceptsDirectMessages: true,
+        },
+      ],
+    });
+
+    expect(snapshot.rooms[roomId]?.teamName).toBe("Runtime Room Team");
+    expect(snapshot.templates["template-product-pod"]?.name).toBe("Product Pod");
+    expect(snapshot.members[research.id]?.archivedAt).toBeDefined();
+    expect(snapshot.rooms[roomId]?.memberIds.some((memberId) => snapshot.members[memberId]?.handle === "qa")).toBe(true);
+    expect(snapshot.rooms[roomId]?.watcherIds.some((watcherId) => snapshot.watchers[watcherId]?.memberId === builder.id)).toBe(true);
   });
 });

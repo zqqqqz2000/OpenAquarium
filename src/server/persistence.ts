@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ChatMessage, ProviderBinding, TeamMember, TeamMemberBlueprint, TeamTemplate, WorkspaceSnapshot } from "../domain/model";
 import { getErrorCode, type RuntimeError } from "./error-utils";
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND, createCodexAcpProvider, mergeCodexAcpEnv } from "../lib/acp";
+import { resolveRoomTeamSummary } from "../lib/room-team";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
 import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
@@ -122,14 +123,34 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
     }),
   );
 
+  const normalizedTemplates = Object.fromEntries(
+    Object.entries(snapshot.templates).map(([templateId, template]) => [templateId, normalizeTemplate(template)]),
+  );
+  const normalizedMembers = Object.fromEntries(
+    Object.entries(snapshot.members).map(([memberId, member]) => [memberId, normalizeMember(member)]),
+  );
+  const normalizedSnapshot = {
+    ...snapshot,
+    templates: normalizedTemplates,
+    members: normalizedMembers,
+  } satisfies WorkspaceSnapshot;
+  const normalizedRooms = Object.fromEntries(
+    Object.entries(snapshot.rooms).map(([roomId, room]) => [
+      roomId,
+      {
+        ...room,
+        teamName: resolveRoomTeamSummary(normalizedSnapshot, room).name,
+        teamDescription: resolveRoomTeamSummary(normalizedSnapshot, room).description,
+        teamAccentTone: resolveRoomTeamSummary(normalizedSnapshot, room).accentTone,
+      },
+    ]),
+  );
+
   return {
     ...snapshot,
-    templates: Object.fromEntries(
-      Object.entries(snapshot.templates).map(([templateId, template]) => [templateId, normalizeTemplate(template)]),
-    ),
-    members: Object.fromEntries(
-      Object.entries(snapshot.members).map(([memberId, member]) => [memberId, normalizeMember(member)]),
-    ),
+    rooms: normalizedRooms,
+    templates: normalizedTemplates,
+    members: normalizedMembers,
     messages: Object.fromEntries(
       Object.entries(snapshot.messages).map(([messageId, message]) => [messageId, normalizeMessage(message)]),
     ),

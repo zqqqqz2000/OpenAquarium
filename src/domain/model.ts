@@ -89,6 +89,9 @@ export interface Room {
   name: string;
   topic: string;
   templateId: TemplateId;
+  teamName?: string;
+  teamDescription?: string;
+  teamAccentTone?: AccentTone;
   memberIds: MemberId[];
   watcherIds: WatcherId[];
   entryMemberId: MemberId;
@@ -113,6 +116,7 @@ export interface TeamMember {
   status: MemberStatus;
   providerSessionId?: string;
   activeTaskId?: TaskId;
+  archivedAt?: string;
 }
 
 export interface WatchSubscription {
@@ -252,6 +256,35 @@ export interface UpdateTemplateInput {
   description: string;
   accentTone: AccentTone;
   members: TeamMemberBlueprint[];
+}
+
+export interface RoomWatcherConfig {
+  enabled: boolean;
+  intervalMinutes: number;
+}
+
+export interface RoomTeamMemberInput {
+  memberId: string;
+  name: string;
+  handle: string;
+  summary: string;
+  prompt: string;
+  accentTone: AccentTone;
+  modelProfileId?: ProviderModelProfileId;
+  skills: SkillDefinition[];
+  provider: ProviderBinding;
+  isEntryMember?: boolean;
+  observeAllRoomMessages?: boolean;
+  acceptsDirectMessages?: boolean;
+  watch?: RoomWatcherConfig;
+}
+
+export interface UpdateRoomTeamInput {
+  roomId: RoomId;
+  teamName: string;
+  teamDescription: string;
+  teamAccentTone: AccentTone;
+  members: RoomTeamMemberInput[];
 }
 
 export interface UpdateGlobalConfigInput {

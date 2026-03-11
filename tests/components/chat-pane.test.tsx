@@ -1,11 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { ChatPane } from "@/components/chat/chat-pane";
+import { ActiveRoomStatusBadge, ChatPane } from "@/components/chat/chat-pane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createRuntimeContext } from "@/domain/identity";
 import { postUserMessage } from "@/domain/workspace";
+import { resolveRoomTeamSummary } from "@/lib/room-team";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
 describe("ChatPane", () => {
@@ -13,7 +14,7 @@ describe("ChatPane", () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const template = snapshot.templates[room.templateId];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
     const onToggleLeftSidebar = vi.fn();
     const onToggleRightSidebar = vi.fn();
@@ -25,7 +26,7 @@ describe("ChatPane", () => {
           rightSidebarCollapsed={false}
           snapshot={snapshot}
           room={room}
-          template={template}
+          roomTeam={roomTeam}
           members={members}
           selectedMemberId={room.entryMemberId}
           connected
@@ -65,7 +66,7 @@ describe("ChatPane", () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const template = snapshot.templates[room.templateId];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
 
     render(
@@ -75,7 +76,7 @@ describe("ChatPane", () => {
           rightSidebarCollapsed={false}
           snapshot={snapshot}
           room={room}
-          template={template}
+          roomTeam={roomTeam}
           members={members}
           selectedMemberId={room.entryMemberId}
           connected
@@ -101,7 +102,7 @@ describe("ChatPane", () => {
   it("emphasizes member roles over display names in the sidebar", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const template = snapshot.templates[room.templateId];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
 
     render(
@@ -111,7 +112,7 @@ describe("ChatPane", () => {
           rightSidebarCollapsed={false}
           snapshot={snapshot}
           room={room}
-          template={template}
+          roomTeam={roomTeam}
           members={members}
           selectedMemberId={room.entryMemberId}
           connected
@@ -139,7 +140,7 @@ describe("ChatPane", () => {
       createRuntimeContext(600, "2026-03-09T09:30:00.000Z"),
     );
     const nextRoom = snapshot.rooms[room.id];
-    const template = snapshot.templates[nextRoom.templateId];
+    const roomTeam = resolveRoomTeamSummary(snapshot, nextRoom);
     const members = nextRoom.memberIds.map((memberId) => snapshot.members[memberId]);
 
     render(
@@ -149,7 +150,7 @@ describe("ChatPane", () => {
           rightSidebarCollapsed={false}
           snapshot={snapshot}
           room={nextRoom}
-          template={template}
+          roomTeam={roomTeam}
           members={members}
           selectedMemberId={nextRoom.entryMemberId}
           connected
@@ -166,6 +167,73 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
   });
 
+  it("keeps the room header badge running when only a non-lead member is running", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
+    if (!builder) {
+      throw new Error("Expected builder member in seeded room");
+    }
+    snapshot.members[builder.id] = {
+      ...builder,
+      status: "running",
+    };
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Show running members" });
+
+    expect(within(trigger).getByText("Running")).toBeInTheDocument();
+
+    await user.hover(trigger);
+
+    expect(await screen.findByText("Running members")).toBeInTheDocument();
+  });
+
+  it("shows running members in a hover tooltip for the room status badge", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ActiveRoomStatusBadge
+        runningMembers={[
+          {
+            memberId: "member_1",
+            memberName: "Forge Crab",
+            memberHandle: "builder",
+            summary: "正在补 room 顶部状态 tooltip 的 hover 列表。",
+          },
+        ]}
+      />,
+    );
+
+    await user.hover(screen.getByRole("button", { name: "Show running members" }));
+
+    expect(await screen.findByText("Running members")).toBeInTheDocument();
+    expect(screen.getByText("@builder")).toBeInTheDocument();
+    expect(screen.getByText("Forge Crab")).toBeInTheDocument();
+    expect(screen.getByText("正在补 room 顶部状态 tooltip 的 hover 列表。")).toBeInTheDocument();
+  });
+
   it("shows a richer empty state before any room is selected", () => {
     const snapshot = createSeedWorkspace();
 
@@ -179,7 +247,7 @@ describe("ChatPane", () => {
             selection: {},
           }}
           room={undefined}
-          template={undefined}
+          roomTeam={undefined}
           members={[]}
           selectedMemberId={undefined}
           connected
@@ -207,7 +275,7 @@ describe("ChatPane", () => {
 
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const template = snapshot.templates[room.templateId];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
 
     render(
@@ -217,7 +285,7 @@ describe("ChatPane", () => {
           rightSidebarCollapsed={false}
           snapshot={snapshot}
           room={room}
-          template={template}
+          roomTeam={roomTeam}
           members={members}
           selectedMemberId={room.entryMemberId}
           connected

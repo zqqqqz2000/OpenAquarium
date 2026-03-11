@@ -245,6 +245,7 @@ describe("TemplateStudioDialog", () => {
       description: "Product Pod v2 updated.",
     });
     expect(screen.getByTestId("template-summary-card")).toHaveClass("border-b");
+    expect(screen.getByTestId("template-list-scroll").parentElement).toHaveClass("flex", "min-h-0", "flex-1", "flex-col");
     expect(screen.getByTestId("template-members-scroll").querySelector("[data-slot='scroll-area-viewport']")).toBeTruthy();
   });
 

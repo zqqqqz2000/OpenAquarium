@@ -15,6 +15,7 @@ import type {
   ProviderBinding,
   RoomId,
   Room,
+  RoomTeamMemberInput,
   SkillDefinition,
   TaskId,
   TaskTraceEntry,
@@ -24,6 +25,7 @@ import type {
   TeamTemplate,
   UpsertWatcherInput,
   UpdateMemberConfigInput,
+  UpdateRoomTeamInput,
   UpdateTemplateInput,
   WatchSubscription,
   WorkspaceSnapshot,
@@ -353,6 +355,14 @@ function instantiateWatcher(
   };
 }
 
+function buildRoomTeamFields(template: TeamTemplate): Pick<Room, "teamName" | "teamDescription" | "teamAccentTone"> {
+  return {
+    teamName: template.name,
+    teamDescription: template.description,
+    teamAccentTone: template.accentTone,
+  };
+}
+
 export function createWorkspaceSnapshot(templates: TeamTemplate[], currentUserName = "You"): WorkspaceSnapshot {
   return {
     projects: {},
@@ -433,6 +443,7 @@ export function createRoomInProject(
     name: "New room",
     topic: "",
     templateId: template.id,
+    ...buildRoomTeamFields(template),
     memberIds: roomMembers.map((member) => member.id),
     watcherIds: watcherIds.map((watcher) => watcher.id),
     entryMemberId: memberIdByBlueprint[entryBlueprint.id],
@@ -495,12 +506,16 @@ function removeRoomArtifacts(snapshot: WorkspaceSnapshot, roomId: RoomId): void 
       delete snapshot.tasks[task.id];
     });
 
-  room.watcherIds.forEach((watcherId) => {
-    delete snapshot.watchers[watcherId];
-  });
-  room.memberIds.forEach((memberId) => {
-    delete snapshot.members[memberId];
-  });
+  Object.values(snapshot.watchers)
+    .filter((watcher) => watcher.roomId === roomId)
+    .forEach((watcher) => {
+      delete snapshot.watchers[watcher.id];
+    });
+  Object.values(snapshot.members)
+    .filter((member) => member.roomId === roomId)
+    .forEach((member) => {
+      delete snapshot.members[member.id];
+    });
   delete snapshot.rooms[roomId];
 }
 
@@ -547,10 +562,6 @@ export function deleteTemplate(current: WorkspaceSnapshot, templateId: TemplateI
 
   if (snapshot.templateOrder.length <= 1) {
     throw new Error("At least one team template must remain.");
-  }
-
-  if (Object.values(snapshot.rooms).some((room) => room.templateId === templateId)) {
-    throw new Error("Cannot delete a team template that is still used by an existing room.");
   }
 
   delete snapshot.templates[templateId];
@@ -734,11 +745,7 @@ export function completeMemberTask(
 
 export function toggleMemberMonitor(current: WorkspaceSnapshot, memberId: MemberId): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
-  const member = snapshot.members[memberId];
-
-  if (!member) {
-    throw new Error(`Unknown member "${memberId}"`);
-  }
+  const { member } = resolveActiveRoomMember(snapshot, memberId);
 
   snapshot.members[memberId] = {
     ...member,
@@ -750,11 +757,7 @@ export function toggleMemberMonitor(current: WorkspaceSnapshot, memberId: Member
 
 export function updateMemberPrompt(current: WorkspaceSnapshot, memberId: MemberId, prompt: string): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
-  const member = snapshot.members[memberId];
-
-  if (!member) {
-    throw new Error(`Unknown member "${memberId}"`);
-  }
+  const { member } = resolveActiveRoomMember(snapshot, memberId);
 
   snapshot.members[memberId] = {
     ...member,
@@ -800,6 +803,27 @@ function normalizeProviderBinding(provider: ProviderBinding): ProviderBinding {
 
 function validateAccentTone(accentTone: AccentTone): AccentTone {
   return accentTone;
+}
+
+function resolveActiveRoomMember(
+  snapshot: WorkspaceSnapshot,
+  memberId: MemberId,
+): { member: TeamMember; room: Room } {
+  const member = snapshot.members[memberId];
+
+  if (!member) {
+    throw new Error(`Unknown member "${memberId}"`);
+  }
+
+  const room = snapshot.rooms[member.roomId];
+  if (!room || member.archivedAt || !room.memberIds.includes(memberId)) {
+    throw new Error(`Member "${memberId}" is no longer active in its room`);
+  }
+
+  return {
+    member,
+    room,
+  };
 }
 
 function validateTemplateMembers(members: TeamMemberBlueprint[]): TeamMemberBlueprint[] {
@@ -859,13 +883,73 @@ function validateTemplateMembers(members: TeamMemberBlueprint[]): TeamMemberBlue
   return normalizedMembers;
 }
 
+interface NormalizedRoomTeamMemberInput extends Omit<RoomTeamMemberInput, "watch"> {
+  watch?: {
+    enabled: boolean;
+    intervalMinutes: number;
+  };
+}
+
+function validateRoomTeamMembers(members: RoomTeamMemberInput[]): NormalizedRoomTeamMemberInput[] {
+  if (members.length === 0) {
+    throw new Error("A room team requires at least one member");
+  }
+
+  const normalizedMembers = members.map((member) => {
+    if (!member.memberId.trim() || !member.name.trim() || !member.handle.trim()) {
+      throw new Error("Each room member requires an id, name, and handle");
+    }
+
+    const watch = member.watch
+      ? {
+          enabled: member.watch.enabled,
+          intervalMinutes: Math.round(member.watch.intervalMinutes),
+        }
+      : undefined;
+
+    if (watch && (!Number.isFinite(watch.intervalMinutes) || watch.intervalMinutes <= 0)) {
+      throw new Error(`Watcher interval for @${member.handle} must be a positive number`);
+    }
+
+    return {
+      ...member,
+      memberId: member.memberId.trim(),
+      name: member.name.trim(),
+      handle: member.handle.trim().replace(/^@/u, ""),
+      summary: member.summary.trim(),
+      prompt: member.prompt.trim(),
+      accentTone: validateAccentTone(member.accentTone),
+      modelProfileId: member.modelProfileId?.trim() || undefined,
+      skills: validateSkills(member.skills),
+      provider: normalizeProviderBinding(member.provider),
+      watch,
+    };
+  });
+
+  const entryMembers = normalizedMembers.filter((member) => member.isEntryMember === true);
+  if (entryMembers.length !== 1) {
+    throw new Error("A room team must define exactly one entry member");
+  }
+
+  const seenIds = new Set<string>();
+  const seenHandles = new Set<string>();
+  normalizedMembers.forEach((member) => {
+    if (seenIds.has(member.memberId)) {
+      throw new Error(`Duplicate room member id "${member.memberId}"`);
+    }
+    if (seenHandles.has(member.handle)) {
+      throw new Error(`Duplicate room member handle "${member.handle}"`);
+    }
+    seenIds.add(member.memberId);
+    seenHandles.add(member.handle);
+  });
+
+  return normalizedMembers;
+}
+
 export function updateMemberConfig(current: WorkspaceSnapshot, input: UpdateMemberConfigInput): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
-  const member = snapshot.members[input.memberId];
-
-  if (!member) {
-    throw new Error(`Unknown member "${input.memberId}"`);
-  }
+  const { member } = resolveActiveRoomMember(snapshot, input.memberId);
 
   snapshot.members[input.memberId] = {
     ...member,
@@ -903,15 +987,153 @@ export function updateTemplate(current: WorkspaceSnapshot, input: UpdateTemplate
   return snapshot;
 }
 
-export function setEntryMember(current: WorkspaceSnapshot, memberId: MemberId): WorkspaceSnapshot {
+export function updateRoomTeam(
+  current: WorkspaceSnapshot,
+  input: UpdateRoomTeamInput,
+  context: MutationContext,
+): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
-  const member = snapshot.members[memberId];
+  const room = snapshot.rooms[input.roomId];
 
-  if (!member) {
-    throw new Error(`Unknown member "${memberId}"`);
+  if (!room) {
+    throw new Error(`Unknown room "${input.roomId}"`);
   }
 
-  const room = snapshot.rooms[member.roomId];
+  if (!input.teamName.trim()) {
+    throw new Error("Room team name is required");
+  }
+
+  const normalizedMembers = validateRoomTeamMembers(input.members);
+  const activeMemberIds = new Set(room.memberIds);
+  const nextMemberIds: MemberId[] = [];
+  const nextWatcherIds: string[] = [];
+  const now = context.now();
+
+  normalizedMembers.forEach((memberInput) => {
+    const existingMember = activeMemberIds.has(memberInput.memberId) ? snapshot.members[memberInput.memberId] : undefined;
+    const nextMemberId = existingMember?.id ?? context.createId("member");
+
+    snapshot.members[nextMemberId] = existingMember
+      ? {
+          ...existingMember,
+          name: memberInput.name,
+          handle: memberInput.handle,
+          summary: memberInput.summary,
+          prompt: memberInput.prompt,
+          accentTone: memberInput.accentTone,
+          modelProfileId: memberInput.modelProfileId,
+          skills: memberInput.skills,
+          provider: memberInput.provider,
+          observeAllRoomMessages: memberInput.observeAllRoomMessages ?? false,
+          acceptsDirectMessages: memberInput.acceptsDirectMessages ?? true,
+          isEntryMember: memberInput.isEntryMember === true,
+          archivedAt: undefined,
+        }
+      : {
+          id: nextMemberId,
+          roomId: room.id,
+          blueprintId: memberInput.memberId,
+          name: memberInput.name,
+          handle: memberInput.handle,
+          summary: memberInput.summary,
+          prompt: memberInput.prompt,
+          accentTone: memberInput.accentTone,
+          modelProfileId: memberInput.modelProfileId,
+          skills: memberInput.skills,
+          provider: memberInput.provider,
+          observeAllRoomMessages: memberInput.observeAllRoomMessages ?? false,
+          acceptsDirectMessages: memberInput.acceptsDirectMessages ?? true,
+          isEntryMember: memberInput.isEntryMember === true,
+          status: "idle",
+          providerSessionId: undefined,
+          activeTaskId: undefined,
+          archivedAt: undefined,
+        };
+
+    nextMemberIds.push(nextMemberId);
+
+    const existingWatcherId = room.watcherIds.find((watcherId) => snapshot.watchers[watcherId]?.memberId === existingMember?.id);
+    if (!memberInput.watch) {
+      if (existingWatcherId) {
+        delete snapshot.watchers[existingWatcherId];
+      }
+      return;
+    }
+
+    const watcherId = existingWatcherId ?? context.createId("watcher");
+    snapshot.watchers[watcherId] = {
+      id: watcherId,
+      roomId: room.id,
+      memberId: nextMemberId,
+      enabled: memberInput.watch.enabled,
+      intervalMinutes: memberInput.watch.intervalMinutes,
+      lastConsumedMessageId: existingWatcherId ? snapshot.watchers[existingWatcherId]?.lastConsumedMessageId : undefined,
+      lastConsumedStateAt: existingWatcherId ? snapshot.watchers[existingWatcherId]?.lastConsumedStateAt : undefined,
+    };
+    nextWatcherIds.push(watcherId);
+  });
+
+  room.memberIds
+    .filter((memberId) => !nextMemberIds.includes(memberId))
+    .forEach((memberId) => {
+      const member = snapshot.members[memberId];
+      if (!member) {
+        return;
+      }
+
+      const activeTask = member.activeTaskId ? snapshot.tasks[member.activeTaskId] : undefined;
+      if (activeTask?.status === "running") {
+        throw new Error(`Cannot remove @${member.handle} while the member is still running a task.`);
+      }
+
+      snapshot.members[memberId] = {
+        ...member,
+        isEntryMember: false,
+        status: "idle",
+        activeTaskId: undefined,
+        providerSessionId: undefined,
+        archivedAt: now,
+      };
+    });
+
+  room.watcherIds
+    .filter((watcherId) => !nextWatcherIds.includes(watcherId))
+    .forEach((watcherId) => {
+      delete snapshot.watchers[watcherId];
+    });
+
+  const entryMemberInput = normalizedMembers.find((member) => member.isEntryMember === true);
+  const entryMemberId = entryMemberInput
+    ? nextMemberIds[normalizedMembers.findIndex((member) => member.memberId === entryMemberInput.memberId)]
+    : undefined;
+
+  if (!entryMemberId) {
+    throw new Error("A room team must define exactly one entry member");
+  }
+
+  snapshot.rooms[room.id] = {
+    ...room,
+    teamName: input.teamName.trim(),
+    teamDescription: input.teamDescription.trim(),
+    teamAccentTone: validateAccentTone(input.teamAccentTone),
+    memberIds: nextMemberIds,
+    watcherIds: nextWatcherIds,
+    entryMemberId,
+  };
+
+  if (snapshot.selection.roomId === room.id && snapshot.selection.memberId && !nextMemberIds.includes(snapshot.selection.memberId)) {
+    snapshot.selection = {
+      ...snapshot.selection,
+      memberId: entryMemberId,
+    };
+  }
+
+  return snapshot;
+}
+
+export function setEntryMember(current: WorkspaceSnapshot, memberId: MemberId): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const { member, room } = resolveActiveRoomMember(snapshot, memberId);
   room.memberIds.forEach((roomMemberId) => {
     snapshot.members[roomMemberId] = {
       ...snapshot.members[roomMemberId],
@@ -932,17 +1154,12 @@ export function upsertMemberWatcher(
   context: MutationContext,
 ): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
-  const member = snapshot.members[input.memberId];
-
-  if (!member) {
-    throw new Error(`Unknown member "${input.memberId}"`);
-  }
+  const { member, room } = resolveActiveRoomMember(snapshot, input.memberId);
 
   if (!Number.isFinite(input.intervalMinutes) || input.intervalMinutes <= 0) {
     throw new Error("Watcher interval must be a positive number");
   }
 
-  const room = snapshot.rooms[member.roomId];
   const existingWatcherId = room.watcherIds.find((watcherId) => snapshot.watchers[watcherId]?.memberId === member.id);
 
   if (existingWatcherId) {

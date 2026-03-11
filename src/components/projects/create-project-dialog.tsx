@@ -1,4 +1,4 @@
-import { startTransition, useState } from "react";
+import { startTransition, useRef, useState } from "react";
 
 import { FolderSearch, Plus } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -41,6 +42,8 @@ export function CreateProjectDialog(props: {
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [actionError, setActionError] = useState<string | undefined>();
   const [pickingPath, setPickingPath] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const creatingProjectRef = useRef(false);
   const selectedTemplate = templates.find((template) => template.id === templateId);
   const selectedTemplateMemberCount = selectedTemplate?.members.length ?? 0;
   const handlePickProjectPath = (): void => {
@@ -60,6 +63,41 @@ export function CreateProjectDialog(props: {
     })();
   };
 
+  const handleCreateProject = (): void => {
+    if (creatingProjectRef.current || disabled || projectName.trim().length === 0 || templateId.length === 0) {
+      return;
+    }
+
+    creatingProjectRef.current = true;
+    setCreatingProject(true);
+    void (async () => {
+      try {
+        setActionError(undefined);
+        const next = await createProject({
+          projectName,
+          templateId,
+          path: projectPath,
+        });
+        startTransition(() => {
+          void navigate({
+            to: "/projects/$projectId/rooms/$roomId",
+            params: {
+              projectId: next.projectId,
+              roomId: next.roomId,
+            },
+          });
+        });
+        setOpen(false);
+        setProjectPath("");
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : String(error));
+      } finally {
+        creatingProjectRef.current = false;
+        setCreatingProject(false);
+      }
+    })();
+  };
+
   return (
     <Dialog
       open={open}
@@ -72,11 +110,11 @@ export function CreateProjectDialog(props: {
     >
       <DialogTrigger asChild>
         {triggerMode === "icon" ? (
-          <Button className={triggerClassName} disabled={disabled} variant="ghost" size="icon-sm" aria-label="Create project">
+          <Button type="button" className={triggerClassName} disabled={disabled} variant="ghost" size="icon-sm" aria-label="Create project">
             <Plus size={18} />
           </Button>
         ) : (
-          <Button className={triggerClassName} disabled={disabled}>
+          <Button type="button" className={triggerClassName} disabled={disabled}>
             <Plus size={18} />
             New project
           </Button>
@@ -85,6 +123,9 @@ export function CreateProjectDialog(props: {
       <DialogContent className="w-[min(92vw,720px)] max-w-[720px] sm:max-w-[720px]">
         <DialogHeader>
           <DialogTitle className="text-2xl font-semibold tracking-tight">Create project</DialogTitle>
+          <DialogDescription className="sr-only">
+            Create a new project, choose its initial team template, and optionally set the default ACP working directory.
+          </DialogDescription>
         </DialogHeader>
         <Card className="border border-transparent shadow-none">
           <CardContent className="flex flex-col gap-4">
@@ -96,12 +137,12 @@ export function CreateProjectDialog(props: {
               <span className="text-sm font-medium">Project path</span>
               <div className="flex flex-wrap items-center gap-2">
                 <Input readOnly value={projectPath} placeholder="未选择目录" className="flex-1" />
-                <Button type="button" variant="outline" onClick={handlePickProjectPath} disabled={disabled || pickingPath}>
+                <Button type="button" variant="outline" onClick={handlePickProjectPath} disabled={disabled || pickingPath || creatingProject}>
                   <FolderSearch size={16} />
                   {pickingPath ? "选择中…" : "选择文件夹"}
                 </Button>
                 {projectPath.trim().length > 0 ? (
-                  <Button type="button" variant="ghost" onClick={() => setProjectPath("")} disabled={disabled || pickingPath}>
+                  <Button type="button" variant="ghost" onClick={() => setProjectPath("")} disabled={disabled || pickingPath || creatingProject}>
                     清空
                   </Button>
                 ) : null}
@@ -154,34 +195,11 @@ export function CreateProjectDialog(props: {
             </div>
             <div className="flex justify-end">
               <Button
-                onClick={() => {
-                  void (async () => {
-                    try {
-                      setActionError(undefined);
-                      const next = await createProject({
-                        projectName,
-                        templateId,
-                        path: projectPath,
-                      });
-                      startTransition(() => {
-                        void navigate({
-                          to: "/projects/$projectId/rooms/$roomId",
-                          params: {
-                            projectId: next.projectId,
-                            roomId: next.roomId,
-                          },
-                        });
-                      });
-                      setOpen(false);
-                      setProjectPath("");
-                    } catch (error) {
-                      setActionError(error instanceof Error ? error.message : String(error));
-                    }
-                  })();
-                }}
-                disabled={disabled || projectName.trim().length === 0 || templateId.length === 0}
+                type="button"
+                onClick={handleCreateProject}
+                disabled={disabled || creatingProject || projectName.trim().length === 0 || templateId.length === 0}
               >
-                Create project
+                {creatingProject ? "Creating project…" : "Create project"}
               </Button>
             </div>
           </CardContent>

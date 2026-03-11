@@ -12,8 +12,10 @@ import { getMemberActivitySummary, getWatcherForMember } from "@/components/memb
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
-import { useRoomChat } from "@/lib/chat/use-room-chat";
+import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
+import type { RoomTeamSummary } from "@/lib/room-team";
 import { getUIMessageText, type WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
 import type { MessageHandlerSummary } from "@/lib/message-feed";
 import { badgeToneProps, memberStatusBadgeProps } from "@/lib/ui-tone";
@@ -44,6 +46,80 @@ function PresenceBadge(props: { active: boolean; activeLabel: string; idleLabel:
       />
       {active ? activeLabel : idleLabel}
     </Badge>
+  );
+}
+
+interface RunningRoomMemberPreview {
+  memberId: string;
+  memberName: string;
+  memberHandle: string;
+  summary: string;
+}
+
+function buildRunningRoomMemberPreviews(args: {
+  members: TeamMember[];
+  snapshot: WorkspaceSnapshot;
+  activeRoutes: RoomChatStatus[];
+}): RunningRoomMemberPreview[] {
+  const { members, snapshot, activeRoutes } = args;
+  const routeByMemberId = Object.fromEntries(activeRoutes.map((route) => [route.memberId, route] as const));
+
+  return members
+    .filter((member) => member.status === "running")
+    .map((member) => {
+      const activity = getMemberActivitySummary(snapshot, member);
+      const routeSummary = routeByMemberId[member.id]?.summary?.trim();
+      const activeTaskTitle = activity.activeTask?.title?.trim();
+      const taskStatusLine = member.activeTaskId ? activity.statusLine.trim() : undefined;
+
+      return {
+        memberId: member.id,
+        memberName: member.name,
+        memberHandle: member.handle,
+        summary: summarizePrompt(routeSummary || activeTaskTitle || taskStatusLine || "正在处理当前消息。", 96),
+      } satisfies RunningRoomMemberPreview;
+    });
+}
+
+export function ActiveRoomStatusBadge(props: { runningMembers: RunningRoomMemberPreview[] }) {
+  const { runningMembers } = props;
+
+  if (runningMembers.length === 0) {
+    return <PresenceBadge active={false} activeLabel="Running" idleLabel="Ready" />;
+  }
+
+  return (
+    <HoverCard openDelay={0} closeDelay={0}>
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          aria-label="Show running members"
+          className="cursor-help rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <PresenceBadge active activeLabel="Running" idleLabel="Ready" />
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent side="bottom" align="start" sideOffset={10} className="w-[min(26rem,calc(100vw-2.5rem))] p-0">
+        <div className="flex flex-col gap-2 px-3 py-3">
+          <p className="m-0 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Running members</p>
+          <div className="flex flex-col gap-2">
+            {runningMembers.map((member) => (
+              <div key={member.memberId} className="rounded-xl border border-border/70 bg-muted/35 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span
+                    aria-hidden
+                    className="size-2 rounded-full animate-oa-breathe bg-[color:var(--tone-blueprint-foreground)] shadow-[0_0_0_0.24rem_rgba(113,113,255,0.12)]"
+                  />
+                  <p className="m-0 text-sm font-semibold tracking-tight">@{member.memberHandle}</p>
+                  <span className="text-xs text-muted-foreground">{member.memberName}</span>
+                </div>
+                <p className="m-0 mt-1 text-xs leading-5 text-muted-foreground">{member.summary}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 
@@ -84,13 +160,13 @@ export function ChatPane(props: {
   rightSidebarCollapsed: boolean;
   snapshot: WorkspaceSnapshot;
   room?: Room;
-  template?: TeamTemplate;
+  roomTeam?: RoomTeamSummary;
   members: TeamMember[];
   selectedMemberId?: string;
   connected: boolean;
   error?: string;
   onOpenMember: (memberId: string) => void;
-  onOpenTemplate?: () => void;
+  onOpenRoomTeam?: () => void;
   onToggleLeftSidebar: () => void;
   onToggleRightSidebar: () => void;
 }) {
@@ -99,13 +175,13 @@ export function ChatPane(props: {
     rightSidebarCollapsed,
     snapshot,
     room,
-    template,
+    roomTeam,
     members,
     selectedMemberId,
     connected,
     error,
     onOpenMember,
-    onOpenTemplate,
+    onOpenRoomTeam,
     onToggleLeftSidebar,
     onToggleRightSidebar,
   } = props;
@@ -124,6 +200,11 @@ export function ChatPane(props: {
   const layoutKey = `${roomId ?? "no-room"}:${leftSidebarCollapsed ? "left-closed" : "left-open"}:${rightSidebarCollapsed ? "right-closed" : "right-open"}`;
   const composerTargetMemberId =
     composerDirectMemberId && members.some((member) => member.id === composerDirectMemberId) ? composerDirectMemberId : undefined;
+  const runningMembers = buildRunningRoomMemberPreviews({
+    members,
+    snapshot,
+    activeRoutes: roomChat.activeRoutes,
+  });
   const updateScrollState = (): void => {
     const container = transcriptRef.current;
     if (!container) {
@@ -298,10 +379,11 @@ export function ChatPane(props: {
             leftSidebarCollapsed={leftSidebarCollapsed}
             rightSidebarCollapsed={rightSidebarCollapsed}
             room={room}
-            template={template}
+            roomTeam={roomTeam}
             members={members}
+            runningMembers={runningMembers}
             activeStreamSummary={roomChat.activeStreamSummary}
-            onOpenTemplate={onOpenTemplate}
+            onOpenRoomTeam={onOpenRoomTeam}
             onToggleLeftSidebar={onToggleLeftSidebar}
             onToggleRightSidebar={onToggleRightSidebar}
           />
@@ -397,10 +479,11 @@ function RoomTopBar(props: {
   leftSidebarCollapsed: boolean;
   rightSidebarCollapsed: boolean;
   room: Room;
-  template?: TeamTemplate;
+  roomTeam?: RoomTeamSummary;
   members: TeamMember[];
+  runningMembers: RunningRoomMemberPreview[];
   activeStreamSummary?: string;
-  onOpenTemplate?: () => void;
+  onOpenRoomTeam?: () => void;
   onToggleLeftSidebar: () => void;
   onToggleRightSidebar: () => void;
 }) {
@@ -408,15 +491,16 @@ function RoomTopBar(props: {
     leftSidebarCollapsed,
     rightSidebarCollapsed,
     room,
-    template,
+    roomTeam,
     members,
+    runningMembers,
     activeStreamSummary,
-    onOpenTemplate,
+    onOpenRoomTeam,
     onToggleLeftSidebar,
     onToggleRightSidebar,
   } =
     props;
-  const templateBadge = badgeToneProps(template?.accentTone ?? "paper");
+  const teamBadge = badgeToneProps(roomTeam?.accentTone ?? "paper");
   const watcherBadge = badgeToneProps("correction");
   const neutralBadge = badgeToneProps("paper");
 
@@ -427,15 +511,15 @@ function RoomTopBar(props: {
         <div className="min-w-0 flex-1 space-y-2 pt-0.5">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <p className="m-0 text-3xl font-semibold tracking-tight">{room.name}</p>
-            {onOpenTemplate ? (
-              <button type="button" className="rounded-none border-0 bg-transparent p-0 text-left" onClick={onOpenTemplate}>
-                <Badge variant={templateBadge.variant} className={cn(templateBadge.className, "cursor-pointer")}>
-                  {template?.name ?? "Template"}
+            {onOpenRoomTeam ? (
+              <button type="button" className="rounded-none border-0 bg-transparent p-0 text-left" onClick={onOpenRoomTeam}>
+                <Badge variant={teamBadge.variant} className={cn(teamBadge.className, "cursor-pointer")}>
+                  {roomTeam?.name ?? "Room team"}
                 </Badge>
               </button>
             ) : (
-              <Badge variant={templateBadge.variant} className={templateBadge.className}>
-                {template?.name ?? "Template"}
+              <Badge variant={teamBadge.variant} className={teamBadge.className}>
+                {roomTeam?.name ?? "Room team"}
               </Badge>
             )}
             <Badge variant={neutralBadge.variant} className={neutralBadge.className}>
@@ -444,7 +528,7 @@ function RoomTopBar(props: {
             <Badge variant={watcherBadge.variant} className={watcherBadge.className}>
               {room.watcherIds.length} watchers
             </Badge>
-            <PresenceBadge active={Boolean(activeStreamSummary)} activeLabel="Running" idleLabel="Ready" />
+            <ActiveRoomStatusBadge runningMembers={runningMembers} />
           </div>
           {room.topic.trim().length > 0 ? <p className="m-0 max-w-3xl text-sm text-muted-foreground">{room.topic}</p> : null}
           {activeStreamSummary ? <p className="m-0 text-sm text-muted-foreground">{activeStreamSummary}</p> : null}

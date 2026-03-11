@@ -9,7 +9,9 @@ import { buildProjectActivitySummaries } from "@/lib/workspace-activity";
 import { Sidebar } from "@/components/layout/sidebar";
 import { useShellPanels } from "@/components/layout/use-shell-panels";
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
+import { RoomTeamDialog } from "@/components/rooms/room-team-dialog";
 import { TemplateStudioDialog } from "@/components/templates/template-studio-dialog";
+import { resolveRoomTeamSummary } from "@/lib/room-team";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
 
 function currentRouteStillExists(args: {
@@ -38,7 +40,7 @@ function currentRouteStillExists(args: {
   }
 
   const member = snapshot.members[memberId];
-  return Boolean(member && member.roomId === roomId);
+  return Boolean(member && member.roomId === roomId && room.memberIds.includes(memberId));
 }
 
 function resolveFallbackRoomRoute(snapshot: WorkspaceSnapshot): { projectId: string; roomId: string } | undefined {
@@ -95,6 +97,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const toggleMemberMonitoring = useWorkspaceStore((state) => state.toggleMemberMonitoring);
   const runWatcher = useWorkspaceStore((state) => state.runWatcher);
   const updateMemberConfig = useWorkspaceStore((state) => state.updateMemberConfig);
+  const updateRoomTeam = useWorkspaceStore((state) => state.updateRoomTeam);
   const updateTemplate = useWorkspaceStore((state) => state.updateTemplate);
   const updateGlobalConfig = useWorkspaceStore((state) => state.updateGlobalConfig);
   const replaceRemoteState = useWorkspaceStore((state) => state.replaceRemoteState);
@@ -102,6 +105,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const upsertWatcher = useWorkspaceStore((state) => state.upsertWatcher);
   const sendUserMessage = useWorkspaceStore((state) => state.sendUserMessage);
   const [templateStudioOpen, setTemplateStudioOpen] = useState(false);
+  const [roomTeamOpen, setRoomTeamOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | undefined>(undefined);
   const [deletingProjectId, setDeletingProjectId] = useState<string | undefined>(undefined);
   const [deletingRoomId, setDeletingRoomId] = useState<string | undefined>(undefined);
@@ -132,6 +136,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const selectedRoomId = roomId ?? snapshot.selection.roomId ?? roomIds[0];
   const room = selectedRoomId ? snapshot.rooms[selectedRoomId] : undefined;
   const template = room ? snapshot.templates[room.templateId] : undefined;
+  const roomTeam = room ? resolveRoomTeamSummary(snapshot, room) : undefined;
   const members = room ? room.memberIds.map((memberId) => snapshot.members[memberId]) : [];
   const routedMember = memberId ? members.find((candidate) => candidate.id === memberId) : undefined;
   const selectedMemberId = routedMember?.id ?? snapshot.selection.memberId;
@@ -186,6 +191,18 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     setTemplateStudioOpen(false);
   };
 
+  const openRoomTeam = (): void => {
+    if (!room) {
+      return;
+    }
+
+    setRoomTeamOpen(true);
+  };
+
+  const closeRoomTeam = (): void => {
+    setRoomTeamOpen(false);
+  };
+
   const syncRouteAfterStructureChange = (nextSnapshot: WorkspaceSnapshot): void => {
     if (currentRouteStillExists({ snapshot: nextSnapshot, projectId, roomId, memberId })) {
       return;
@@ -234,6 +251,11 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     } finally {
       setDeletingTemplateId(undefined);
     }
+  };
+
+  const handleSaveRoomTeam = async (input: Parameters<typeof updateRoomTeam>[0]): Promise<void> => {
+    const nextSnapshot = await updateRoomTeam(input);
+    syncRouteAfterStructureChange(nextSnapshot);
   };
 
   const startSidebarResize = (event: PointerEvent<HTMLDivElement>): void => {
@@ -305,13 +327,13 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           rightSidebarCollapsed={rightCollapsed}
           snapshot={snapshot}
           room={room}
-          template={template}
+          roomTeam={roomTeam}
           members={members}
           selectedMemberId={selectedMemberId}
           connected={connected}
           error={error}
           onOpenMember={openMemberStudio}
-          onOpenTemplate={template ? () => openTemplateStudio(template.id) : undefined}
+          onOpenRoomTeam={room ? openRoomTeam : undefined}
           onToggleLeftSidebar={toggleLeftCollapsed}
           onToggleRightSidebar={toggleRightCollapsed}
         />
@@ -346,6 +368,14 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
             snapshot: payload.snapshot,
             globalConfig: payload.globalConfig,
           })}
+      />
+      <RoomTeamDialog
+        open={roomTeamOpen}
+        snapshot={snapshot}
+        room={room}
+        globalConfig={globalConfig}
+        onClose={closeRoomTeam}
+        onSave={handleSaveRoomTeam}
       />
     </>
   );

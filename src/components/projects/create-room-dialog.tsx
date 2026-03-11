@@ -1,4 +1,4 @@
-import { startTransition, useState } from "react";
+import { startTransition, useRef, useState } from "react";
 
 import { Plus } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -38,9 +39,44 @@ export function CreateRoomDialog(props: {
   const [open, setOpen] = useState(false);
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [actionError, setActionError] = useState<string | undefined>();
+  const [creatingRoom, setCreatingRoom] = useState(false);
+  const creatingRoomRef = useRef(false);
   const resolvedTemplateId = templates.some((template) => template.id === templateId) ? templateId : (templates[0]?.id ?? "");
   const selectedTemplate = templates.find((template) => template.id === resolvedTemplateId);
   const triggerDisabled = disabled || templates.length === 0;
+
+  const handleCreateRoom = (): void => {
+    if (creatingRoomRef.current || triggerDisabled || !resolvedTemplateId) {
+      return;
+    }
+
+    creatingRoomRef.current = true;
+    setCreatingRoom(true);
+    void (async () => {
+      try {
+        setActionError(undefined);
+        const next = await createRoom({
+          projectId: project.id,
+          templateId: resolvedTemplateId,
+        });
+        startTransition(() => {
+          void navigate({
+            to: "/projects/$projectId/rooms/$roomId",
+            params: {
+              projectId: project.id,
+              roomId: next.roomId,
+            },
+          });
+        });
+        setOpen(false);
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : String(error));
+      } finally {
+        creatingRoomRef.current = false;
+        setCreatingRoom(false);
+      }
+    })();
+  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -57,7 +93,7 @@ export function CreateRoomDialog(props: {
             <Plus size={14} />
           </Button>
         ) : (
-          <Button size="sm" variant="secondary" className={triggerClassName} disabled={triggerDisabled}>
+          <Button type="button" size="sm" variant="secondary" className={triggerClassName} disabled={triggerDisabled}>
             <Plus size={16} />
             New room
           </Button>
@@ -66,6 +102,9 @@ export function CreateRoomDialog(props: {
       <DialogContent className="w-[min(92vw,760px)] max-w-[760px] gap-4 p-5 sm:max-w-[760px]">
         <DialogHeader className="pr-10">
           <DialogTitle className="text-2xl font-semibold tracking-tight">Create room</DialogTitle>
+          <DialogDescription className="sr-only">
+            Create a new room in the selected project and initialize it from one of the available team templates.
+          </DialogDescription>
         </DialogHeader>
         <Card className="border border-transparent shadow-none">
           <CardContent className="flex flex-col gap-4">
@@ -92,32 +131,11 @@ export function CreateRoomDialog(props: {
             {actionError ? <p className="m-0 text-sm text-destructive">{actionError}</p> : null}
             <div className="flex justify-end">
               <Button
-                disabled={triggerDisabled || !resolvedTemplateId}
-                onClick={() => {
-                  void (async () => {
-                    try {
-                      setActionError(undefined);
-                      const next = await createRoom({
-                        projectId: project.id,
-                        templateId: resolvedTemplateId,
-                      });
-                      startTransition(() => {
-                        void navigate({
-                          to: "/projects/$projectId/rooms/$roomId",
-                          params: {
-                            projectId: project.id,
-                            roomId: next.roomId,
-                          },
-                        });
-                      });
-                      setOpen(false);
-                    } catch (error) {
-                      setActionError(error instanceof Error ? error.message : String(error));
-                    }
-                  })();
-                }}
+                type="button"
+                disabled={triggerDisabled || creatingRoom || !resolvedTemplateId}
+                onClick={handleCreateRoom}
               >
-                Create room
+                {creatingRoom ? "Creating room…" : "Create room"}
               </Button>
             </div>
           </CardContent>
