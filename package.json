@@ -6,9 +6,9 @@
   "packageManager": "bun@1.2.19",
   "scripts": {
     "dev": "vite",
-    "server": "tsx ./src/server/index.ts",
-    "dev:server": "tsx watch ./src/server/index.ts",
-    "cleanup:state": "node --import tsx ./src/server/cleanup-state.ts",
+    "server": "bun ./src/server/index.ts",
+    "dev:server": "bun --watch ./src/server/index.ts",
+    "cleanup:state": "bun ./src/server/cleanup-state.ts",
     "cli": "bun ./src/cli/main.ts",
     "build": "tsc --noEmit -p tsconfig.app.json && vite build",
     "preview": "vite preview",

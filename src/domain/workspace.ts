@@ -385,6 +385,7 @@ export function createProjectWithRoom(
   snapshot.projects[projectId] = {
     id: projectId,
     name: input.projectName.trim(),
+    path: input.path?.trim() || undefined,
     createdAt: now,
   };
   snapshot.projectOrder.push(projectId);

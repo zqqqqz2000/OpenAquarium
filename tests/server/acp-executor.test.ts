@@ -1,20 +1,23 @@
+import path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCodexAcpProvider, createGenericAcpProvider } from "@/lib/acp";
 
-const { cleanupMock, getSessionIdMock, initSessionMock, languageModelMock, setModeMock, streamTextMock } = vi.hoisted(() => ({
+const { cleanupMock, createACPProviderMock, getSessionIdMock, initSessionMock, languageModelMock, setModeMock, streamTextMock } = vi.hoisted(() => ({
   initSessionMock: vi.fn(),
   setModeMock: vi.fn(),
   cleanupMock: vi.fn(),
   getSessionIdMock: vi.fn(() => "session_1"),
   languageModelMock: vi.fn(() => ({ provider: "mock" })),
   streamTextMock: vi.fn(),
+  createACPProviderMock: vi.fn(),
 }));
 
 vi.mock("@mcpc-tech/acp-ai-provider", () => ({
   ACP_PROVIDER_AGENT_DYNAMIC_TOOL_NAME: "acp-agent-tool",
   acpTools: (tools: object) => tools,
-  createACPProvider: vi.fn(() => ({
+  createACPProvider: createACPProviderMock.mockImplementation(() => ({
     initSession: initSessionMock,
     setMode: setModeMock,
     cleanup: cleanupMock,
@@ -99,6 +102,7 @@ function createRequest(provider = createCodexAcpProvider()): ExecutionRequest {
 describe("AcpMemberExecutor", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    createACPProviderMock.mockClear();
     initSessionMock.mockReset();
     initSessionMock.mockResolvedValue({
       sessionId: "session_1",
@@ -366,5 +370,46 @@ describe("AcpMemberExecutor", () => {
 
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     await firstRun;
+  });
+
+  it("starts ACP sessions inside the project path when one is configured", async () => {
+    const projectPath = path.resolve(process.cwd(), "../agent-target");
+    const request = createRequest();
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      project: {
+        path: projectPath,
+      },
+      member: request.member,
+      host: {
+        sendGroupMessage: () => Promise.resolve(),
+        sendDirectMessage: () => Promise.resolve(),
+        runWatcher: () => Promise.resolve(),
+        inspectRoomState: () => Promise.resolve("state"),
+      },
+    });
+
+    await executor.execute(
+      {
+        ...request,
+        project: {
+          ...request.project,
+          path: projectPath,
+        },
+      },
+      {
+        onDraft: () => Promise.resolve(),
+        onStatus: () => Promise.resolve(),
+        onComplete: () => Promise.resolve(),
+        onError: () => Promise.resolve(),
+      },
+    );
+
+    expect(createACPProviderMock).toHaveBeenCalled();
+    expect(createACPProviderMock.mock.calls[0]?.[0]).toMatchObject({
+      session: {
+        cwd: projectPath,
+      },
+    });
   });
 });

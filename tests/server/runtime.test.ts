@@ -167,6 +167,28 @@ describe("WorkspaceRuntime", () => {
     });
   });
 
+  it("normalizes project paths against the OpenAquarium workspace root", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-path-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Path Check",
+      templateId: "template-product-pod",
+      path: "../real-repo",
+    });
+
+    expect(runtime.getSnapshot().projects[created.projectId]?.path).toBe(path.resolve(workspaceRoot, "../real-repo"));
+  });
+
   it("deletes a room and project while cleaning their runtime state", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-delete-"));
     let disposeCount = 0;

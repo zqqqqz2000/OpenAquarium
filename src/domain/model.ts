@@ -79,6 +79,7 @@ export interface TeamTemplate {
 export interface Project {
   id: ProjectId;
   name: string;
+  path?: string;
   createdAt: string;
 }
 
@@ -196,6 +197,7 @@ export interface WorkspaceSnapshot {
 export interface CreateProjectInput {
   projectName: string;
   templateId: TemplateId;
+  path?: string;
 }
 
 export interface CreateRoomInput {

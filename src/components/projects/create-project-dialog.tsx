@@ -1,6 +1,6 @@
 import { startTransition, useState } from "react";
 
-import { Plus } from "lucide-react";
+import { FolderSearch, Plus } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
 import type { TeamTemplate } from "@/domain/model";
@@ -34,14 +34,42 @@ export function CreateProjectDialog(props: {
   const { templates, triggerClassName, triggerMode = "default", disabled = false } = props;
   const navigate = useNavigate();
   const createProject = useWorkspaceStore((state) => state.createProject);
+  const pickProjectPath = useWorkspaceStore((state) => state.pickProjectPath);
   const [open, setOpen] = useState(false);
   const [projectName, setProjectName] = useState("Untitled Project");
+  const [projectPath, setProjectPath] = useState("");
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [actionError, setActionError] = useState<string | undefined>();
+  const [pickingPath, setPickingPath] = useState(false);
   const selectedTemplate = templates.find((template) => template.id === templateId);
+  const selectedTemplateMemberCount = selectedTemplate?.members.length ?? 0;
+  const handlePickProjectPath = (): void => {
+    void (async () => {
+      try {
+        setActionError(undefined);
+        setPickingPath(true);
+        const nextPath = await pickProjectPath();
+        if (typeof nextPath === "string" && nextPath.trim().length > 0) {
+          setProjectPath(nextPath);
+        }
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setPickingPath(false);
+      }
+    })();
+  };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) {
+          setActionError(undefined);
+        }
+      }}
+    >
       <DialogTrigger asChild>
         {triggerMode === "icon" ? (
           <Button className={triggerClassName} disabled={disabled} variant="ghost" size="icon-sm" aria-label="Create project">
@@ -65,6 +93,24 @@ export function CreateProjectDialog(props: {
               <Input value={projectName} onChange={(event) => setProjectName(event.currentTarget.value)} />
             </label>
             <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Project path</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input readOnly value={projectPath} placeholder="未选择目录" className="flex-1" />
+                <Button type="button" variant="outline" onClick={handlePickProjectPath} disabled={disabled || pickingPath}>
+                  <FolderSearch size={16} />
+                  {pickingPath ? "选择中…" : "选择文件夹"}
+                </Button>
+                {projectPath.trim().length > 0 ? (
+                  <Button type="button" variant="ghost" onClick={() => setProjectPath("")} disabled={disabled || pickingPath}>
+                    清空
+                  </Button>
+                ) : null}
+              </div>
+              <span className="text-xs leading-5 text-muted-foreground">
+                可选。点击选择目录后，ACP session 默认会从这个路径启动。
+              </span>
+            </label>
+            <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">Team template</span>
               <Select value={templateId} onValueChange={setTemplateId}>
                 <SelectTrigger className="w-full">
@@ -80,6 +126,21 @@ export function CreateProjectDialog(props: {
               </Select>
             </label>
             {actionError ? <p className="m-0 text-sm text-destructive">{actionError}</p> : null}
+            <div className="rounded-2xl border border-border/70 bg-muted/35 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="m-0 text-sm font-medium">{selectedTemplate?.name ?? "No template selected"}</p>
+                  <p className="m-0 text-xs leading-5 text-muted-foreground">
+                    {selectedTemplate?.description ?? "选择一个 team template 作为初始协作结构。"}
+                  </p>
+                </div>
+                <Badge variant="outline">{selectedTemplateMemberCount} members</Badge>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge variant="outline">{projectPath.trim().length > 0 ? "ACP cwd follows project path" : "ACP cwd uses OA workspace"}</Badge>
+                <Badge variant="outline">{selectedTemplate?.accentTone ?? "paper"}</Badge>
+              </div>
+            </div>
             <div className="flex flex-wrap gap-2">
               {selectedTemplate?.members.map((member) => {
                 const toneBadge = badgeToneProps(member.accentTone);
@@ -100,6 +161,7 @@ export function CreateProjectDialog(props: {
                       const next = await createProject({
                         projectName,
                         templateId,
+                        path: projectPath,
                       });
                       startTransition(() => {
                         void navigate({
@@ -111,6 +173,7 @@ export function CreateProjectDialog(props: {
                         });
                       });
                       setOpen(false);
+                      setProjectPath("");
                     } catch (error) {
                       setActionError(error instanceof Error ? error.message : String(error));
                     }

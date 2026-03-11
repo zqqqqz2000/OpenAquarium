@@ -87,4 +87,32 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("Recent Delta Transcript");
     expect(prompt).toContain("Use \"handle for non-routing references or quotes.");
   });
+
+  it("rewrites OpenAquarium notification commands to absolute paths when a project path is set", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = {
+      ...snapshot.projects[room.projectId],
+      path: "/tmp/external-repo",
+    };
+    const member = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "lead");
+    const task = Object.values(snapshot.tasks).find((candidate) => candidate.memberId === member?.id);
+
+    if (!member || !task) {
+      throw new Error("Expected the lead member and its task");
+    }
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room,
+      member,
+      task,
+      snapshot,
+    });
+
+    expect(prompt).toContain(`project path: ${project.path}`);
+    expect(prompt).toContain(`project working directory: ${project.path}`);
+    expect(prompt).toContain(`${process.cwd()}/bin/oa-room-send --scope group`);
+  });
 });

@@ -48,7 +48,17 @@ export class WorkspaceRuntimeClient {
     return parseJson(await fetch(`${this.baseUrl}/api/state`));
   }
 
-  async createProject(input: { projectName: string; templateId: string }): Promise<{
+  async pickProjectPath(): Promise<string | undefined> {
+    const payload = await parseJson<{ path?: string }>(
+      await fetch(`${this.baseUrl}/api/system/project-path`, {
+        method: "POST",
+      }),
+    );
+
+    return payload.path;
+  }
+
+  async createProject(input: { projectName: string; templateId: string; path?: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     projectId: string;
     roomId: string;

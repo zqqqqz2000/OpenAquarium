@@ -9,6 +9,7 @@ import { createWorkspaceRemoteStore, type WorkspaceRemoteClient } from "@/store/
 function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
   return {
     getState: () => Promise.resolve({ snapshot, globalConfig: createDefaultGlobalWorkspaceConfig() }),
+    pickProjectPath: () => Promise.reject(new Error("not implemented")),
     createProject: () => Promise.reject(new Error("not implemented")),
     createRoom: () => Promise.reject(new Error("not implemented")),
     deleteProject: () => Promise.reject(new Error("not implemented")),

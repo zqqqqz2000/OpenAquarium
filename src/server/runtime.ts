@@ -47,6 +47,7 @@ import { TemplateStudioChatService, type TemplateStudioChatServiceLike } from ".
 import { generateTemplateFromBrief } from "./template-generator";
 import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
 import { getRoomTranscriptFilePath, syncRoomTranscriptFiles } from "./room-transcript-files";
+import { normalizeProjectPath, resolveProjectWorkingDirectory } from "./project-paths";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
 import { createDefaultGlobalWorkspaceConfig, findProviderModelProfile, resolveProviderBindingFromProfile } from "../lib/provider-model-profiles";
@@ -227,9 +228,10 @@ export class WorkspaceRuntime {
     this.logger = args.logger;
     this.executorFactory =
       args.executorFactory ??
-      (({ member }) =>
+      (({ member, project }) =>
         new AcpMemberExecutor({
           workspaceRoot: this.workspaceRoot,
+          project,
           member,
           host: {
             sendGroupMessage: async (input) => {
@@ -334,7 +336,14 @@ export class WorkspaceRuntime {
 
   async createProject(input: CreateProjectInput): Promise<{ snapshot: WorkspaceSnapshot; projectId: string; roomId: string }> {
     const previous = this.snapshot;
-    const next = createProjectWithRoom(previous, input, this.context);
+    const next = createProjectWithRoom(
+      previous,
+      {
+        ...input,
+        path: normalizeProjectPath(this.workspaceRoot, input.path),
+      },
+      this.context,
+    );
     await this.applySnapshot(previous, next);
     return {
       snapshot: this.snapshot,
@@ -676,6 +685,8 @@ export class WorkspaceRuntime {
     if (!room) {
       throw new Error(`Unknown room "${roomId}"`);
     }
+    const project = this.snapshot.projects[room.projectId];
+    const projectWorkingDirectory = project ? resolveProjectWorkingDirectory(project, this.workspaceRoot) : this.workspaceRoot;
 
     const transcript = (this.snapshot.messageOrderByRoom[roomId] ?? [])
       .slice(-20)
@@ -692,6 +703,11 @@ export class WorkspaceRuntime {
       .join("\n");
 
     return [
+      `project: ${project?.name ?? room.projectId}`,
+      `projectPath: ${project?.path ?? "(default workspace root)"}`,
+      `workingDirectory: ${projectWorkingDirectory}`,
+      `openAquariumRoot: ${this.workspaceRoot}`,
+      "",
       `room: ${room.name}`,
       `topic: ${room.topic}`,
       "",

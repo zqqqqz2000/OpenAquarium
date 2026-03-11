@@ -169,6 +169,9 @@ export function Sidebar(props: {
                             triggerClassName="size-6"
                           />
                         </div>
+                        {project.path ? (
+                          <p className="mt-2 truncate font-mono text-[11px] leading-5 text-muted-foreground">{project.path}</p>
+                        ) : null}
                           </div>
                           <div className="flex shrink-0 items-center gap-1 self-start">
                             {isPendingDelete("project", project.id) ? (

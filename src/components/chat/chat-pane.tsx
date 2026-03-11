@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { ArrowDown, Bot, CornerDownLeft, Users } from "lucide-react";
+import { ArrowDown, Bot, CornerDownLeft, FolderKanban, GitBranch, TerminalSquare, Users } from "lucide-react";
 
 import type { ChatMessage, Room, TeamMember, TeamTemplate, WorkspaceSnapshot } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
@@ -117,17 +117,92 @@ export function ChatPane(props: {
   };
 
   if (!room) {
+    const templateCount = snapshot.templateOrder.length;
+    const featuredTemplates = snapshot.templateOrder
+      .slice(0, 3)
+      .map((templateId) => snapshot.templates[templateId])
+      .filter((template): template is TeamTemplate => Boolean(template));
+
     return (
       <main className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden px-6 py-10">
         <ShellToolbar leftSidebarCollapsed={leftSidebarCollapsed} onToggleLeftSidebar={onToggleLeftSidebar} />
-        <Card className="w-full max-w-2xl border border-border shadow-sm">
-          <CardContent className="flex flex-col gap-4 p-8">
-            <div className="space-y-2">
-              <p className="m-0 text-3xl font-semibold tracking-tight">OpenAquarium</p>
-              <p className="m-0 text-base text-muted-foreground">创建一个 project 开始聊天。</p>
+        <div className="grid flex-1 content-start gap-10 pt-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(17rem,24rem)]">
+          <section className="space-y-10">
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">{connected ? "Runtime online" : "Runtime offline"}</Badge>
+                <Badge variant="outline">{templateCount} templates ready</Badge>
+                <Badge variant="outline">Project path supported</Badge>
+              </div>
+              <div className="space-y-3">
+                <p className="m-0 text-5xl font-semibold tracking-tight">OpenAquarium</p>
+                <p className="m-0 max-w-3xl text-lg leading-8 text-muted-foreground">
+                  从左侧创建一个 project 开始协作。你可以选 team template，也可以额外填写 project path，让 ACP 直接在真实仓库目录里启动。
+                </p>
+              </div>
             </div>
-          </CardContent>
-        </Card>
+
+            <div className="grid gap-8 md:grid-cols-3">
+              <div className="space-y-3">
+                <FolderKanban size={18} />
+                <div className="space-y-2">
+                  <p className="m-0 text-3xl font-semibold tracking-tight">1</p>
+                  <p className="m-0 text-sm font-medium">新建 project</p>
+                  <p className="m-0 text-sm leading-7 text-muted-foreground">在左侧 Projects 面板点击加号，立即生成一个空 room。</p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <Users size={18} />
+                <div className="space-y-2">
+                  <p className="m-0 text-3xl font-semibold tracking-tight">2</p>
+                  <p className="m-0 text-sm font-medium">选择协作模板</p>
+                  <p className="m-0 text-sm leading-7 text-muted-foreground">模板会决定入口成员、实现者、研究员和 watcher 的初始结构。</p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <GitBranch size={18} />
+                <div className="space-y-2">
+                  <p className="m-0 text-3xl font-semibold tracking-tight">3</p>
+                  <p className="m-0 text-sm font-medium">可选填写 path</p>
+                  <p className="m-0 text-sm leading-7 text-muted-foreground">如果你要操作真实项目，填写路径后 ACP 会以那个目录作为默认工作目录。</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <aside className="space-y-6 pt-1">
+            <div className="space-y-2">
+              <p className="m-0 flex items-center gap-2 text-lg font-semibold tracking-tight">
+                <TerminalSquare size={18} />
+                Ready State
+              </p>
+              <p className="m-0 text-sm leading-7 text-muted-foreground">
+                {connected
+                  ? "Runtime 已连接。创建 project 后，首条消息会自动路由给入口成员。"
+                  : "Runtime 还没连上。启动本地服务后再创建 project，消息和保存才会真正落盘。"}
+              </p>
+              {!connected ? <p className="m-0 font-mono text-xs text-muted-foreground">bun run server</p> : null}
+            </div>
+
+            <div className="space-y-3">
+              <p className="m-0 text-sm font-medium">Available templates</p>
+              <div className="flex flex-wrap gap-2">
+                {featuredTemplates.map((template) => {
+                  const badge = badgeToneProps(template.accentTone);
+
+                  return (
+                    <Badge key={template.id} variant={badge.variant} className={badge.className}>
+                      {template.name}
+                    </Badge>
+                  );
+                })}
+              </div>
+              <p className="m-0 text-sm leading-7 text-muted-foreground">
+                新建 project 之后，消息区会展示 room transcript、成员状态和 watcher 活动。
+              </p>
+            </div>
+          </aside>
+        </div>
       </main>
     );
   }

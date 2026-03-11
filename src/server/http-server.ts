@@ -10,6 +10,7 @@ import { resolveDirectTarget } from "@/lib/direct-target";
 import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
+import { DirectorySelectionCancelledError, selectProjectDirectory } from "./directory-picker";
 import type { WorkspaceRuntime } from "./runtime";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { buildTransportSnapshot } from "./transport-snapshot";
@@ -76,6 +77,28 @@ export async function handleWorkspaceJsonApiRequest(args: {
     };
   }
 
+  if (method === "POST" && pathname === "/api/system/project-path") {
+    try {
+      return {
+        statusCode: 200,
+        payload: {
+          path: await selectProjectDirectory(),
+        },
+      };
+    } catch (error) {
+      if (error instanceof DirectorySelectionCancelledError) {
+        return {
+          statusCode: 200,
+          payload: {
+            path: undefined,
+          },
+        };
+      }
+
+      throw error;
+    }
+  }
+
   if (method === "POST" && pathname === "/api/projects") {
     if (containsLegacyFirstPrompt(body)) {
       return {
@@ -83,7 +106,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "firstPrompt is no longer supported. Create the room first, then send the first message." },
       };
     }
-    const created = await runtime.createProject(body as { projectName: string; templateId: string });
+    const created = await runtime.createProject(body as { projectName: string; templateId: string; path?: string });
     return {
       statusCode: 200,
       payload: created,
@@ -492,8 +515,22 @@ export async function startWorkspaceHttpServer(args: {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/api/system/project-path") {
+        try {
+          sendJson(response, 200, { path: await selectProjectDirectory() });
+          return;
+        } catch (error) {
+          if (error instanceof DirectorySelectionCancelledError) {
+            sendJson(response, 200, { path: undefined });
+            return;
+          }
+
+          throw error;
+        }
+      }
+
       if (request.method === "POST" && url.pathname === "/api/projects") {
-        const body = await readJson<{ projectName: string; templateId: string }>(request);
+        const body = await readJson<{ projectName: string; templateId: string; path?: string }>(request);
         if (containsLegacyFirstPrompt(body)) {
           sendJson(response, 400, {
             error: "firstPrompt is no longer supported. Create the room first, then send the first message.",

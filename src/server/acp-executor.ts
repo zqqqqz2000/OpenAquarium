@@ -5,11 +5,12 @@ import { acpTools, createACPProvider, ACP_PROVIDER_AGENT_DYNAMIC_TOOL_NAME } fro
 import { streamText, tool } from "ai";
 import { z } from "zod";
 
-import type { RoomId, TeamMember } from "../domain/model";
+import type { Project, RoomId, TeamMember } from "../domain/model";
 import { CODEX_ACP_MODE_ENV_KEY, ensureCodexAcpSessionMode } from "../lib/acp";
 import { isJsonObject, type JsonValue } from "../lib/json";
 import type { ExecutionRequest, ExecutorCallbacks, MemberExecutor } from "./executor";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
+import { isPathInsideRoot, resolveAcpSessionWorkingDirectory, resolveProjectWorkingDirectory } from "./project-paths";
 import { TerminalRegistry } from "./terminal-registry";
 
 const ACP_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -95,11 +96,6 @@ function resolveSpawnCommand(member: TeamMember): { command: string; args: strin
   };
 }
 
-function isInsideRoot(rootPath: string, targetPath: string): boolean {
-  const relative = path.relative(rootPath, targetPath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function summarizeRawChunk(rawValue: JsonValue | object | undefined): string | undefined {
   if (typeof rawValue !== "string") {
     return undefined;
@@ -146,19 +142,31 @@ function summarizeToolChunk(input: { toolName?: string } | object | string | num
 
 export class AcpMemberExecutor implements MemberExecutor {
   private readonly workspaceRoot: string;
+  private readonly project: Pick<Project, "path">;
   private readonly member: TeamMember;
   private readonly host: MemberToolHost;
   private readonly terminalRegistry = new TerminalRegistry();
+  private readonly projectRoot: string;
+  private readonly projectWorkingDirectory: string;
+  private readonly accessibleRoots: string[];
   private provider: ReturnType<typeof createACPProvider>;
   private providerSessionId?: string;
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
 
-  constructor(args: { workspaceRoot: string; member: TeamMember; host: MemberToolHost }) {
+  constructor(args: { workspaceRoot: string; project?: Pick<Project, "path">; member: TeamMember; host: MemberToolHost }) {
     this.workspaceRoot = args.workspaceRoot;
+    this.project = args.project ?? {};
     this.member = args.member;
     this.host = args.host;
     this.providerSessionId = args.member.providerSessionId;
+    this.projectRoot = resolveProjectWorkingDirectory(this.project, args.workspaceRoot);
+    this.projectWorkingDirectory = resolveAcpSessionWorkingDirectory({
+      workspaceRoot: args.workspaceRoot,
+      project: this.project,
+      providerWorkingDirectory: args.member.provider.workingDirectory,
+    });
+    this.accessibleRoots = [...new Set([this.projectRoot, this.workspaceRoot])];
     this.provider = this.createProvider();
   }
 
@@ -334,30 +342,30 @@ export class AcpMemberExecutor implements MemberExecutor {
       }),
       oa_room_state: roomStateTool,
       oa_read_file: tool({
-        description: "Read a UTF-8 text file under the workspace root.",
+        description: "Read a UTF-8 text file under the project working directory. Absolute paths inside OpenAquarium are also allowed.",
         inputSchema: z.object({
           filePath: z.string().min(1),
         }),
         execute: async ({ filePath }) => {
-          const resolvedPath = this.resolveWorkspacePath(filePath);
+          const resolvedPath = this.resolveAccessiblePath(filePath);
           return readFile(resolvedPath, "utf8");
         },
       }),
       oa_write_file: tool({
-        description: "Write a UTF-8 text file under the workspace root. Creates parent directories if needed.",
+        description: "Write a UTF-8 text file under the project working directory. Creates parent directories if needed.",
         inputSchema: z.object({
           filePath: z.string().min(1),
           content: z.string(),
         }),
         execute: async ({ filePath, content }) => {
-          const resolvedPath = this.resolveWorkspacePath(filePath);
+          const resolvedPath = this.resolveAccessiblePath(filePath);
           await mkdir(path.dirname(resolvedPath), { recursive: true });
           await writeFile(resolvedPath, content, "utf8");
-          return `wrote ${path.relative(this.workspaceRoot, resolvedPath)}`;
+          return `wrote ${path.relative(this.projectWorkingDirectory, resolvedPath)}`;
         },
       }),
       oa_run_command: tool({
-        description: "Run a command inside the workspace root and capture stdout/stderr. Use args instead of shell quoting.",
+        description: "Run a command inside the project working directory by default and capture stdout/stderr. Use args instead of shell quoting.",
         inputSchema: z.object({
           command: z.string().min(1),
           args: z.array(z.string()).default([]),
@@ -365,7 +373,7 @@ export class AcpMemberExecutor implements MemberExecutor {
           outputByteLimit: z.number().int().positive().max(256_000).default(96_000),
         }),
         execute: async ({ command, args, cwd, outputByteLimit }) => {
-          const resolvedCwd = cwd ? this.resolveWorkspacePath(cwd) : this.workspaceRoot;
+          const resolvedCwd = cwd ? this.resolveAccessiblePath(cwd) : this.projectWorkingDirectory;
           const created = await this.terminalRegistry.create({
             sessionId: request.task.id,
             command,
@@ -397,10 +405,12 @@ export class AcpMemberExecutor implements MemberExecutor {
     });
   }
 
-  private resolveWorkspacePath(filePath: string): string {
-    const resolvedPath = path.resolve(this.workspaceRoot, filePath);
-    if (!isInsideRoot(this.workspaceRoot, resolvedPath)) {
-      throw new Error(`Path "${filePath}" is outside the workspace root`);
+  private resolveAccessiblePath(filePath: string): string {
+    const resolvedPath = path.normalize(
+      path.isAbsolute(filePath) ? filePath : path.resolve(this.projectWorkingDirectory, filePath),
+    );
+    if (!this.accessibleRoots.some((rootPath) => isPathInsideRoot(rootPath, resolvedPath))) {
+      throw new Error(`Path "${filePath}" is outside the project or OpenAquarium workspace roots`);
     }
     return resolvedPath;
   }
@@ -413,7 +423,7 @@ export class AcpMemberExecutor implements MemberExecutor {
       env: this.member.provider.env,
       existingSessionId: this.providerSessionId,
       session: {
-        cwd: this.member.provider.workingDirectory ?? this.workspaceRoot,
+        cwd: this.projectWorkingDirectory,
         mcpServers: [],
       },
       persistSession: true,

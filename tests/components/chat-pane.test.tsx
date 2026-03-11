@@ -118,6 +118,36 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("Lead Koi").length).toBeGreaterThan(0);
   });
 
+  it("shows a richer empty state before any room is selected", () => {
+    const snapshot = createSeedWorkspace();
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={true}
+          snapshot={{
+            ...snapshot,
+            selection: {},
+          }}
+          room={undefined}
+          template={undefined}
+          members={[]}
+          selectedMemberId={undefined}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Project path supported")).toBeInTheDocument();
+    expect(screen.getByText("1. 新建 project")).toBeInTheDocument();
+    expect(screen.getByText("Ready State")).toBeInTheDocument();
+  });
+
   it("scrolls the transcript to the newest message", () => {
     const scrollCalls: Array<ScrollToOptions | [number, number]> = [];
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {

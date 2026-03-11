@@ -65,7 +65,8 @@ export interface WorkspaceRemoteStoreState {
   connected: boolean;
   error?: string;
   hydrate(): Promise<void>;
-  createProject(input: { projectName: string; templateId: string }): Promise<{ projectId: string; roomId: string }>;
+  pickProjectPath(): Promise<string | undefined>;
+  createProject(input: { projectName: string; templateId: string; path?: string }): Promise<{ projectId: string; roomId: string }>;
   createRoom(input: { projectId: string; templateId: string }): Promise<{ roomId: string }>;
   deleteProject(projectId: string): Promise<WorkspaceSnapshot>;
   deleteRoom(roomId: string): Promise<WorkspaceSnapshot>;
@@ -95,7 +96,8 @@ export interface WorkspaceRemoteStoreState {
 
 export interface WorkspaceRemoteClient {
   getState(): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig }>;
-  createProject(input: { projectName: string; templateId: string }): Promise<{
+  pickProjectPath(): Promise<string | undefined>;
+  createProject(input: { projectName: string; templateId: string; path?: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     projectId: string;
     roomId: string;
@@ -168,6 +170,9 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
           error: message,
         });
       }
+    },
+    async pickProjectPath() {
+      return runMutation(set, () => client.pickProjectPath());
     },
     async createProject(input) {
       const result = await runMutation(set, () => client.createProject(input));

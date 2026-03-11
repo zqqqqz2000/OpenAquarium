@@ -2,6 +2,12 @@ import type { ChatMessage, MemberTask, Project, Room, TeamMember, WorkspaceSnaps
 import { extractAddressedMemberIds } from "../domain/workspace";
 import { isVisibleMainRoomMessage } from "../lib/message-visibility";
 import { formatTime } from "../lib/utils";
+import {
+  getOpenAquariumScriptPath,
+  quoteShellToken,
+  resolveProjectWorkingDirectory,
+  rewriteCommandForProjectContext,
+} from "./project-paths";
 
 const FULL_PROMPT_TRANSCRIPT_LIMIT = 14;
 const DELTA_PROMPT_TRANSCRIPT_LIMIT = 6;
@@ -34,8 +40,8 @@ function summarizeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): st
   return `[${formatTime(message.createdAt)}] ${message.author.label} (${message.transport}/${message.status}): ${message.content}${summarizeHandles("mentions", message.mentionedMemberIds, snapshot)}${summarizeQuotedHandles(message, snapshot)}${recipientSuffix}`;
 }
 
-function describeMember(member: TeamMember): string {
-  const skillList = member.skills.map((skill) => `${skill.name}: ${skill.command}`).join(" | ");
+function describeMember(member: TeamMember, workspaceRoot: string): string {
+  const skillList = member.skills.map((skill) => `${skill.name}: ${rewriteCommandForProjectContext(skill.command, workspaceRoot)}`).join(" | ");
 
   return [
     `- ${member.name} (@${member.handle})`,
@@ -118,6 +124,9 @@ function buildSharedSections(args: {
   taskSequence: number;
 }): string[] {
   const { workspaceRoot, project, room, member, task, snapshot, transcriptFilePath, routingNote, promptMode, taskSequence } = args;
+  const projectWorkingDirectory = resolveProjectWorkingDirectory(project, workspaceRoot);
+  const roomSendScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-send"));
+  const roomStateScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-state"));
   const sourceMessage = snapshot.messages[task.sourceMessageId];
   const preferredTools = [
     "oa_send_group_message: preferred for visible room replies.",
@@ -125,9 +134,9 @@ function buildSharedSections(args: {
     "oa_room_state: inspect transcript and member/task state before retrying a send.",
     "oa_read_file: read transcript files or source files when you need deeper context.",
     "oa_run_room_watcher: trigger a watcher immediately when needed.",
-    `CLI group fallback only if the dedicated tools are unavailable: ${workspaceRoot}/bin/oa-room-send --room ${room.id} --member ${member.id} --scope group --text "your message"`,
-    `CLI direct fallback only if needed: ${workspaceRoot}/bin/oa-room-send --room ${room.id} --member ${member.id} --scope direct --target @user --text "private message"`,
-    `CLI state fallback: ${workspaceRoot}/bin/oa-room-state --room ${room.id}`,
+    `CLI group fallback only if the dedicated tools are unavailable: ${roomSendScript} --room ${room.id} --member ${member.id} --scope group --text "your message"`,
+    `CLI direct fallback only if needed: ${roomSendScript} --room ${room.id} --member ${member.id} --scope direct --target @user --text "private message"`,
+    `CLI state fallback: ${roomStateScript} --room ${room.id}`,
   ].join("\n");
 
   return [
@@ -148,6 +157,9 @@ function buildSharedSections(args: {
     "",
     "[Project]",
     `project: ${project.name}`,
+    `project path: ${project.path ?? "(default workspace root)"}`,
+    `project working directory: ${projectWorkingDirectory}`,
+    `OpenAquarium runtime root: ${workspaceRoot}`,
     `room: ${room.name}`,
     `topic: ${room.topic}`,
     transcriptFilePath ? `room transcript file: ${transcriptFilePath}` : undefined,
@@ -180,7 +192,7 @@ function buildFullPrompt(args: {
     .slice(-FULL_PROMPT_TRANSCRIPT_LIMIT)
     .map((message) => summarizeMessage(snapshot, message))
     .join("\n");
-  const roster = room.memberIds.map((memberId) => describeMember(snapshot.members[memberId])).join("\n");
+  const roster = room.memberIds.map((memberId) => describeMember(snapshot.members[memberId], args.workspaceRoot)).join("\n");
 
   return [
     ...buildSharedSections({
