@@ -1,5 +1,6 @@
 import { Outlet } from "@tanstack/react-router";
 
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorkspaceStoreProvider } from "@/store/workspace-store-provider";
 import { AppThemeProvider } from "@/theme/theme-provider";
@@ -10,6 +11,7 @@ export function RootLayout() {
       <AppThemeProvider>
         <TooltipProvider delayDuration={120}>
           <Outlet />
+          <Toaster position="top-right" richColors closeButton />
         </TooltipProvider>
       </AppThemeProvider>
     </WorkspaceStoreProvider>

@@ -123,9 +123,9 @@ describe("TemplateStudioChatService", () => {
 
     expect(result.assistantMessage).toBe("updated");
     expect(generateTextCall?.tools).toBeUndefined();
-    expect(generateTextCall?.system).toContain("Use the ACP session's normal file-editing ability in the working directory.");
-    expect(generateTextCall?.system).toContain("Treat short user requests as patch instructions for the selected team template.");
-    expect(generateTextCall?.system).toContain('User: "把 checker 改成 QA reviewer"');
+    expect(generateTextCall?.system).toContain("Edit OpenAquarium team templates by changing the real files in the working directory.");
+    expect(generateTextCall?.system).toContain("Read template.schema.json and templates.json before editing.");
+    expect(generateTextCall?.system).toContain("By default, edit only the selected template.");
     expect(generateTextCall?.system).toContain("Working directory: /tmp/openaquarium-config");
     expect(generateTextCall?.messages).toHaveLength(1);
     expect(generateTextCall?.messages[0]?.role).toBe("user");
@@ -152,7 +152,7 @@ describe("TemplateStudioChatService", () => {
     const generateTextCall = generateTextMock.mock.calls[0]?.[0] as { tools?: unknown; system: string } | undefined;
 
     expect(generateTextCall?.tools).toBeUndefined();
-    expect(generateTextCall?.system).toContain("Use the ACP session's normal file-editing ability in the working directory.");
+    expect(generateTextCall?.system).toContain("Edit OpenAquarium team templates by changing the real files in the working directory.");
     expect(generateTextCall?.system).toContain("[Selected Team Template]");
     expect(cleanupMock).toHaveBeenCalledTimes(1);
   });
@@ -187,7 +187,7 @@ describe("TemplateStudioChatService", () => {
 
     expect(result.modelProfileId).toBe(profile.id);
     expect(streamTextCall?.tools).toBeUndefined();
-    expect(streamTextCall?.system).toContain("Use the ACP session's normal file-editing ability in the working directory.");
+    expect(streamTextCall?.system).toContain("Read template.schema.json and templates.json before editing.");
     expect(streamTextCall?.messages).toHaveLength(1);
     expect(streamTextCall?.messages[0]?.role).toBe("user");
     expect(streamTextCall?.messages[0]).toMatchObject({

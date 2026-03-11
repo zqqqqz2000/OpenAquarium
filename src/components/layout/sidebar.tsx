@@ -1,7 +1,7 @@
 import { useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, ChevronRight, FolderKanban, LoaderCircle, MessageSquareShare, Settings2, Trash2, Waves, X } from "lucide-react";
+import { ChevronDown, ChevronRight, FolderKanban, LoaderCircle, Settings2, Trash2, Waves, X } from "lucide-react";
 
 import type { Project, Room, TeamTemplate } from "@/domain/model";
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog";
@@ -239,14 +239,13 @@ export function Sidebar(props: {
                                 className="min-w-0 flex-1 no-underline"
                                 onClick={clearPendingDelete}
                               >
-                                <div className="flex items-center justify-between gap-3 text-left transition-colors hover:bg-muted/60">
-                                  <span className="min-w-0">
+                                <div className="flex items-center justify-between gap-3 text-left">
+                                  <span className="min-w-0 flex-1">
                                     <span className="block truncate text-sm font-medium">{room.name}</span>
                                     <span className="block truncate text-xs text-muted-foreground">
                                       {summarizePrompt(room.topic, 40)}
                                     </span>
                                   </span>
-                                  <MessageSquareShare size={18} />
                                 </div>
                               </Link>
                               {isPendingDelete("room", room.id) ? (
@@ -347,11 +346,11 @@ export function Sidebar(props: {
                           }}
                         >
                           <div className="flex items-start justify-between gap-3">
-                            <span className="min-w-0">
+                            <span className="min-w-0 flex-1">
                               <span className="block truncate text-sm font-semibold tracking-tight">{template.name}</span>
                               <span className="mt-1 block text-xs leading-5 text-muted-foreground">{summarizePrompt(template.description, 88)}</span>
                             </span>
-                            <Badge variant={templateBadge.variant} className={templateBadge.className}>
+                            <Badge variant={templateBadge.variant} className={cn(templateBadge.className, "shrink-0")}>
                               {template.members.length}
                             </Badge>
                           </div>

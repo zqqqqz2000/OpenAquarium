@@ -1,14 +1,23 @@
+import type { ReactElement } from "react";
 import type { ChatTransport, UIMessageChunk } from "ai";
 import { simulateReadableStream } from "ai";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 
 import { TemplateStudioDialog } from "@/components/templates/template-studio-dialog";
 import type { WorkspaceSnapshot } from "@/domain/model";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import type { TemplateStudioChatDataParts, TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
 interface SavedTemplatePayload {
   templateId: string;
@@ -178,6 +187,14 @@ function getMessageTexts(messages: TemplateStudioUIMessage[]): string[] {
   );
 }
 
+function renderTemplateStudio(element: ReactElement) {
+  return render(element);
+}
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
 describe("TemplateStudioDialog", () => {
   it("saves global template defaults and explains template scope", async () => {
     const user = userEvent.setup();
@@ -186,7 +203,7 @@ describe("TemplateStudioDialog", () => {
     const template = templates[0];
     const onSaveConfig = vi.fn();
 
-    render(
+    renderTemplateStudio(
       <TemplateStudioDialog
         open
         templates={templates}
@@ -199,16 +216,22 @@ describe("TemplateStudioDialog", () => {
       />,
     );
 
+    expect(screen.getByRole("dialog", { name: "Team Template Studio" })).toHaveClass("fixed");
+    expect(screen.getByRole("dialog", { name: "Team Template Studio" })).not.toHaveClass("relative");
     expect(screen.getByText("Global team template config")).toBeInTheDocument();
     expect(screen.getByText("这里改的是 team template 本身，只影响之后新建的 room。当前 room 里的 member 实例不会被回写。")).toBeInTheDocument();
     expect(screen.getByText("Config directory: /tmp/openaquarium")).toBeInTheDocument();
 
     await user.clear(screen.getByRole("textbox", { name: /Template name/i }));
     await user.type(screen.getByRole("textbox", { name: /Template name/i }), "Product Pod v2");
-    await user.click(screen.getByRole("button", { name: /Forge Crab/i }));
+    const forgeCrabTrigger = screen.getAllByRole("button", { name: /Forge Crab/i })[0];
+    if (!forgeCrabTrigger) {
+      throw new Error("Expected Forge Crab trigger");
+    }
+    await user.click(forgeCrabTrigger);
     await user.clear(screen.getByRole("textbox", { name: /^Summary$/i }));
     await user.type(screen.getByRole("textbox", { name: /^Summary$/i }), "新的全局 builder summary");
-    await user.click(screen.getByRole("button", { name: /Save team template config/i }));
+    await user.click(screen.getByRole("button", { name: /^Save$/i }));
 
     expect(onSaveConfig).toHaveBeenCalledTimes(1);
     const savedPayload = onSaveConfig.mock.calls[0]?.[0] as SavedTemplatePayload | undefined;
@@ -218,8 +241,11 @@ describe("TemplateStudioDialog", () => {
       name: "Product Pod v2",
     });
     expect(savedPayload?.members.find((member) => member.handle === "builder")?.summary).toBe("新的全局 builder summary");
+    expect(toast.success).toHaveBeenCalledWith("Saved", {
+      description: "Product Pod v2 updated.",
+    });
     expect(screen.getByTestId("template-summary-card")).toHaveClass("border-b");
-    expect(screen.getByTestId("template-members-scroll")).toHaveClass("overflow-y-auto");
+    expect(screen.getByTestId("template-members-scroll").querySelector("[data-slot='scroll-area-viewport']")).toBeTruthy();
   });
 
   it("supports template chat and global model editing surfaces", async () => {
@@ -240,7 +266,7 @@ describe("TemplateStudioDialog", () => {
       }),
     ]);
 
-    render(
+    renderTemplateStudio(
       <TemplateStudioDialog
         open
         templates={templates}
@@ -257,9 +283,10 @@ describe("TemplateStudioDialog", () => {
 
     await user.click(screen.getByRole("tab", { name: /Chat/i }));
     expect(
-      screen.getAllByText((_, node) => node?.textContent?.includes("By default, the model edits the selected team template, Product Pod.") ?? false).length,
+      screen.getAllByText((_, node) => node?.textContent?.includes("默认修改 Product Pod。要新建 template，直接说。") ?? false).length,
     ).toBeGreaterThan(0);
-    expect(screen.getByText(/新建一个只包含 lead 和 builder 的 team template/i)).toBeInTheDocument();
+    expect(screen.getByText(/直接说要改什么就行/i)).toBeInTheDocument();
+    expect(screen.queryByText(/The model can read/i)).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "Make builder more QA focused");
     await user.click(screen.getByRole("button", { name: /Send change request/i }));
 
@@ -269,8 +296,8 @@ describe("TemplateStudioDialog", () => {
 
     await user.click(screen.getByRole("tab", { name: /Models/i }));
     expect(screen.getByRole("button", { name: /Add model/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Save global config/i })).toBeInTheDocument();
-    expect(screen.getByTestId("template-models-scroll")).toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("button", { name: /^Save$/i })).toBeInTheDocument();
+    expect(screen.getByTestId("template-models-scroll").querySelector("[data-slot='scroll-area-viewport']")).toBeTruthy();
   });
 
   it("streams assistant output and supports stop", async () => {
@@ -289,7 +316,7 @@ describe("TemplateStudioDialog", () => {
         ),
     ]);
 
-    render(
+    renderTemplateStudio(
       <TemplateStudioDialog
         open
         templates={templates}
@@ -341,7 +368,7 @@ describe("TemplateStudioDialog", () => {
         }),
     ]);
 
-    render(
+    renderTemplateStudio(
       <TemplateStudioDialog
         open
         templates={templates}
@@ -359,6 +386,7 @@ describe("TemplateStudioDialog", () => {
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "你好");
     await user.click(screen.getByRole("button", { name: /Send change request/i }));
     expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(screen.getByTestId("template-chat-first-token-placeholder")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => {
@@ -387,7 +415,7 @@ describe("TemplateStudioDialog", () => {
       }),
     ]);
 
-    render(
+    renderTemplateStudio(
       <TemplateStudioDialog
         open
         templates={templates}
@@ -418,7 +446,7 @@ describe("TemplateStudioDialog", () => {
 
     await user.click(screen.getByRole("tab", { name: /Chat/i }));
     expect(
-      screen.getAllByText((_, node) => node?.textContent?.includes("By default, the model edits the selected team template, Incident Pod.") ?? false).length,
+      screen.getAllByText((_, node) => node?.textContent?.includes("默认修改 Incident Pod。要新建 template，直接说。") ?? false).length,
     ).toBeGreaterThan(0);
 
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "Tighten the incident workflow");
@@ -433,7 +461,7 @@ describe("TemplateStudioDialog", () => {
     const snapshot = createSeedWorkspace();
     const templates = snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
 
-    render(
+    renderTemplateStudio(
       <TemplateStudioDialog
         open
         templates={templates}
@@ -477,7 +505,7 @@ describe("TemplateStudioDialog", () => {
       }),
     ]);
 
-    render(
+    renderTemplateStudio(
       <TemplateStudioDialog
         open
         templates={templates}
@@ -530,7 +558,7 @@ describe("TemplateStudioDialog", () => {
       }),
     ]);
 
-    render(
+    renderTemplateStudio(
       <TemplateStudioDialog
         open
         templates={templates}
@@ -580,7 +608,7 @@ describe("TemplateStudioDialog", () => {
     const templates = snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
     const onDeleteTemplate = vi.fn(() => Promise.resolve());
 
-    render(
+    renderTemplateStudio(
       <TemplateStudioDialog
         open
         templates={templates}
@@ -594,10 +622,55 @@ describe("TemplateStudioDialog", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Delete Incident Pod" }));
-    expect(screen.getByRole("button", { name: "Cancel deleting Incident Pod" })).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Delete Incident Pod" }));
+    const deleteDialog = await screen.findByRole("alertdialog", { name: "Delete Incident Pod?" });
+    await user.click(within(deleteDialog).getByRole("button", { name: "Delete" }));
 
     expect(onDeleteTemplate).toHaveBeenCalledWith("template-incident-pod");
+  });
+
+  it("lets users manually add and remove template members", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const templates = snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
+    const template = templates[0];
+    const deletedMember = template.members.at(-1);
+    const onSaveConfig = vi.fn();
+
+    if (!deletedMember) {
+      throw new Error("Expected a member to delete");
+    }
+
+    renderTemplateStudio(
+      <TemplateStudioDialog
+        open
+        templates={templates}
+        selectedTemplateId={template.id}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onSaveConfig={onSaveConfig}
+        onSaveGlobalConfig={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: `Delete ${deletedMember.name}` }));
+    const deleteMemberDialog = await screen.findByRole("alertdialog", { name: `Delete ${deletedMember.name}?` });
+    await user.click(within(deleteMemberDialog).getByRole("button", { name: "Delete" }));
+
+    await user.click(screen.getByRole("button", { name: /Add member/i }));
+    await user.clear(screen.getByRole("textbox", { name: /^Name$/i }));
+    await user.type(screen.getByRole("textbox", { name: /^Name$/i }), "QA Reviewer");
+    await user.clear(screen.getByRole("textbox", { name: /^Handle$/i }));
+    await user.type(screen.getByRole("textbox", { name: /^Handle$/i }), "qa-review");
+    await user.clear(screen.getByRole("textbox", { name: /^Summary$/i }));
+    await user.type(screen.getByRole("textbox", { name: /^Summary$/i }), "Reviews changes before handoff.");
+    await user.clear(screen.getByRole("textbox", { name: /^Prompt$/i }));
+    await user.type(screen.getByRole("textbox", { name: /^Prompt$/i }), "Review changes and send short visible progress updates.");
+    await user.click(screen.getByRole("button", { name: /^Save$/i }));
+
+    const savedPayload = onSaveConfig.mock.calls[0]?.[0] as SavedTemplatePayload | undefined;
+
+    expect(savedPayload?.members.some((member) => member.handle === deletedMember.handle)).toBe(false);
+    expect(savedPayload?.members.some((member) => member.handle === "qa-review")).toBe(true);
   });
 });

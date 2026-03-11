@@ -118,4 +118,68 @@ describe("Sidebar", () => {
     await user.click(screen.getByRole("button", { name: "Delete Incident Pod" }));
     expect(onDeleteTemplate).toHaveBeenCalledWith("template-incident-pod");
   });
+
+  it("keeps room and template action icons from shrinking when titles are long", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const projectId = snapshot.projectOrder[0];
+    const roomId = snapshot.selection.roomId;
+    if (!projectId || !roomId) {
+      throw new Error("Expected seeded project and room ids");
+    }
+
+    const project = snapshot.projects[projectId];
+    const room = snapshot.rooms[roomId];
+    if (!project || !room) {
+      throw new Error("Expected seeded project and room");
+    }
+
+    const longRoom = {
+      ...room,
+      name: "今天有什么热门的github Trending 有什么和llm相关的热门项目",
+    };
+
+    render(
+      <AppThemeProvider>
+        <TooltipProvider>
+          <Sidebar
+            collapsed={false}
+            projects={[project]}
+            roomsByProject={{ [project.id]: [longRoom] }}
+            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+            connected
+            loading={false}
+            onDeleteProject={vi.fn()}
+            onDeleteRoom={vi.fn()}
+            onDeleteTemplate={vi.fn()}
+            onResizeStart={vi.fn()}
+            onOpenTemplate={vi.fn()}
+            onOpenTemplateStudio={vi.fn()}
+          />
+        </TooltipProvider>
+      </AppThemeProvider>,
+    );
+
+    const roomLink = screen.getByText(longRoom.name).closest("a");
+    if (!roomLink) {
+      throw new Error("Expected room link");
+    }
+
+    const roomTextBlock = roomLink.querySelector("span.min-w-0.flex-1");
+    expect(roomTextBlock).toBeTruthy();
+
+    const roomActionIcon = roomLink.querySelector("svg.lucide-message-square-share");
+    expect(roomActionIcon).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Expand team templates" }));
+
+    const templateButton = screen.getByRole("button", {
+      name: /Product Pod .*适合产品探索和 coding agent 协作/,
+    });
+    const templateTextBlock = templateButton.querySelector("span.min-w-0.flex-1");
+    expect(templateTextBlock).toBeTruthy();
+
+    const templateBadge = templateButton.querySelector("[data-slot='badge']");
+    expect(templateBadge).toHaveClass("shrink-0");
+  });
 });

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type ChatTransport } from "ai";
+import { toast } from "sonner";
 
 import { ArrowUp, Bot, LoaderCircle, MessageSquare, Plus, Save, Settings2, Sparkles, Star, Trash2, X } from "lucide-react";
 
@@ -14,11 +15,31 @@ import type {
 import { addEmptyModelProfileDraft, buildGlobalConfigInput, createGlobalConfigDraft, type ModelProfileDraft } from "@/lib/global-config-draft";
 import { addEmptySkillDraft, type SkillDraft } from "@/lib/member-config-draft";
 import { resolveWorkspaceRuntimeBaseUrl } from "@/lib/runtime-client";
-import { buildTemplateConfigInput, createTemplateConfigDraft, type TemplateConfigDraft, type TemplateMemberDraft } from "@/lib/template-config-draft";
+import {
+  addEmptyTemplateMemberDraft,
+  buildTemplateConfigInput,
+  createTemplateConfigDraft,
+  removeTemplateMemberDraft,
+  type TemplateConfigDraft,
+  type TemplateMemberDraft,
+} from "@/lib/template-config-draft";
 import type { TemplateStudioChatDataParts, TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import { getTemplateStudioMessageText, sanitizeTemplateStudioMessages } from "@/lib/template-studio-ui-message";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogClose,
@@ -28,6 +49,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -35,6 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -46,13 +69,99 @@ const ACCENT_TONES = ["paper", "postit", "blueprint", "correction"] as const;
 
 function ScopeNote(props: { directory: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-border/80 bg-muted/25 px-4 py-3">
-      <p className="m-0 text-sm font-medium">Global team template config</p>
-      <p className="m-0 mt-1 text-sm leading-6 text-muted-foreground">
-        这里改的是 team template 本身，只影响之后新建的 room。当前 room 里的 member 实例不会被回写。
-      </p>
-      <p className="m-0 mt-2 text-xs text-muted-foreground">Config directory: {props.directory}</p>
-    </div>
+    <Card size="sm" className="rounded-2xl border-dashed bg-muted/25 shadow-none">
+      <CardHeader className="gap-1">
+        <CardTitle className="text-sm font-medium">Global team template config</CardTitle>
+        <CardDescription className="text-sm leading-6">
+          这里改的是 team template 本身，只影响之后新建的 room。当前 room 里的 member 实例不会被回写。
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <p className="m-0 text-xs text-muted-foreground">Config directory: {props.directory}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TemplateDeleteTrigger(props: {
+  deleting: boolean;
+  template: TeamTemplate;
+  onConfirm: () => void;
+}) {
+  const { deleting, template, onConfirm } = props;
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Delete ${template.name}`}
+          disabled={deleting}
+        >
+          {deleting ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent size="sm">
+        <AlertDialogHeader>
+          <AlertDialogMedia>
+            <Trash2 />
+          </AlertDialogMedia>
+          <AlertDialogTitle>{`Delete ${template.name}?`}</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes the template from workspace defaults. Existing rooms keep their current members.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" size="sm" onClick={onConfirm}>
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function MemberDeleteTrigger(props: {
+  disabled: boolean;
+  member: TemplateMemberDraft;
+  onConfirm: () => void;
+}) {
+  const { disabled, member, onConfirm } = props;
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Delete ${member.name}`}
+          disabled={disabled}
+        >
+          <Trash2 size={14} />
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent size="sm">
+        <AlertDialogHeader>
+          <AlertDialogMedia>
+            <Trash2 />
+          </AlertDialogMedia>
+          <AlertDialogTitle>{`Delete ${member.name}?`}</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes the member defaults from the template. Existing rooms keep their current member config.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" size="sm" onClick={onConfirm}>
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -65,26 +174,32 @@ function SkillEditor(props: {
   const { skill, index, onChange, onRemove } = props;
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-3">
-      <div className="flex justify-between gap-3">
-        <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Skill {index + 1}</p>
-        <Button variant="ghost" size="icon-sm" type="button" onClick={onRemove}>
-          <Trash2 size={16} />
-        </Button>
-      </div>
-      <Input value={skill.name} onChange={(event) => onChange({ ...skill, name: event.currentTarget.value })} placeholder="Skill name" />
-      <Input
-        value={skill.description}
-        onChange={(event) => onChange({ ...skill, description: event.currentTarget.value })}
-        placeholder="What this skill is for"
-      />
-      <Textarea
-        className="min-h-20"
-        value={skill.command}
-        onChange={(event) => onChange({ ...skill, command: event.currentTarget.value })}
-        placeholder="./bin/oa-room-send --scope group"
-      />
-    </div>
+    <Card size="sm" className="border-dashed bg-muted/40 shadow-none">
+      <CardHeader className="grid-cols-[1fr_auto] items-center gap-3">
+        <CardTitle className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+          Skill {index + 1}
+        </CardTitle>
+        <CardAction>
+          <Button variant="ghost" size="icon-sm" type="button" onClick={onRemove}>
+            <Trash2 size={16} />
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        <Input value={skill.name} onChange={(event) => onChange({ ...skill, name: event.currentTarget.value })} placeholder="Skill name" />
+        <Input
+          value={skill.description}
+          onChange={(event) => onChange({ ...skill, description: event.currentTarget.value })}
+          placeholder="What this skill is for"
+        />
+        <Textarea
+          className="min-h-20"
+          value={skill.command}
+          onChange={(event) => onChange({ ...skill, command: event.currentTarget.value })}
+          placeholder="./bin/oa-room-send --scope group"
+        />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -109,19 +224,21 @@ function ModelProfileEditor(props: {
   const { draft, disableRemove, onChange, onRemove } = props;
 
   return (
-    <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="m-0 text-lg font-semibold tracking-tight">Model profile</p>
-            <p className="m-0 text-sm text-muted-foreground">Provider config is global. Templates only point at these model names.</p>
-          </div>
+    <Card className="rounded-2xl border-border/70 bg-background/70 shadow-none">
+      <CardHeader className="gap-3">
+        <div>
+          <CardTitle className="text-lg tracking-tight">Model profile</CardTitle>
+          <CardDescription>Provider config is global. Templates only point at these model names.</CardDescription>
+        </div>
+        <CardAction>
           <Button size="sm" variant="ghost" disabled={disableRemove} onClick={onRemove}>
             <Trash2 size={16} />
             Remove
           </Button>
-        </div>
+        </CardAction>
+      </CardHeader>
 
+      <CardContent className="flex flex-col gap-4">
         <div className="grid gap-4 md:grid-cols-2">
           <label className="flex flex-col gap-2">
             <span className="text-sm font-medium">Profile name</span>
@@ -173,8 +290,8 @@ function ModelProfileEditor(props: {
           <span className="text-sm font-medium">Environment (KEY=VALUE per line)</span>
           <Textarea className="min-h-24" value={draft.providerEnvText} onChange={(event) => onChange({ providerEnvText: event.currentTarget.value })} />
         </label>
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -206,7 +323,7 @@ function TemplateStudioChatPanel(props: {
     onStoppedMessageChange,
     onSync,
   } = props;
-  const chatLogRef = useRef<HTMLDivElement | null>(null);
+  const chatLogRootRef = useRef<HTMLDivElement | null>(null);
   const onMessagesChangeRef = useRef(onMessagesChange);
   const normalizedInitialMessages = useMemo(
     () => sanitizeTemplateStudioMessages(initialMessages),
@@ -265,6 +382,12 @@ function TemplateStudioChatPanel(props: {
 
   const isBusy = status === "submitted" || status === "streaming";
   const pendingWithoutAssistant = isBusy && messages[messages.length - 1]?.role !== "assistant";
+  const latestMessage = messages.at(-1);
+  const waitingForFirstAssistantToken =
+    isBusy
+    && latestMessage?.role === "assistant"
+    && getTemplateStudioMessageText(latestMessage).trim().length === 0
+    && stoppedMessageId !== latestMessage.id;
 
   useEffect(() => {
     onMessagesChangeRef.current = onMessagesChange;
@@ -276,12 +399,12 @@ function TemplateStudioChatPanel(props: {
   }, [messages]);
 
   useEffect(() => {
-    const container = chatLogRef.current;
-    if (!container) {
+    const viewport = chatLogRootRef.current?.querySelector<HTMLDivElement>("[data-slot='scroll-area-viewport']");
+    if (!viewport) {
       return;
     }
 
-    container.scrollTop = container.scrollHeight;
+    viewport.scrollTop = viewport.scrollHeight;
   }, [messages, pendingWithoutAssistant]);
 
   useEffect(() => () => {
@@ -335,57 +458,70 @@ function TemplateStudioChatPanel(props: {
             <p className="m-0 text-base font-semibold tracking-tight">Team template chat</p>
           </div>
           <p className="m-0 text-sm leading-6 text-muted-foreground">
-            By default, the model edits the selected team template, <span className="font-medium">{template.name}</span>. You can also explicitly ask it to create a new team template or change a different one. It can read and update the files under {globalConfig.directory}, and each new turn includes the prior chat history.
+            默认修改 <span className="font-medium">{template.name}</span>。要新建 template，直接说。
           </p>
         </div>
       </section>
 
       <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
-        <div ref={chatLogRef} className="min-h-0 flex-1 overflow-y-auto pr-1" data-testid="template-chat-log" aria-live="polite">
-          {messages.length === 0 ? (
-            <div className="flex h-full min-h-[16rem] items-center justify-center rounded-xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-              Short requests work too. Try “把 checker 改成 QA reviewer”, “加一个 scribe 负责总结”, or “新建一个只包含 lead 和 builder 的 team template”.
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {messages.map((message) => {
-                const content = getTemplateStudioMessageText(message);
-                const showStoppedBadge = message.role === "assistant" && stoppedMessageId === message.id;
+        <div ref={chatLogRootRef} className="min-h-0 flex-1">
+          <ScrollArea className="h-full pr-1" data-testid="template-chat-log" aria-live="polite">
+            {messages.length === 0 ? (
+              <div className="flex min-h-[16rem] items-center justify-center rounded-xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                直接说要改什么就行，比如“把 checker 改成 QA reviewer”或“新建一个 incident template”。
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3 pr-3">
+                {messages.map((message) => {
+                  const content = getTemplateStudioMessageText(message);
+                  const showStoppedBadge = message.role === "assistant" && stoppedMessageId === message.id;
+                  const showFirstTokenPlaceholder =
+                    waitingForFirstAssistantToken
+                    && latestMessage?.id === message.id
+                    && message.role === "assistant";
 
-                if (content.trim().length === 0 && !showStoppedBadge) {
-                  return null;
-                }
+                  if (content.trim().length === 0 && !showStoppedBadge && !showFirstTokenPlaceholder) {
+                    return null;
+                  }
 
-                return (
-                  <div
-                    key={message.id}
-                    className={cn(
-                      "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm",
-                      message.role === "user"
-                        ? "ml-auto bg-primary text-primary-foreground"
-                        : "bg-muted text-foreground",
-                    )}
-                  >
-                    {content}
-                    {showStoppedBadge ? <p className="m-0 mt-2 text-xs text-muted-foreground">Stopped before completion.</p> : null}
+                  return (
+                    <div
+                      key={message.id}
+                      className={cn(
+                        "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm",
+                        message.role === "user"
+                          ? "ml-auto bg-primary text-primary-foreground"
+                          : "bg-muted text-foreground",
+                      )}
+                    >
+                      {showFirstTokenPlaceholder ? (
+                        <Skeleton
+                          className="h-6 min-w-16 rounded-full bg-foreground/10"
+                          data-testid="template-chat-first-token-placeholder"
+                        />
+                      ) : (
+                        content
+                      )}
+                      {showStoppedBadge ? <p className="m-0 mt-2 text-xs text-muted-foreground">Stopped before completion.</p> : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {pendingWithoutAssistant ? (
+              <div className="mt-3 max-w-[85%] rounded-2xl border border-border/70 bg-muted/60 px-4 py-3 text-sm text-foreground shadow-sm" data-testid="template-chat-pending">
+                <div className="flex items-start gap-3">
+                  <LoaderCircle size={16} className="mt-0.5 animate-spin text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="m-0 font-medium">Updating team template…</p>
+                    <p className="m-0 text-sm text-muted-foreground">
+                      Codex ACP may take around 30 seconds while it reads and edits the config files.
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          )}
-          {pendingWithoutAssistant ? (
-            <div className="mt-3 max-w-[85%] rounded-2xl border border-border/70 bg-muted/60 px-4 py-3 text-sm text-foreground shadow-sm" data-testid="template-chat-pending">
-              <div className="flex items-start gap-3">
-                <LoaderCircle size={16} className="mt-0.5 animate-spin text-muted-foreground" />
-                <div className="space-y-1">
-                  <p className="m-0 font-medium">Updating team template…</p>
-                  <p className="m-0 text-sm text-muted-foreground">
-                    Codex ACP may take around 30 seconds while it reads and edits the config files.
-                  </p>
                 </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
+          </ScrollArea>
         </div>
 
         {error ? <p className="m-0 text-sm text-destructive">{error.message}</p> : null}
@@ -395,19 +531,14 @@ function TemplateStudioChatPanel(props: {
             <Textarea
               aria-label="Template chat input"
               className="min-h-20 resize-none border-0 bg-transparent px-0 py-0 text-[1.05rem] leading-7 shadow-none ring-0 focus-visible:border-transparent focus-visible:ring-0"
-              placeholder="Tell Team Template Studio what to change. Press Enter to send, Shift+Enter for newline."
+              placeholder="默认修改当前 template；要新建直接说。"
               value={input}
               onChange={(event) => onInputChange(event.currentTarget.value)}
               onKeyDown={handleComposerKeyDown}
             />
-            <div className="flex flex-col gap-3 border-t border-border/50 pt-2 md:flex-row md:items-end md:justify-between">
-              <div className="min-w-0 flex-1">
-                <p className="m-0 text-xs text-muted-foreground">
-                  The model can read `templates.json` and `template.schema.json` under {globalConfig.directory}. Keep the prompt short: by default it edits the selected template, and if you want a new template just say so directly.
-                </p>
-              </div>
-              <div className="flex shrink-0 flex-col gap-2 md:min-w-[19rem]">
-                <label className="flex flex-col gap-2">
+            <div className="flex flex-col gap-3 border-t border-border/50 pt-2 md:flex-row md:items-center md:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                <label className="flex min-w-0 flex-1 flex-col gap-2 md:max-w-[18rem]">
                   <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Chat model</span>
                   <Select value={modelProfileId} onValueChange={onModelProfileChange} disabled={isBusy}>
                     <SelectTrigger className="w-full">
@@ -422,20 +553,24 @@ function TemplateStudioChatPanel(props: {
                     </SelectContent>
                   </Select>
                 </label>
-                <Button
-                  onClick={() => {
-                    if (isBusy) {
-                      void stop();
-                      return;
-                    }
-                    void submit();
-                  }}
-                  disabled={!isBusy && input.trim().length === 0}
-                >
-                  {isBusy ? <X size={16} /> : <ArrowUp size={16} />}
-                  {isBusy ? "Stop" : "Send change request"}
-                </Button>
               </div>
+              <Button
+                aria-label={isBusy ? "Stop" : "Send change request"}
+                className="size-10 shrink-0 rounded-full bg-primary text-primary-foreground hover:bg-primary/88 disabled:bg-muted disabled:text-muted-foreground"
+                disabled={!isBusy && input.trim().length === 0}
+                size="icon"
+                type="button"
+                onClick={() => {
+                  if (isBusy) {
+                    void stop();
+                    return;
+                  }
+                  void submit();
+                }}
+              >
+                {isBusy ? <X size={18} /> : <ArrowUp size={18} />}
+                <span className="sr-only">{isBusy ? "Stop" : "Send change request"}</span>
+              </Button>
             </div>
           </div>
         </div>
@@ -484,7 +619,6 @@ export function TemplateStudioDialog(props: {
   const [chatInputByTemplate, setChatInputByTemplate] = useState<Record<string, string>>({});
   const [chatModelProfileIdByTemplate, setChatModelProfileIdByTemplate] = useState<Record<string, string | undefined>>({});
   const [stoppedChatMessageIdByTemplate, setStoppedChatMessageIdByTemplate] = useState<Record<string, string | undefined>>({});
-  const [pendingDeleteTemplateId, setPendingDeleteTemplateId] = useState<string | undefined>(undefined);
   const [templateDeleteError, setTemplateDeleteError] = useState<string | undefined>(undefined);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [savingGlobalConfig, setSavingGlobalConfig] = useState(false);
@@ -531,12 +665,6 @@ export function TemplateStudioDialog(props: {
       [activeTemplateId]: globalConfig.templateChatModelProfileId ?? globalConfig.modelProfiles[0]?.id,
     }));
   }, [activeTemplateId, chatModelProfileIdByTemplate, globalConfig.modelProfiles, globalConfig.templateChatModelProfileId]);
-
-  useEffect(() => {
-    if (pendingDeleteTemplateId && !templatesById[pendingDeleteTemplateId]) {
-      setPendingDeleteTemplateId(undefined);
-    }
-  }, [pendingDeleteTemplateId, templatesById]);
 
   const selectedTemplate = activeTemplateId ? templatesById[activeTemplateId] : undefined;
   const selectedTemplateDraft = selectedTemplate ? templateDrafts[selectedTemplate.id] ?? createTemplateConfigDraft(selectedTemplate) : undefined;
@@ -611,6 +739,60 @@ export function TemplateStudioDialog(props: {
     });
   };
 
+  const addMemberDraft = (templateId: string): void => {
+    const template = templatesById[templateId];
+    if (!template) {
+      return;
+    }
+
+    const baseDraft = templateDrafts[templateId] ?? createTemplateConfigDraft(template);
+    const baseMemberId = activeMemberIds[templateId] ?? baseDraft.members[0]?.id;
+    const baseMember = baseDraft.members.find((member) => member.id === baseMemberId) ?? baseDraft.members[0];
+    const nextMembers = addEmptyTemplateMemberDraft(baseDraft.members, {
+      templateAccentTone: baseDraft.accentTone,
+      baseMember,
+    });
+    const nextMember = nextMembers.at(-1);
+    if (!nextMember) {
+      return;
+    }
+
+    setTemplateDrafts((current) => ({
+      ...current,
+      [templateId]: {
+        ...baseDraft,
+        members: nextMembers,
+      },
+    }));
+    setActiveMemberIds((current) => ({
+      ...current,
+      [templateId]: nextMember.id,
+    }));
+  };
+
+  const deleteMemberDraft = (templateId: string, memberId: string): void => {
+    const template = templatesById[templateId];
+    if (!template) {
+      return;
+    }
+
+    const baseDraft = templateDrafts[templateId] ?? createTemplateConfigDraft(template);
+    const nextMembers = removeTemplateMemberDraft(baseDraft.members, memberId);
+    const nextActiveMember = nextMembers.find((member) => member.id === activeMemberIds[templateId]) ?? nextMembers[0];
+
+    setTemplateDrafts((current) => ({
+      ...current,
+      [templateId]: {
+        ...baseDraft,
+        members: nextMembers,
+      },
+    }));
+    setActiveMemberIds((current) => ({
+      ...current,
+      [templateId]: nextActiveMember?.id,
+    }));
+  };
+
   const saveTemplateConfig = async (): Promise<void> => {
     if (!selectedTemplate || !selectedTemplateDraft) {
       return;
@@ -623,11 +805,18 @@ export function TemplateStudioDialog(props: {
         [selectedTemplate.id]: undefined,
       }));
       await onSaveConfig(buildTemplateConfigInput(selectedTemplate, selectedTemplateDraft));
+      toast.success("Saved", {
+        description: `${selectedTemplateDraft.name} updated.`,
+      });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       setTemplateErrorById((current) => ({
         ...current,
-        [selectedTemplate.id]: error instanceof Error ? error.message : String(error),
+        [selectedTemplate.id]: message,
       }));
+      toast.error("Save failed", {
+        description: message,
+      });
     } finally {
       setSavingTemplate(false);
     }
@@ -638,22 +827,34 @@ export function TemplateStudioDialog(props: {
       setSavingGlobalConfig(true);
       setGlobalConfigError(undefined);
       await onSaveGlobalConfig(buildGlobalConfigInput(globalConfig, globalConfigDraft));
+      toast.success("Saved", {
+        description: "Global model settings updated.",
+      });
     } catch (error) {
-      setGlobalConfigError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setGlobalConfigError(message);
+      toast.error("Save failed", {
+        description: message,
+      });
     } finally {
       setSavingGlobalConfig(false);
     }
   };
 
   const handleDeleteTemplate = async (templateId: string): Promise<void> => {
+    const templateName = templatesById[templateId]?.name ?? templateId;
     try {
       setTemplateDeleteError(undefined);
       await onDeleteTemplate(templateId);
-      if (pendingDeleteTemplateId === templateId) {
-        setPendingDeleteTemplateId(undefined);
-      }
+      toast.success("Deleted", {
+        description: `${templateName} removed.`,
+      });
     } catch (error) {
-      setTemplateDeleteError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setTemplateDeleteError(message);
+      toast.error("Delete failed", {
+        description: message,
+      });
     }
   };
 
@@ -698,12 +899,11 @@ export function TemplateStudioDialog(props: {
                 <Badge variant="outline">{templates.length}</Badge>
               </div>
               {templateDeleteError ? <p className="m-0 mt-3 text-sm text-destructive">{templateDeleteError}</p> : null}
-              <div className="mt-3 min-h-0 overflow-y-auto pr-1" data-testid="template-list-scroll">
-                <div className="flex flex-col gap-2">
+              <ScrollArea className="mt-3 min-h-0 flex-1" data-testid="template-list-scroll">
+                <div className="flex flex-col gap-2 pr-3">
                   {templates.map((template) => {
                     const tone = badgeToneProps(template.accentTone);
                     const isActive = template.id === selectedTemplate?.id;
-                    const confirmingDelete = pendingDeleteTemplateId === template.id;
 
                     return (
                       <div
@@ -718,7 +918,6 @@ export function TemplateStudioDialog(props: {
                           className="min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-left"
                           onClick={() => {
                             setTemplateDeleteError(undefined);
-                            setPendingDeleteTemplateId(undefined);
                             setActiveTemplateId(template.id);
                           }}
                         >
@@ -730,41 +929,16 @@ export function TemplateStudioDialog(props: {
                           </div>
                           <p className="m-0 mt-2 text-sm leading-6 text-muted-foreground">{template.description}</p>
                         </button>
-                        {confirmingDelete ? (
-                          <div className="flex shrink-0 items-center gap-1">
-                            <Button type="button" variant="ghost" size="icon-xs" aria-label={`Cancel deleting ${template.name}`} onClick={() => setPendingDeleteTemplateId(undefined)}>
-                              <X size={14} />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              size="icon-xs"
-                              aria-label={`Delete ${template.name}`}
-                              disabled={deletingTemplateId === template.id}
-                              onClick={() => void handleDeleteTemplate(template.id)}
-                            >
-                              {deletingTemplateId === template.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                            </Button>
-                          </div>
-                        ) : (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            aria-label={`Delete ${template.name}`}
-                            onClick={() => {
-                              setTemplateDeleteError(undefined);
-                              setPendingDeleteTemplateId(template.id);
-                            }}
-                          >
-                            <Trash2 size={14} />
-                          </Button>
-                        )}
+                        <TemplateDeleteTrigger
+                          deleting={deletingTemplateId === template.id}
+                          template={template}
+                          onConfirm={() => void handleDeleteTemplate(template.id)}
+                        />
                       </div>
                     );
                   })}
                 </div>
-              </div>
+              </ScrollArea>
             </section>
           </div>
 
@@ -791,12 +965,18 @@ export function TemplateStudioDialog(props: {
                 <div className="grid h-full min-h-0 gap-4 pt-4 xl:grid-cols-[280px_minmax(0,1fr)]">
                   <section className="min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
                     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="m-0 text-base font-semibold tracking-tight">Team template members</p>
-                        <Badge variant="outline">{selectedTemplateDraft.members.length}</Badge>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="m-0 text-base font-semibold tracking-tight">Team template members</p>
+                          <Badge variant="outline">{selectedTemplateDraft.members.length}</Badge>
+                        </div>
+                        <Button size="sm" variant="secondary" type="button" onClick={() => addMemberDraft(selectedTemplate.id)}>
+                          <Plus size={16} />
+                          Add member
+                        </Button>
                       </div>
-                      <div className="min-h-0 overflow-y-auto pr-1" data-testid="template-members-scroll">
-                        <div className="flex flex-col gap-2">
+                      <ScrollArea className="min-h-0 flex-1" data-testid="template-members-scroll">
+                        <div className="flex flex-col gap-2 pr-3">
                           {selectedTemplateDraft.members.map((member) => {
                             const memberBadge = badgeToneProps(member.accentTone);
                             const sourceMember = selectedTemplate.members.find((candidate) => candidate.id === member.id);
@@ -805,36 +985,48 @@ export function TemplateStudioDialog(props: {
                               providerLabel: sourceMember?.provider.label ?? "Provider",
                               globalConfig,
                             });
+                            const canDeleteMember = selectedTemplateDraft.members.length > 1;
 
                             return (
-                              <button
+                              <div
                                 key={member.id}
-                                type="button"
                                 className={cn(
-                                  "rounded-xl border border-border/70 px-3 py-3 text-left transition-colors hover:bg-muted/60",
+                                  "flex items-start gap-2 rounded-xl border border-border/70 px-3 py-3 transition-colors",
                                   member.id === activeMember?.id && "border-ring bg-accent/10",
                                 )}
-                                onClick={() => setActiveMemberIds((current) => ({ ...current, [selectedTemplate.id]: member.id }))}
                               >
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="m-0 text-sm font-semibold">{member.name}</p>
-                                  <Badge variant="outline">@{member.handle}</Badge>
-                                  {member.isEntryMember ? <Badge variant="secondary">Entry</Badge> : null}
-                                  <Badge variant={memberBadge.variant} className={memberBadge.className}>
-                                    {modelProfileLabel}
-                                  </Badge>
-                                </div>
-                                <p className="m-0 mt-2 text-sm text-muted-foreground">{member.summary}</p>
-                              </button>
+                                <button
+                                  type="button"
+                                  className="min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-left"
+                                  onClick={() => {
+                                    setActiveMemberIds((current) => ({ ...current, [selectedTemplate.id]: member.id }));
+                                  }}
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="m-0 text-sm font-semibold">{member.name}</p>
+                                    <Badge variant="outline">@{member.handle}</Badge>
+                                    {member.isEntryMember ? <Badge variant="secondary">Entry</Badge> : null}
+                                    <Badge variant={memberBadge.variant} className={memberBadge.className}>
+                                      {modelProfileLabel}
+                                    </Badge>
+                                  </div>
+                                  <p className="m-0 mt-2 text-sm text-muted-foreground">{member.summary}</p>
+                                </button>
+                                <MemberDeleteTrigger
+                                  disabled={!canDeleteMember}
+                                  member={member}
+                                  onConfirm={() => deleteMemberDraft(selectedTemplate.id, member.id)}
+                                />
+                              </div>
                             );
                           })}
                         </div>
-                      </div>
+                      </ScrollArea>
                     </div>
                   </section>
 
-                  <div className="min-h-0 overflow-y-auto pr-1">
-                    <div className="flex flex-col gap-4 pb-4">
+                  <ScrollArea className="min-h-0 h-full" data-testid="template-detail-scroll">
+                    <div className="flex flex-col gap-4 pr-3 pb-4">
                       <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
                         <div className="flex flex-col gap-4">
                           <div className="flex flex-wrap items-center gap-2">
@@ -1017,11 +1209,11 @@ export function TemplateStudioDialog(props: {
                         {templateErrorById[selectedTemplate.id] ? <p className="m-0 text-sm text-destructive">{templateErrorById[selectedTemplate.id]}</p> : <div />}
                         <Button onClick={() => void saveTemplateConfig()} disabled={savingTemplate}>
                           <Save size={16} />
-                          Save team template config
+                          Save
                         </Button>
                       </div>
                     </div>
-                  </div>
+                  </ScrollArea>
                 </div>
               )}
             </TabsContent>
@@ -1112,8 +1304,8 @@ export function TemplateStudioDialog(props: {
                       </Select>
                     </label>
 
-                    <div className="min-h-0 overflow-y-auto pr-1" data-testid="template-models-scroll">
-                      <div className="flex flex-col gap-2">
+                    <ScrollArea className="min-h-0 flex-1" data-testid="template-models-scroll">
+                      <div className="flex flex-col gap-2 pr-3">
                         {globalConfigDraft.modelProfiles.map((profile) => (
                           <button
                             key={profile.id}
@@ -1130,12 +1322,12 @@ export function TemplateStudioDialog(props: {
                           </button>
                         ))}
                       </div>
-                    </div>
+                    </ScrollArea>
                   </div>
                 </section>
 
-                <div className="min-h-0 overflow-y-auto pr-1">
-                  <div className="flex flex-col gap-4 pb-4">
+                <ScrollArea className="min-h-0 h-full" data-testid="template-model-detail-scroll">
+                  <div className="flex flex-col gap-4 pr-3 pb-4">
                     {activeModelProfile ? (
                       <ModelProfileEditor
                         draft={activeModelProfile}
@@ -1166,11 +1358,11 @@ export function TemplateStudioDialog(props: {
                       {globalConfigError ? <p className="m-0 text-sm text-destructive">{globalConfigError}</p> : <div />}
                       <Button onClick={() => void saveGlobalConfig()} disabled={savingGlobalConfig}>
                         <Save size={16} />
-                        Save global config
+                        Save
                       </Button>
                     </div>
                   </div>
-                </div>
+                </ScrollArea>
               </div>
             </TabsContent>
           </Tabs>
