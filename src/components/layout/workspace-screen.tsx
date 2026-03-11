@@ -5,6 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 import type { Room, WorkspaceSnapshot } from "@/domain/model";
 import { ChatPane } from "@/components/chat/chat-pane";
 import { clampLeftPanelWidth, getRoomGridColumns } from "@/lib/shell-panels";
+import { buildProjectActivitySummaries } from "@/lib/workspace-activity";
 import { Sidebar } from "@/components/layout/sidebar";
 import { useShellPanels } from "@/components/layout/use-shell-panels";
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
@@ -134,13 +135,16 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const members = room ? room.memberIds.map((memberId) => snapshot.members[memberId]) : [];
   const routedMember = memberId ? members.find((candidate) => candidate.id === memberId) : undefined;
   const selectedMemberId = routedMember?.id ?? snapshot.selection.memberId;
-  const projects = snapshot.projectOrder.map((candidate) => snapshot.projects[candidate]);
-  const roomsByProject = Object.fromEntries(
-    snapshot.projectOrder.map((candidate) => [
-      candidate,
-      (snapshot.roomOrderByProject[candidate] ?? []).map((candidateRoomId) => snapshot.rooms[candidateRoomId]),
-    ]),
-  ) as Record<string, Room[]>;
+  const projectSummaries = buildProjectActivitySummaries(snapshot);
+  const projects = projectSummaries.map((summary) => summary.project);
+  const roomsByProject = Object.fromEntries(projectSummaries.map((summary) => [summary.project.id, summary.rooms.map((room) => room.room)])) as Record<
+    string,
+    Room[]
+  >;
+  const projectActivityById = Object.fromEntries(projectSummaries.map((summary) => [summary.project.id, summary]));
+  const roomActivityById = Object.fromEntries(
+    projectSummaries.flatMap((summary) => summary.rooms.map((roomSummary) => [roomSummary.room.id, roomSummary])),
+  );
   const openMemberStudio = (targetMemberId: string): void => {
     selectMember(targetMemberId);
     if (!selectedProjectId || !selectedRoomId) {
@@ -274,6 +278,8 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           collapsed={leftCollapsed}
           projects={projects}
           roomsByProject={roomsByProject}
+          projectActivityById={projectActivityById}
+          roomActivityById={roomActivityById}
           activeProjectId={selectedProjectId}
           activeRoomId={selectedRoomId}
           templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}

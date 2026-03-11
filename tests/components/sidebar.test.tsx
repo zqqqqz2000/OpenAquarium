@@ -27,20 +27,37 @@ vi.mock("@/components/theme/theme-toggle", () => ({
 import { Sidebar } from "@/components/layout/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
+import { buildProjectActivitySummaries } from "@/lib/workspace-activity";
 import { AppThemeProvider } from "@/theme/theme-provider";
+
+function buildSidebarData(snapshot: ReturnType<typeof createSeedWorkspace>) {
+  const projectSummaries = buildProjectActivitySummaries(snapshot);
+
+  return {
+    projects: projectSummaries.map((summary) => summary.project),
+    roomsByProject: Object.fromEntries(projectSummaries.map((summary) => [summary.project.id, summary.rooms.map((room) => room.room)])),
+    projectActivityById: Object.fromEntries(projectSummaries.map((summary) => [summary.project.id, summary])),
+    roomActivityById: Object.fromEntries(
+      projectSummaries.flatMap((summary) => summary.rooms.map((roomSummary) => [roomSummary.room.id, roomSummary])),
+    ),
+  };
+}
 
 describe("Sidebar", () => {
   it("keeps templates collapsed by default and scrolls the expanded list", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
+    const sidebarData = buildSidebarData(snapshot);
 
     render(
       <AppThemeProvider>
         <TooltipProvider>
           <Sidebar
             collapsed={false}
-            projects={[]}
-            roomsByProject={{}}
+            projects={sidebarData.projects}
+            roomsByProject={sidebarData.roomsByProject}
+            projectActivityById={sidebarData.projectActivityById}
+            roomActivityById={sidebarData.roomActivityById}
             templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
             connected
             loading={false}
@@ -79,14 +96,17 @@ describe("Sidebar", () => {
     const onDeleteProject = vi.fn();
     const onDeleteRoom = vi.fn();
     const onDeleteTemplate = vi.fn();
+    const sidebarData = buildSidebarData(snapshot);
 
     render(
       <AppThemeProvider>
         <TooltipProvider>
           <Sidebar
             collapsed={false}
-            projects={project ? [project] : []}
-            roomsByProject={project ? { [project.id]: [room] } : {}}
+            projects={project ? sidebarData.projects.filter((candidate) => candidate.id === project.id) : []}
+            roomsByProject={project ? { [project.id]: sidebarData.roomsByProject[project.id] ?? [] } : {}}
+            projectActivityById={project ? { [project.id]: sidebarData.projectActivityById[project.id] } : {}}
+            roomActivityById={room ? { [room.id]: sidebarData.roomActivityById[room.id] } : {}}
             templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
             connected
             loading={false}
@@ -138,14 +158,18 @@ describe("Sidebar", () => {
       ...room,
       name: "今天有什么热门的github Trending 有什么和llm相关的热门项目",
     };
+    snapshot.rooms[room.id] = longRoom;
+    const sidebarData = buildSidebarData(snapshot);
 
     render(
       <AppThemeProvider>
         <TooltipProvider>
           <Sidebar
             collapsed={false}
-            projects={[project]}
-            roomsByProject={{ [project.id]: [longRoom] }}
+            projects={sidebarData.projects}
+            roomsByProject={sidebarData.roomsByProject}
+            projectActivityById={sidebarData.projectActivityById}
+            roomActivityById={sidebarData.roomActivityById}
             templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
             connected
             loading={false}
@@ -181,5 +205,61 @@ describe("Sidebar", () => {
 
     const templateBadge = templateButton.querySelector("[data-slot='badge']");
     expect(templateBadge).toHaveClass("shrink-0");
+  });
+
+  it("shows updated metadata and status while hiding the raw project path", () => {
+    const snapshot = createSeedWorkspace();
+    const projectId = snapshot.projectOrder[0];
+    const roomId = snapshot.selection.roomId;
+    if (!projectId || !roomId) {
+      throw new Error("Expected seeded project and room ids");
+    }
+
+    const project = snapshot.projects[projectId];
+    const room = snapshot.rooms[roomId];
+    if (!project || !room) {
+      throw new Error("Expected seeded project and room");
+    }
+
+    snapshot.projects[projectId] = {
+      ...project,
+      path: "/tmp/openaquarium/demo-path",
+    };
+    snapshot.tasks[Object.keys(snapshot.tasks)[0]!] = {
+      ...snapshot.tasks[Object.keys(snapshot.tasks)[0]!]!,
+      status: "running",
+    };
+    snapshot.members[room.entryMemberId] = {
+      ...snapshot.members[room.entryMemberId]!,
+      status: "running",
+    };
+    const sidebarData = buildSidebarData(snapshot);
+
+    render(
+      <AppThemeProvider>
+        <TooltipProvider>
+          <Sidebar
+            collapsed={false}
+            projects={sidebarData.projects}
+            roomsByProject={sidebarData.roomsByProject}
+            projectActivityById={sidebarData.projectActivityById}
+            roomActivityById={sidebarData.roomActivityById}
+            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+            connected
+            loading={false}
+            onDeleteProject={vi.fn()}
+            onDeleteRoom={vi.fn()}
+            onDeleteTemplate={vi.fn()}
+            onResizeStart={vi.fn()}
+            onOpenTemplate={vi.fn()}
+            onOpenTemplateStudio={vi.fn()}
+          />
+        </TooltipProvider>
+      </AppThemeProvider>,
+    );
+
+    expect(screen.queryByText("/tmp/openaquarium/demo-path")).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Updated /).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/running/i).length).toBeGreaterThan(0);
   });
 });

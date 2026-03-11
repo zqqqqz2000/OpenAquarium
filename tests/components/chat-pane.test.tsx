@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ChatPane } from "@/components/chat/chat-pane";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { createRuntimeContext } from "@/domain/identity";
+import { postUserMessage } from "@/domain/workspace";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
 describe("ChatPane", () => {
@@ -44,6 +46,13 @@ describe("ChatPane", () => {
     expect(screen.queryByText("成员内部推理只显示为处理状态；只有显式发送到 room 或 direct 的消息才会出现在消息流里。")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Direct" }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Chat" }).length).toBeGreaterThan(0);
+    const userMessage = screen
+      .getAllByText("做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品")
+      .find((element) => element.closest("[data-message-kind='user']"));
+    const compactMemberMessages = document.querySelectorAll("[data-message-kind='member'][data-message-surface='compact']");
+
+    expect(userMessage?.closest("[data-message-kind='user']")).toHaveAttribute("data-message-surface", "compact");
+    expect(compactMemberMessages.length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Hide projects sidebar" }));
     await user.click(screen.getByRole("button", { name: "Hide members sidebar" }));
@@ -118,6 +127,45 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("Lead Koi").length).toBeGreaterThan(0);
   });
 
+  it("makes running members more prominent in the right sidebar", () => {
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "请继续处理 sidebar 的运行状态改动",
+      },
+      createRuntimeContext(600, "2026-03-09T09:30:00.000Z"),
+    );
+    const nextRoom = snapshot.rooms[room.id];
+    const template = snapshot.templates[nextRoom.templateId];
+    const members = nextRoom.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={nextRoom}
+          template={template}
+          members={members}
+          selectedMemberId={nextRoom.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getAllByText(/live now/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/live/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
+  });
+
   it("shows a richer empty state before any room is selected", () => {
     const snapshot = createSeedWorkspace();
 
@@ -144,7 +192,7 @@ describe("ChatPane", () => {
     );
 
     expect(screen.getByText("Project path supported")).toBeInTheDocument();
-    expect(screen.getByText("1. 新建 project")).toBeInTheDocument();
+    expect(screen.getByText("新建 project")).toBeInTheDocument();
     expect(screen.getByText("Ready State")).toBeInTheDocument();
   });
 

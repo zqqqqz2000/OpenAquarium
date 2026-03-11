@@ -12,11 +12,52 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, summarizePrompt } from "@/lib/utils";
 import { badgeToneProps } from "@/lib/ui-tone";
+import type { ProjectActivitySummary, RoomActivitySummary } from "@/lib/workspace-activity";
+import { formatRelativeActivityShort } from "@/lib/workspace-activity";
+
+function ActivityTimestamp(props: { updatedAt: string }) {
+  const { updatedAt } = props;
+
+  return (
+    <p className="m-0 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground" title={updatedAt}>
+      Updated {formatRelativeActivityShort(updatedAt)}
+    </p>
+  );
+}
+
+function RunningPresenceBadge(props: { hasRunning: boolean; runningCount: number; idleLabel?: string }) {
+  const { hasRunning, runningCount, idleLabel = "Idle" } = props;
+
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]",
+        hasRunning
+          ? "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-badge)] text-[color:var(--tone-blueprint-foreground)] shadow-[0_0_0_1px_rgba(120,150,255,0.08)]"
+          : "border-border/80 bg-background/70 text-muted-foreground",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 rounded-full",
+          hasRunning
+            ? "animate-oa-breathe bg-[color:var(--tone-blueprint-foreground)] shadow-[0_0_0_0.24rem_rgba(113,113,255,0.12)]"
+            : "bg-muted-foreground/45",
+        )}
+      />
+      {hasRunning ? (runningCount > 1 ? `${runningCount} running` : "Running") : idleLabel}
+    </Badge>
+  );
+}
 
 export function Sidebar(props: {
   collapsed: boolean;
   projects: Project[];
   roomsByProject: Record<string, Room[]>;
+  projectActivityById: Record<string, ProjectActivitySummary>;
+  roomActivityById: Record<string, RoomActivitySummary>;
   activeProjectId?: string;
   activeRoomId?: string;
   templates: TeamTemplate[];
@@ -38,6 +79,8 @@ export function Sidebar(props: {
     collapsed,
     projects,
     roomsByProject,
+    projectActivityById,
+    roomActivityById,
     activeProjectId,
     activeRoomId,
     templates,
@@ -135,32 +178,31 @@ export function Sidebar(props: {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             <div className="flex flex-col gap-2.5">
-              {projects.map((project) => (
-                <div
-                  key={project.id}
-                  className={cn(
-                    "rounded-[1.45rem] border border-border/80 bg-card px-3 py-2.5 text-sm text-card-foreground shadow-sm",
-                    project.id === activeProjectId && "border-ring bg-accent/5",
-                  )}
-                    >
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                        <button
-                          type="button"
-                          className="block w-full truncate rounded-none border-0 bg-transparent p-0 text-left text-base font-semibold tracking-tight"
-                          onClick={() => toggleProjectExpanded(project.id)}
-                        >
-                          {project.name}
-                        </button>
-                        <div className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+              {projects.map((project) => {
+                const projectActivity = projectActivityById[project.id];
+
+                return (
+                  <div
+                    key={project.id}
+                    className={cn(
+                      "rounded-[1.45rem] border border-border/80 bg-card px-3 py-2.5 text-sm text-card-foreground shadow-sm",
+                      project.id === activeProjectId && "border-ring bg-accent/5",
+                      projectActivity?.hasRunning && "border-[color:var(--tone-blueprint-border)]/90 shadow-[0_14px_28px_-26px_rgba(62,118,255,0.95)]",
+                    )}
+                  >
+                    <div className="flex flex-col gap-2.5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
                           <button
                             type="button"
-                            className="rounded-none border-0 bg-transparent p-0 text-left text-sm text-muted-foreground"
+                            className="block w-full truncate rounded-none border-0 bg-transparent p-0 text-left text-base font-semibold tracking-tight"
                             onClick={() => toggleProjectExpanded(project.id)}
                           >
-                            {roomsByProject[project.id]?.length ?? 0} rooms
+                            {project.name}
                           </button>
+                          <p className="mt-1 m-0 text-sm text-muted-foreground">{roomsByProject[project.id]?.length ?? 0} rooms</p>
+                        </div>
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 self-start">
                           <CreateRoomDialog
                             project={project}
                             templates={templates}
@@ -168,136 +210,154 @@ export function Sidebar(props: {
                             triggerMode="icon"
                             triggerClassName="size-6"
                           />
-                        </div>
-                        {project.path ? (
-                          <p className="mt-2 truncate font-mono text-[11px] leading-5 text-muted-foreground">{project.path}</p>
-                        ) : null}
-                          </div>
-                          <div className="flex shrink-0 items-center gap-1 self-start">
-                            {isPendingDelete("project", project.id) ? (
-                              <>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  aria-label={`Cancel deleting ${project.name}`}
-                                  onClick={clearPendingDelete}
-                                >
-                                  <X size={14} />
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="destructive"
-                                  size="icon-xs"
-                                  aria-label={`Delete ${project.name}`}
-                                  disabled={actionsDisabled || deletingProjectId === project.id}
-                                  onClick={() => {
-                                    clearPendingDelete();
-                                    onDeleteProject(project.id);
-                                  }}
-                                >
-                                  {deletingProjectId === project.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                                </Button>
-                              </>
-                            ) : (
+                          {isPendingDelete("project", project.id) ? (
+                            <>
                               <Button
                                 type="button"
                                 variant="ghost"
                                 size="icon-xs"
-                                aria-label={`Delete ${project.name}`}
-                                disabled={actionsDisabled}
-                                onClick={() => setPendingDelete({ kind: "project", id: project.id })}
-                              >
-                                <Trash2 size={14} />
-                              </Button>
-                            )}
-                            <button
-                              type="button"
-                              aria-label={expandedProjectIds[project.id] ? `Collapse ${project.name}` : `Expand ${project.name}`}
-                              className="flex shrink-0 items-center gap-2 rounded-none border-0 bg-transparent p-0"
-                              onClick={() => {
-                                clearPendingDelete();
-                                toggleProjectExpanded(project.id);
-                              }}
-                            >
-                              <Badge variant="outline">{roomsByProject[project.id]?.length ?? 0}</Badge>
-                              {expandedProjectIds[project.id] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                            </button>
-                          </div>
-                    </div>
-                    {expandedProjectIds[project.id] ? (
-                      <div className="flex flex-col gap-1.5">
-                        {(roomsByProject[project.id] ?? []).length > 0 ? (
-                          (roomsByProject[project.id] ?? []).map((room) => (
-                            <div
-                              key={room.id}
-                              className={cn(
-                                "flex items-center gap-2 rounded-lg border border-border/70 bg-card px-2.5 py-1.5 shadow-sm transition-colors",
-                                room.id === activeRoomId && "border-ring bg-accent/5",
-                              )}
-                            >
-                              <Link
-                                to="/projects/$projectId/rooms/$roomId"
-                                params={{ projectId: project.id, roomId: room.id }}
-                                className="min-w-0 flex-1 no-underline"
+                                aria-label={`Cancel deleting ${project.name}`}
                                 onClick={clearPendingDelete}
                               >
-                                <div className="flex items-center justify-between gap-3 text-left">
-                                  <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-sm font-medium">{room.name}</span>
-                                    <span className="block truncate text-xs text-muted-foreground">
-                                      {summarizePrompt(room.topic, 40)}
-                                    </span>
-                                  </span>
-                                </div>
-                              </Link>
-                              {isPendingDelete("room", room.id) ? (
-                                <div className="flex shrink-0 items-center gap-1">
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon-xs"
-                                    aria-label={`Cancel deleting ${room.name}`}
+                                <X size={14} />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="icon-xs"
+                                aria-label={`Delete ${project.name}`}
+                                disabled={actionsDisabled || deletingProjectId === project.id}
+                                onClick={() => {
+                                  clearPendingDelete();
+                                  onDeleteProject(project.id);
+                                }}
+                              >
+                                {deletingProjectId === project.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              aria-label={`Delete ${project.name}`}
+                              disabled={actionsDisabled}
+                              onClick={() => setPendingDelete({ kind: "project", id: project.id })}
+                            >
+                              <Trash2 size={14} />
+                            </Button>
+                          )}
+                          <button
+                            type="button"
+                            aria-label={expandedProjectIds[project.id] ? `Collapse ${project.name}` : `Expand ${project.name}`}
+                            className="flex shrink-0 items-center gap-2 rounded-none border-0 bg-transparent p-0"
+                            onClick={() => {
+                              clearPendingDelete();
+                              toggleProjectExpanded(project.id);
+                            }}
+                          >
+                            <Badge variant="outline">{roomsByProject[project.id]?.length ?? 0}</Badge>
+                            {expandedProjectIds[project.id] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-2">
+                        <ActivityTimestamp updatedAt={projectActivity?.updatedAt ?? project.createdAt} />
+                        <RunningPresenceBadge
+                          hasRunning={projectActivity?.hasRunning ?? false}
+                          runningCount={projectActivity?.runningCount ?? 0}
+                          idleLabel="Idle"
+                        />
+                      </div>
+
+                      {expandedProjectIds[project.id] ? (
+                        <div className="flex flex-col gap-1.5">
+                          {(roomsByProject[project.id] ?? []).length > 0 ? (
+                            (roomsByProject[project.id] ?? []).map((room) => {
+                              const roomActivity = roomActivityById[room.id];
+
+                              return (
+                                <div
+                                  key={room.id}
+                                  className={cn(
+                                    "flex items-start gap-2 rounded-xl border border-border/70 bg-card/80 px-2.5 py-2 shadow-sm transition-colors",
+                                    room.id === activeRoomId && "border-ring bg-accent/5",
+                                    roomActivity?.hasRunning && "border-[color:var(--tone-blueprint-border)]/85 bg-[color:var(--tone-blueprint-surface)]/85",
+                                  )}
+                                >
+                                  <Link
+                                    to="/projects/$projectId/rooms/$roomId"
+                                    params={{ projectId: project.id, roomId: room.id }}
+                                    className="min-w-0 flex-1 no-underline"
                                     onClick={clearPendingDelete}
                                   >
-                                    <X size={14} />
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="destructive"
-                                    size="icon-xs"
-                                    aria-label={`Delete ${room.name}`}
-                                    disabled={actionsDisabled || deletingRoomId === room.id}
-                                    onClick={() => {
-                                      clearPendingDelete();
-                                      onDeleteRoom(room.id);
-                                    }}
-                                  >
-                                    {deletingRoomId === room.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                                  </Button>
+                                    <div className="space-y-1.5 text-left">
+                                      <div className="flex items-start justify-between gap-3">
+                                        <span className="min-w-0 flex-1">
+                                          <span className="block truncate text-sm font-medium">{room.name}</span>
+                                          <span className="block truncate text-xs text-muted-foreground">
+                                            {summarizePrompt(room.topic, 40)}
+                                          </span>
+                                        </span>
+                                        <RunningPresenceBadge
+                                          hasRunning={roomActivity?.hasRunning ?? false}
+                                          runningCount={roomActivity?.runningCount ?? 0}
+                                          idleLabel="Ready"
+                                        />
+                                      </div>
+                                      <ActivityTimestamp updatedAt={roomActivity?.updatedAt ?? room.createdAt} />
+                                    </div>
+                                  </Link>
+                                  {isPendingDelete("room", room.id) ? (
+                                    <div className="flex shrink-0 items-center gap-1 pt-0.5">
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-xs"
+                                        aria-label={`Cancel deleting ${room.name}`}
+                                        onClick={clearPendingDelete}
+                                      >
+                                        <X size={14} />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="destructive"
+                                        size="icon-xs"
+                                        aria-label={`Delete ${room.name}`}
+                                        disabled={actionsDisabled || deletingRoomId === room.id}
+                                        onClick={() => {
+                                          clearPendingDelete();
+                                          onDeleteRoom(room.id);
+                                        }}
+                                      >
+                                        {deletingRoomId === room.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-xs"
+                                      aria-label={`Delete ${room.name}`}
+                                      disabled={actionsDisabled}
+                                      onClick={() => setPendingDelete({ kind: "room", id: room.id })}
+                                    >
+                                      <Trash2 size={14} />
+                                    </Button>
+                                  )}
                                 </div>
-                              ) : (
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  aria-label={`Delete ${room.name}`}
-                                  disabled={actionsDisabled}
-                                  onClick={() => setPendingDelete({ kind: "room", id: room.id })}
-                                >
-                                  <Trash2 size={14} />
-                                </Button>
-                              )}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="rounded-lg bg-muted/25 px-2.5 py-1.5 text-sm text-muted-foreground">No rooms yet.</div>
-                        )}
-                      </div>
-                    ) : null}
+                              );
+                            })
+                          ) : (
+                            <div className="rounded-lg bg-muted/25 px-2.5 py-1.5 text-sm text-muted-foreground">No rooms yet.</div>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

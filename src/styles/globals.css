@@ -194,6 +194,25 @@
   min-height: 0;
 }
 
+@keyframes oa-breathe {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(0.9);
+    box-shadow: 0 0 0 0 rgba(90, 127, 255, 0.1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+    box-shadow: 0 0 0 0.36rem rgba(90, 127, 255, 0.12);
+  }
+}
+
+.animate-oa-breathe {
+  animation: oa-breathe 1.8s ease-in-out infinite;
+}
+
 @media (max-width: 1200px) {
   .room-grid {
     grid-template-columns: var(--oa-left-panel, minmax(15rem, 17rem)) minmax(0, 1fr);

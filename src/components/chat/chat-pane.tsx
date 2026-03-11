@@ -19,6 +19,66 @@ import type { MessageHandlerSummary } from "@/lib/message-feed";
 import { badgeToneProps, memberStatusBadgeProps } from "@/lib/ui-tone";
 import { cn, summarizePrompt } from "@/lib/utils";
 
+function PresenceBadge(props: { active: boolean; activeLabel: string; idleLabel: string; className?: string }) {
+  const { active, activeLabel, idleLabel, className } = props;
+
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]",
+        active
+          ? "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-badge)] text-[color:var(--tone-blueprint-foreground)] shadow-[0_0_0_1px_rgba(120,150,255,0.08)]"
+          : "border-border/80 bg-background/80 text-muted-foreground",
+        className,
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 rounded-full",
+          active
+            ? "animate-oa-breathe bg-[color:var(--tone-blueprint-foreground)] shadow-[0_0_0_0.24rem_rgba(113,113,255,0.12)]"
+            : "bg-muted-foreground/45",
+        )}
+      />
+      {active ? activeLabel : idleLabel}
+    </Badge>
+  );
+}
+
+function MemberStatusBadge(props: { status: TeamMember["status"] }) {
+  const { status } = props;
+  const statusBadge = memberStatusBadgeProps(status);
+  const isRunning = status === "running";
+  const isInterrupted = status === "interrupted";
+  const label = isRunning ? "Running" : isInterrupted ? "Interrupted" : "Ready";
+
+  return (
+    <Badge
+      variant={statusBadge.variant}
+      className={cn(
+        "gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]",
+        statusBadge.className,
+        isRunning && "shadow-[0_0_0_1px_rgba(120,150,255,0.08)]",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 rounded-full",
+          isRunning
+            ? "animate-oa-breathe bg-[color:var(--tone-blueprint-foreground)] shadow-[0_0_0_0.24rem_rgba(113,113,255,0.12)]"
+            : isInterrupted
+              ? "bg-[color:var(--tone-correction-foreground)]"
+              : "bg-muted-foreground/45",
+        )}
+      />
+      {label}
+    </Badge>
+  );
+}
+
 export function ChatPane(props: {
   leftSidebarCollapsed: boolean;
   rightSidebarCollapsed: boolean;
@@ -208,7 +268,7 @@ export function ChatPane(props: {
   }
 
   return (
-    <main className="flex h-full min-h-0 min-w-0 flex-col gap-3 overflow-hidden bg-background/70 px-3 py-3 md:px-4">
+    <main className="flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden bg-background/70 px-2 py-2 md:px-3">
       {!connected || error ? (
         <Card className="border border-destructive/30 bg-destructive/5 shadow-sm">
           <CardContent className="flex flex-col gap-2 p-4">
@@ -233,7 +293,7 @@ export function ChatPane(props: {
             onClick={onToggleRightSidebar}
           />
         ) : null}
-        <section className="flex h-full min-h-0 min-w-0 flex-col gap-3">
+        <section className="flex h-full min-h-0 min-w-0 flex-col gap-2">
           <RoomTopBar
             leftSidebarCollapsed={leftSidebarCollapsed}
             rightSidebarCollapsed={rightSidebarCollapsed}
@@ -246,7 +306,7 @@ export function ChatPane(props: {
             onToggleRightSidebar={onToggleRightSidebar}
           />
           <div className="relative min-h-0 flex-1">
-            <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-1 py-1 md:px-2" onScroll={updateScrollState}>
+            <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-0.5 py-0.5 md:px-1" onScroll={updateScrollState}>
               {roomChat.messages.map((message) => {
                 const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
                 const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
@@ -359,7 +419,6 @@ function RoomTopBar(props: {
   const templateBadge = badgeToneProps(template?.accentTone ?? "paper");
   const watcherBadge = badgeToneProps("correction");
   const neutralBadge = badgeToneProps("paper");
-  const statusBadgeLabel = activeStreamSummary ? "Running" : "Ready";
 
   return (
     <div className="flex flex-wrap items-start justify-between gap-4">
@@ -385,7 +444,7 @@ function RoomTopBar(props: {
             <Badge variant={watcherBadge.variant} className={watcherBadge.className}>
               {room.watcherIds.length} watchers
             </Badge>
-            <Badge variant="outline">{statusBadgeLabel}</Badge>
+            <PresenceBadge active={Boolean(activeStreamSummary)} activeLabel="Running" idleLabel="Ready" />
           </div>
           {room.topic.trim().length > 0 ? <p className="m-0 max-w-3xl text-sm text-muted-foreground">{room.topic}</p> : null}
           {activeStreamSummary ? <p className="m-0 text-sm text-muted-foreground">{activeStreamSummary}</p> : null}
@@ -405,6 +464,7 @@ function RoomMembersSidebar(props: {
   onDirectMessageMember: (memberId: string) => void;
 }) {
   const { room, snapshot, members, selectedMemberId, onOpenMember, onDirectMessageMember } = props;
+  const runningMembers = members.filter((member) => member.status === "running").length;
 
   return (
     <aside className="absolute inset-y-0 right-0 z-20 w-[min(23rem,84vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
@@ -416,7 +476,14 @@ function RoomMembersSidebar(props: {
                 <Users size={18} />
                 Members
               </p>
-              <Badge variant="outline">{members.length}</Badge>
+              <div className="flex items-center gap-2">
+                <PresenceBadge
+                  active={runningMembers > 0}
+                  activeLabel={runningMembers > 1 ? `${runningMembers} live` : "Live"}
+                  idleLabel="Ready"
+                />
+                <Badge variant="outline">{members.length}</Badge>
+              </div>
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
@@ -424,7 +491,6 @@ function RoomMembersSidebar(props: {
               {members.map((member) => {
                 const activity = getMemberActivitySummary(snapshot, member);
                 const activeTask = activity.activeTask;
-                const statusBadge = memberStatusBadgeProps(member.status);
                 const watcher = getWatcherForMember(room, snapshot, member.id);
                 const roleLabel = getMemberRoleLabel(member.handle);
                 const rolePalette = getMemberRolePalette(member.handle);
@@ -435,6 +501,8 @@ function RoomMembersSidebar(props: {
                       className={cn(
                         "flex min-h-[154px] flex-col gap-4 rounded-2xl border border-border bg-card px-4 py-4 text-left shadow-sm transition-colors hover:bg-muted/60",
                         member.id === selectedMemberId && "border-ring bg-accent/10 shadow-md",
+                        member.status === "running" &&
+                          "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)]/95 shadow-[0_18px_36px_-32px_rgba(62,118,255,0.95)]",
                       )}
                     >
                       <div className="flex items-start gap-3">
@@ -453,6 +521,7 @@ function RoomMembersSidebar(props: {
                               ) : null}
                               {member.isEntryMember ? <Badge variant="outline">Entry</Badge> : null}
                               {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
+                              {member.status === "running" ? <PresenceBadge active activeLabel="Live now" idleLabel="Ready" /> : null}
                             </div>
                             <p className="m-0 text-sm text-muted-foreground">{member.name}</p>
                           </div>
@@ -475,12 +544,8 @@ function RoomMembersSidebar(props: {
                       </div>
                       <div className="flex items-center justify-between gap-3 border-t border-border/70 pt-3">
                         <div className="space-y-1">
-                          <Badge variant={statusBadge.variant} className={cn("px-2 py-0.5 text-[10px]", statusBadge.className)}>
-                            {member.status}
-                          </Badge>
-                          <p className="m-0 text-xs text-muted-foreground">
-                            {activity.statusLine}
-                          </p>
+                          <MemberStatusBadge status={member.status} />
+                          <p className="m-0 text-xs text-muted-foreground">{activity.statusLine}</p>
                         </div>
                         <div className="flex items-center gap-2">
                           <Button size="sm" type="button" variant="outline" onClick={() => onDirectMessageMember(member.id)}>
