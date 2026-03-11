@@ -72,7 +72,18 @@ describe("workspace persistence state normalization", () => {
         room_a: ["message_a", "message_b", "message_a"],
         room_b: ["message_b"],
       },
-      tasks: {},
+      tasks: {
+        task_watch: {
+          id: "task_watch",
+          roomId: "room_a",
+          memberId: "member_a",
+          sourceMessageId: "message_watch",
+          title: "Review watcher digest",
+          status: "running",
+          startedAt: "2026-03-10T10:00:02.000Z",
+          updatedAt: "2026-03-10T10:00:02.000Z",
+        },
+      },
       taskTraces: {},
       taskTraceOrderByTask: {},
       watchers: {
@@ -175,7 +186,8 @@ describe("workspace persistence state normalization", () => {
           observeAllRoomMessages: false,
           acceptsDirectMessages: true,
           isEntryMember: true,
-          status: "idle",
+          status: "running",
+          activeTaskId: "task_watch",
         },
       },
       messages: {},
@@ -211,5 +223,100 @@ describe("workspace persistence state normalization", () => {
       [CODEX_ACP_MODE_ENV_KEY]: CODEX_ACP_DEFAULT_MODE,
       OA_TEST: "2",
     });
+  });
+
+  it("hides legacy public watcher digests on load", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-persistence-watch-visibility-"));
+    const filePath = path.join(directory, "state.json");
+
+    const snapshot = {
+      projects: {},
+      projectOrder: [],
+      rooms: {
+        room_a: {
+          id: "room_a",
+          projectId: "project_a",
+          name: "A",
+          topic: "topic a",
+          templateId: "template_a",
+          memberIds: ["member_a"],
+          watcherIds: ["watcher_a"],
+          entryMemberId: "member_a",
+          createdAt: "2026-03-10T10:00:00.000Z",
+        },
+      },
+      roomOrderByProject: {},
+      templates: {},
+      templateOrder: [],
+      members: {
+        member_a: {
+          id: "member_a",
+          roomId: "room_a",
+          blueprintId: "blueprint_a",
+          name: "Member A",
+          handle: "member-a",
+          summary: "summary",
+          prompt: "prompt",
+          accentTone: "paper",
+          skills: [],
+          provider: {
+            kind: "codex-acp",
+            label: "Codex ACP",
+            command: CODEX_ACP_NPX_COMMAND,
+            args: CODEX_ACP_NPX_ARGS,
+            env: {
+              [CODEX_ACP_MODE_ENV_KEY]: CODEX_ACP_DEFAULT_MODE,
+            },
+            capabilities: ["prompt"],
+          },
+          observeAllRoomMessages: false,
+          acceptsDirectMessages: true,
+          isEntryMember: true,
+          status: "idle",
+        },
+      },
+      messages: {
+        message_watch: {
+          id: "message_watch",
+          roomId: "room_a",
+          author: { kind: "system", id: "system", label: "Watcher" },
+          content: "Legacy watcher digest",
+          createdAt: "2026-03-10T10:00:01.000Z",
+          transport: "watch-digest",
+          status: "sent",
+          visibility: "public",
+          mentionedMemberIds: [],
+          recipientMemberIds: ["member_a"],
+        },
+      },
+      messageOrderByRoom: {
+        room_a: ["message_watch"],
+      },
+      tasks: {},
+      taskTraces: {},
+      taskTraceOrderByTask: {},
+      watchers: {
+        watcher_a: {
+          id: "watcher_a",
+          roomId: "room_a",
+          memberId: "member_a",
+          enabled: true,
+          intervalMinutes: 10,
+          lastConsumedMessageId: "message_watch",
+        },
+      },
+      selection: {
+        roomId: "room_a",
+      },
+      currentUserName: "You",
+    } satisfies WorkspaceSnapshot;
+
+    await writeFile(filePath, JSON.stringify({ savedAt: "2026-03-10T10:00:04.000Z", snapshot }, null, 2), "utf8");
+
+    const persistence = new WorkspacePersistence(filePath);
+    const loaded = await persistence.load();
+
+    expect(loaded?.messages.message_watch).toBeUndefined();
+    expect(loaded?.messageOrderByRoom.room_a ?? []).not.toContain("message_watch");
   });
 });

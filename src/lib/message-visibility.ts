@@ -1,6 +1,10 @@
 import type { ChatMessage, MessageVisibility } from "@/domain/model";
 
 export function resolveMessageVisibility(message: ChatMessage): MessageVisibility {
+  if (message.transport === "watch-digest") {
+    return "internal";
+  }
+
   if (message.visibility) {
     return message.visibility;
   }

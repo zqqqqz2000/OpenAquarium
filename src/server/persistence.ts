@@ -88,8 +88,9 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
   const normalizeMessage = (message: ChatMessage): ChatMessage => ({
     ...message,
     visibility:
-      message.visibility
-      ?? (message.author.kind === "member" && message.taskId ? "internal" : "public"),
+      message.transport === "watch-digest"
+        ? "internal"
+        : message.visibility ?? (message.author.kind === "member" && message.taskId ? "internal" : "public"),
     quotedMemberIds: message.quotedMemberIds ?? [],
   });
 

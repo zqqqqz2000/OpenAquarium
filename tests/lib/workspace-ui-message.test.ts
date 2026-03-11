@@ -39,4 +39,27 @@ describe("workspace-ui-message mapping", () => {
 
     expect(messages.some((message) => message.parts.some((part) => part.type === "text" && part.text.includes("只在私聊里回复")))).toBe(false);
   });
+
+  it("hides persisted public watcher digests from the main room transcript", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+
+    snapshot.messages.message_watch_legacy = {
+      id: "message_watch_legacy",
+      roomId: room.id,
+      author: { kind: "system", id: "system", label: "Watcher" },
+      content: "Legacy watcher digest",
+      createdAt: "2026-03-10T10:10:00.000Z",
+      transport: "watch-digest",
+      status: "sent",
+      visibility: "public",
+      mentionedMemberIds: [],
+      recipientMemberIds: [room.memberIds[0]],
+    };
+    snapshot.messageOrderByRoom[room.id] = [...snapshot.messageOrderByRoom[room.id], "message_watch_legacy"];
+
+    const messages = mapRoomMessagesToUIMessages(snapshot, room);
+
+    expect(messages.some((message) => message.parts.some((part) => part.type === "text" && part.text.includes("Legacy watcher digest")))).toBe(false);
+  });
 });
