@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { createACPProvider } from "@mcpc-tech/acp-ai-provider";
-import { convertToModelMessages, generateText } from "ai";
+import { convertToModelMessages, generateText, streamText, type UIMessageChunk } from "ai";
 
 import type {
   GlobalWorkspaceConfig,
@@ -9,6 +9,7 @@ import type {
   TeamTemplate,
   TemplateStudioChatMessage,
 } from "@/domain/model";
+import type { TemplateStudioChatDataParts, TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import { findProviderModelProfile } from "@/lib/provider-model-profiles";
 
 export interface TemplateStudioChatRequest {
@@ -23,6 +24,31 @@ export interface TemplateStudioChatRequest {
 export interface TemplateStudioChatResult {
   assistantMessage: string;
   modelProfileId: string;
+}
+
+export interface TemplateStudioChatStreamRequest {
+  configDirectory: string;
+  templateId: string;
+  messages: TemplateStudioUIMessage[];
+  templates: TeamTemplate[];
+  globalConfig: GlobalWorkspaceConfig;
+  modelProfileId?: string;
+  abortSignal?: AbortSignal;
+}
+
+export interface TemplateStudioChatStreamResult {
+  consumeStream(): PromiseLike<void>;
+  toUIMessageStream(options: {
+    originalMessages?: TemplateStudioUIMessage[];
+    sendReasoning?: boolean;
+    sendSources?: boolean;
+  }): ReadableStream<UIMessageChunk<unknown, TemplateStudioChatDataParts>>;
+}
+
+export interface TemplateStudioChatStreamRun {
+  result: TemplateStudioChatStreamResult;
+  modelProfileId: string;
+  cleanup(): Promise<void>;
 }
 
 function describeTemplates(templates: TeamTemplate[]): string {
@@ -128,53 +154,82 @@ function normalizeChatMessages(messages: TemplateStudioChatMessage[]): TemplateS
     .filter((message) => message.content.length > 0);
 }
 
+async function resolveChatExecution(args: {
+  configDirectory: string;
+  templateId: string;
+  templates: TeamTemplate[];
+  globalConfig: GlobalWorkspaceConfig;
+  modelProfileId?: string;
+  messages: TemplateStudioUIMessage[];
+}): Promise<{
+  selectedProfile: ProviderModelProfile;
+  provider: ReturnType<typeof createACPProvider>;
+  modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
+}> {
+  const selectedProfile =
+    findProviderModelProfile(args.globalConfig.modelProfiles, args.modelProfileId)
+    ?? findProviderModelProfile(args.globalConfig.modelProfiles, args.globalConfig.templateChatModelProfileId)
+    ?? args.globalConfig.modelProfiles[0];
+
+  if (!selectedProfile) {
+    throw new Error("Template Studio requires at least one configured model profile.");
+  }
+
+  if (args.messages.length === 0) {
+    throw new Error("Template Studio chat requires at least one message.");
+  }
+
+  const provider = createACPProvider({
+    command: selectedProfile.binding.command,
+    args: selectedProfile.binding.args,
+    env: selectedProfile.binding.env,
+    session: {
+      cwd: selectedProfile.binding.workingDirectory ?? args.configDirectory,
+      mcpServers: [],
+    },
+  });
+
+  const modelMessages = await convertToModelMessages(args.messages, {
+    ignoreIncompleteToolCalls: true,
+  });
+
+  return {
+    selectedProfile,
+    provider,
+    modelMessages,
+  };
+}
+
 export interface TemplateStudioChatServiceLike {
   chat(input: TemplateStudioChatRequest): Promise<TemplateStudioChatResult>;
+  stream(input: TemplateStudioChatStreamRequest): Promise<TemplateStudioChatStreamRun>;
   dispose(): Promise<void>;
 }
 
 export class TemplateStudioChatService implements TemplateStudioChatServiceLike {
   async chat(input: TemplateStudioChatRequest): Promise<TemplateStudioChatResult> {
-    const selectedProfile =
-      findProviderModelProfile(input.globalConfig.modelProfiles, input.modelProfileId)
-      ?? findProviderModelProfile(input.globalConfig.modelProfiles, input.globalConfig.templateChatModelProfileId)
-      ?? input.globalConfig.modelProfiles[0];
+    const messages = normalizeChatMessages(input.messages).map((message, index) => ({
+      id: `template-studio-legacy-${index}`,
+      role: message.role,
+      parts: [
+        {
+          type: "text" as const,
+          text: message.content,
+        },
+      ],
+    }));
 
-    if (!selectedProfile) {
-      throw new Error("Template Studio requires at least one configured model profile.");
-    }
-
-    const messages = normalizeChatMessages(input.messages);
-    if (messages.length === 0) {
-      throw new Error("Template Studio chat requires at least one message.");
-    }
-
-    const provider = createACPProvider({
-      command: selectedProfile.binding.command,
-      args: selectedProfile.binding.args,
-      env: selectedProfile.binding.env,
-      session: {
-        cwd: selectedProfile.binding.workingDirectory ?? input.configDirectory,
-        mcpServers: [],
-      },
+    const { modelMessages, provider, selectedProfile } = await resolveChatExecution({
+      configDirectory: input.configDirectory,
+      templateId: input.templateId,
+      templates: input.templates,
+      globalConfig: input.globalConfig,
+      modelProfileId: input.modelProfileId,
+      messages,
     });
     const model = provider.languageModel();
 
     try {
-      const modelMessages = await convertToModelMessages(
-        messages.map((message) => ({
-          role: message.role,
-          parts: [
-            {
-              type: "text" as const,
-              text: message.content,
-            },
-          ],
-        })),
-        {
-          ignoreIncompleteToolCalls: true,
-        },
-      );
       const result = await generateText({
         model,
         system: buildTemplateStudioSystemPrompt({
@@ -193,6 +248,38 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
     } finally {
       provider.cleanup();
     }
+  }
+
+  async stream(input: TemplateStudioChatStreamRequest): Promise<TemplateStudioChatStreamRun> {
+    const { modelMessages, provider, selectedProfile } = await resolveChatExecution({
+      configDirectory: input.configDirectory,
+      templateId: input.templateId,
+      templates: input.templates,
+      globalConfig: input.globalConfig,
+      modelProfileId: input.modelProfileId,
+      messages: input.messages,
+    });
+    const model = provider.languageModel();
+    const result = streamText({
+      model,
+      system: buildTemplateStudioSystemPrompt({
+        configDirectory: input.configDirectory,
+        templateId: input.templateId,
+        templates: input.templates,
+        selectedProfile,
+      }),
+      messages: modelMessages,
+      abortSignal: input.abortSignal,
+    });
+
+    return {
+      result,
+      modelProfileId: selectedProfile.id,
+      cleanup: () => {
+        provider.cleanup();
+        return Promise.resolve();
+      },
+    };
   }
 
   dispose(): Promise<void> {

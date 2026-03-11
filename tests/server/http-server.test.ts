@@ -4,12 +4,14 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { DefaultChatTransport } from "ai";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
+import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import { OpenAquariumGlobalConfigManager } from "@/server/global-config";
 import { WorkspacePersistence } from "@/server/persistence";
-import { handleWorkspaceJsonApiRequest } from "@/server/http-server";
+import { handleWorkspaceJsonApiRequest, startWorkspaceHttpServer } from "@/server/http-server";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
 import type { ExecutorCallbacks, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 
@@ -50,6 +52,14 @@ describe("workspace http api routing", () => {
         chat: () => Promise.resolve({
           assistantMessage: "Template updated from chat.",
           modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
+        }),
+        stream: () => Promise.resolve({
+          modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
+          result: {
+            consumeStream: () => Promise.resolve(),
+            toUIMessageStream: () => new ReadableStream(),
+          },
+          cleanup: () => Promise.resolve(),
         }),
         dispose: () => Promise.resolve(),
       },
@@ -329,6 +339,110 @@ describe("workspace http api routing", () => {
     expect(createRoomPayload.snapshot.rooms[createRoomPayload.roomId]?.topic).toBe("");
     expect(globalConfigPayload.globalConfig.templateChatModelProfileId).toBe(loadedGlobalConfig.config.templateChatModelProfileId);
     expect(templateChatPayload.assistantMessage).toBe("Template updated from chat.");
+  });
+
+  it("streams template studio chat chunks and emits a sync payload", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-stream-"));
+    const configDirPath = path.join(workspaceRoot, ".config");
+    const globalConfigManager = new OpenAquariumGlobalConfigManager(configDirPath);
+    const loadedGlobalConfig = await globalConfigManager.load();
+    const runtime = await WorkspaceRuntime.create({
+      workspaceRoot,
+      stateFilePath: path.join(workspaceRoot, ".openaquarium", "state.json"),
+      configDirPath,
+      executorFactory: () => new EchoExecutor(),
+      templateStudioChatService: {
+        chat: () => Promise.resolve({
+          assistantMessage: "unused",
+          modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
+        }),
+        stream: ({ templates, templateId }) => {
+          const nextTemplates = templates.map((template) =>
+            template.id === templateId
+              ? {
+                  ...template,
+                  description: "Stream updated description",
+                }
+              : template,
+          );
+
+          return globalConfigManager.saveTemplates(nextTemplates).then(() => ({
+            modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
+            result: {
+              consumeStream: () => Promise.resolve(),
+              toUIMessageStream: () =>
+                new ReadableStream({
+                  start(controller) {
+                    controller.enqueue({ type: "start", messageId: "assistant-stream" });
+                    controller.enqueue({ type: "text-start", id: "text-stream" });
+                    controller.enqueue({ type: "text-delta", id: "text-stream", delta: "Streaming " });
+                    controller.enqueue({ type: "text-delta", id: "text-stream", delta: "template chat." });
+                    controller.enqueue({ type: "text-end", id: "text-stream" });
+                    controller.enqueue({ type: "finish", finishReason: "stop" });
+                    controller.close();
+                  },
+                }),
+            },
+            cleanup: () => Promise.resolve(),
+          }));
+        },
+        dispose: () => Promise.resolve(),
+      },
+    });
+    runtimes.push(runtime);
+
+    const existingTemplate = runtime.getSnapshot().templates["template-product-pod"];
+    expect(existingTemplate).toBeDefined();
+    if (!existingTemplate) {
+      throw new Error("Expected product pod template");
+    }
+
+    const server = await startWorkspaceHttpServer({
+      runtime,
+      host: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      const transport = new DefaultChatTransport<TemplateStudioUIMessage>({
+        api: `http://127.0.0.1:${server.port}/api/template-studio/chat`,
+      });
+      const stream = await transport.sendMessages({
+        chatId: "template-chat-test",
+        trigger: "submit-message",
+        messageId: undefined,
+        abortSignal: undefined,
+        headers: undefined,
+        metadata: undefined,
+        body: {
+          templateId: existingTemplate.id,
+          modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId,
+        },
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            parts: [{ type: "text", text: "Update the selected template." }],
+          },
+        ],
+      });
+
+      const reader = stream.getReader();
+      const chunkTypes: string[] = [];
+      while (true) {
+        const next = await reader.read();
+        if (next.done) {
+          break;
+        }
+        chunkTypes.push(next.value.type);
+      }
+
+      expect(chunkTypes).toContain("text-delta");
+      expect(chunkTypes).toContain("data-templateStudioSync");
+      expect(runtime.getSnapshot().templates[existingTemplate.id]?.description).toBe("Stream updated description");
+    } finally {
+      await server.close();
+    }
   });
 
   it("rejects legacy firstPrompt payloads for project and room creation", async () => {

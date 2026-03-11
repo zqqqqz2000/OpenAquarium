@@ -627,6 +627,25 @@ describe("WorkspaceRuntime", () => {
           modelProfileId: loaded.config.templateChatModelProfileId ?? loaded.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
         }));
       },
+      stream: ({ templates, templateId }: { templates: typeof loaded.templates; templateId: string }) => {
+        const nextTemplates = templates.map((template) =>
+          template.id === templateId
+            ? {
+                ...template,
+                description: "Updated from template studio chat",
+              }
+            : template,
+        );
+
+        return globalConfigManager.saveTemplates(nextTemplates).then(() => ({
+          modelProfileId: loaded.config.templateChatModelProfileId ?? loaded.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
+          result: {
+            consumeStream: () => Promise.resolve(),
+            toUIMessageStream: () => new ReadableStream(),
+          },
+          cleanup: () => Promise.resolve(),
+        }));
+      },
       dispose: () => Promise.resolve(),
     };
     const runtime = await WorkspaceRuntime.create({

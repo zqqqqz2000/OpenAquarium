@@ -96,7 +96,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const updateMemberConfig = useWorkspaceStore((state) => state.updateMemberConfig);
   const updateTemplate = useWorkspaceStore((state) => state.updateTemplate);
   const updateGlobalConfig = useWorkspaceStore((state) => state.updateGlobalConfig);
-  const sendTemplateStudioChat = useWorkspaceStore((state) => state.sendTemplateStudioChat);
+  const replaceRemoteState = useWorkspaceStore((state) => state.replaceRemoteState);
   const setEntryMember = useWorkspaceStore((state) => state.setEntryMember);
   const upsertWatcher = useWorkspaceStore((state) => state.upsertWatcher);
   const sendUserMessage = useWorkspaceStore((state) => state.sendUserMessage);
@@ -335,7 +335,11 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
         onDeleteTemplate={(templateIdToDelete) => handleDeleteTemplate(templateIdToDelete)}
         onSaveConfig={(input) => void updateTemplate(input)}
         onSaveGlobalConfig={(input) => void updateGlobalConfig(input)}
-        onSendChat={(input) => sendTemplateStudioChat(input)}
+        onApplyChatSync={(payload) =>
+          replaceRemoteState({
+            snapshot: payload.snapshot,
+            globalConfig: payload.globalConfig,
+          })}
       />
     </>
   );

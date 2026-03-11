@@ -50,6 +50,7 @@ import { getRoomTranscriptFilePath, syncRoomTranscriptFiles } from "./room-trans
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
 import { createDefaultGlobalWorkspaceConfig, findProviderModelProfile, resolveProviderBindingFromProfile } from "../lib/provider-model-profiles";
+import type { TemplateStudioUIMessage } from "../lib/template-studio-ui-message";
 
 type SnapshotListener = (snapshot: WorkspaceSnapshot) => void;
 type TemplateGenerator = (brief: string, args: { workspaceRoot: string; references: TeamTemplate[] }) => Promise<TeamTemplate>;
@@ -69,6 +70,13 @@ export interface TaskStreamCallbacks {
   onStatus?(event: TaskStreamRoute & { summary: string }): Promise<void> | void;
   onComplete?(event: TaskStreamRoute & { content: string; messageId?: string; stopReason: string }): Promise<void> | void;
   onError?(event: TaskStreamRoute & { message: string; messageId?: string }): Promise<void> | void;
+}
+
+export interface TemplateStudioChatStreamSession {
+  modelProfileId: string;
+  result: Awaited<ReturnType<TemplateStudioChatServiceLike["stream"]>>["result"];
+  finalize(): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; modelProfileId: string }>;
+  cleanup(): Promise<void>;
 }
 
 interface TaskObserverEntry {
@@ -567,6 +575,44 @@ export class WorkspaceRuntime {
       modelProfileId: assistantReply.modelProfileId,
       snapshot: this.snapshot,
       globalConfig: this.globalConfig,
+    };
+  }
+
+  async streamTemplateStudioChat(input: {
+    templateId: string;
+    messages: TemplateStudioUIMessage[];
+    modelProfileId?: string;
+    abortSignal?: AbortSignal;
+  }): Promise<TemplateStudioChatStreamSession> {
+    const streamRun = await this.templateStudioChatService.stream({
+      configDirectory: this.globalConfigManager.directory,
+      templateId: input.templateId,
+      messages: input.messages,
+      templates: cloneTemplates(this.snapshot),
+      globalConfig: this.globalConfig,
+      modelProfileId: input.modelProfileId,
+      abortSignal: input.abortSignal,
+    });
+
+    return {
+      modelProfileId: streamRun.modelProfileId,
+      result: streamRun.result,
+      finalize: async () => {
+        const reloaded = await this.globalConfigManager.load();
+        this.globalConfig = reloaded.config;
+        const previous = this.snapshot;
+        const next = mergeGlobalTemplatesIntoSnapshot(previous, reloaded.templates);
+        await this.applySnapshot(previous, next);
+
+        return {
+          snapshot: this.snapshot,
+          globalConfig: this.globalConfig,
+          modelProfileId: streamRun.modelProfileId,
+        };
+      },
+      cleanup: async () => {
+        await streamRun.cleanup();
+      },
     };
   }
 

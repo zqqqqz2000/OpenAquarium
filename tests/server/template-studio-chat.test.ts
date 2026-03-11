@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { GlobalWorkspaceConfig, ProviderModelProfile, TeamTemplate } from "@/domain/model";
+import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 
-const { cleanupMock, generateTextMock, languageModelMock } = vi.hoisted(() => ({
+const { cleanupMock, generateTextMock, languageModelMock, streamTextMock, streamConsumeMock, streamUiMessageMock } = vi.hoisted(() => ({
   cleanupMock: vi.fn(),
   languageModelMock: vi.fn(() => ({ provider: "mock" })),
   generateTextMock: vi.fn(),
+  streamConsumeMock: vi.fn(),
+  streamUiMessageMock: vi.fn(),
+  streamTextMock: vi.fn(),
 }));
 
 vi.mock("@mcpc-tech/acp-ai-provider", () => ({
@@ -20,6 +24,7 @@ vi.mock("ai", async (importOriginal) => {
   return {
     ...(actual as object),
     generateText: generateTextMock,
+    streamText: streamTextMock,
   };
 });
 
@@ -84,8 +89,15 @@ describe("TemplateStudioChatService", () => {
     cleanupMock.mockReset();
     languageModelMock.mockClear();
     generateTextMock.mockReset();
+    streamConsumeMock.mockReset();
+    streamUiMessageMock.mockReset();
+    streamTextMock.mockReset();
     generateTextMock.mockResolvedValue({
       text: "updated",
+    });
+    streamTextMock.mockReturnValue({
+      consumeStream: streamConsumeMock,
+      toUIMessageStream: streamUiMessageMock,
     });
   });
 
@@ -142,6 +154,47 @@ describe("TemplateStudioChatService", () => {
     expect(generateTextCall?.tools).toBeUndefined();
     expect(generateTextCall?.system).toContain("Use the ACP session's normal file-editing ability in the working directory.");
     expect(generateTextCall?.system).toContain("[Selected Team Template]");
+    expect(cleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("builds a plain ACP-backed streamText call for streaming template chat", async () => {
+    const { TemplateStudioChatService } = await import("@/server/template-studio-chat");
+    const profile = createProfile("codex-acp");
+    const messages: TemplateStudioUIMessage[] = [
+      {
+        id: "user-1",
+        role: "user",
+        parts: [{ type: "text", text: "Stream the selected template update." }],
+      },
+    ];
+
+    const service = new TemplateStudioChatService();
+    const result = await service.stream({
+      configDirectory: "/tmp/openaquarium-config",
+      templateId: "template_1",
+      messages,
+      templates: [createTemplate()],
+      globalConfig: createGlobalConfig(profile),
+      modelProfileId: profile.id,
+    });
+
+    const streamTextCall = streamTextMock.mock.calls[0]?.[0] as {
+      tools?: unknown;
+      system: string;
+      messages: Array<{ role: string }>;
+      abortSignal?: AbortSignal;
+    } | undefined;
+
+    expect(result.modelProfileId).toBe(profile.id);
+    expect(streamTextCall?.tools).toBeUndefined();
+    expect(streamTextCall?.system).toContain("Use the ACP session's normal file-editing ability in the working directory.");
+    expect(streamTextCall?.messages).toHaveLength(1);
+    expect(streamTextCall?.messages[0]?.role).toBe("user");
+    expect(streamTextCall?.messages[0]).toMatchObject({
+      content: [{ type: "text", text: "Stream the selected template update." }],
+    });
+
+    await result.cleanup();
     expect(cleanupMock).toHaveBeenCalledTimes(1);
   });
 });

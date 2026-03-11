@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
-import { Bot, LoaderCircle, MessageSquare, Plus, Save, Settings2, Sparkles, Star, Trash2, X } from "lucide-react";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport, type ChatTransport } from "ai";
+
+import { ArrowUp, Bot, LoaderCircle, MessageSquare, Plus, Save, Settings2, Sparkles, Star, Trash2, X } from "lucide-react";
 
 import type {
   GlobalWorkspaceConfig,
   TeamTemplate,
-  TemplateStudioChatMessage,
   UpdateGlobalConfigInput,
   UpdateTemplateInput,
 } from "@/domain/model";
 import { addEmptyModelProfileDraft, buildGlobalConfigInput, createGlobalConfigDraft, type ModelProfileDraft } from "@/lib/global-config-draft";
 import { addEmptySkillDraft, type SkillDraft } from "@/lib/member-config-draft";
+import { resolveWorkspaceRuntimeBaseUrl } from "@/lib/runtime-client";
 import { buildTemplateConfigInput, createTemplateConfigDraft, type TemplateConfigDraft, type TemplateMemberDraft } from "@/lib/template-config-draft";
+import type { TemplateStudioChatDataParts, TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
+import { getTemplateStudioMessageText, sanitizeTemplateStudioMessages } from "@/lib/template-studio-ui-message";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,12 +43,6 @@ import { badgeToneProps } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
 
 const ACCENT_TONES = ["paper", "postit", "blueprint", "correction"] as const;
-
-interface TemplateStudioChatEntry {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-}
 
 function ScopeNote(props: { directory: string }) {
   return (
@@ -179,6 +178,272 @@ function ModelProfileEditor(props: {
   );
 }
 
+function TemplateStudioChatPanel(props: {
+  template: TeamTemplate;
+  globalConfig: GlobalWorkspaceConfig;
+  input: string;
+  initialMessages: TemplateStudioUIMessage[];
+  modelProfileId?: string;
+  stoppedMessageId?: string;
+  chatTransport?: ChatTransport<TemplateStudioUIMessage>;
+  onInputChange: (value: string) => void;
+  onMessagesChange: (messages: TemplateStudioUIMessage[]) => void;
+  onModelProfileChange: (modelProfileId: string) => void;
+  onStoppedMessageChange: (messageId?: string) => void;
+  onSync: (payload: TemplateStudioChatDataParts["templateStudioSync"]) => void;
+}) {
+  const {
+    template,
+    globalConfig,
+    input,
+    initialMessages,
+    modelProfileId,
+    stoppedMessageId,
+    chatTransport,
+    onInputChange,
+    onMessagesChange,
+    onModelProfileChange,
+    onStoppedMessageChange,
+    onSync,
+  } = props;
+  const chatLogRef = useRef<HTMLDivElement | null>(null);
+  const onMessagesChangeRef = useRef(onMessagesChange);
+  const normalizedInitialMessages = useMemo(
+    () => sanitizeTemplateStudioMessages(initialMessages),
+    [initialMessages],
+  );
+  const messagesRef = useRef(normalizedInitialMessages);
+  const resolvedTransport = useMemo<ChatTransport<TemplateStudioUIMessage>>(
+    () =>
+      chatTransport
+      ?? new DefaultChatTransport<TemplateStudioUIMessage>({
+        api: `${resolveWorkspaceRuntimeBaseUrl()}/api/template-studio/chat`,
+      }),
+    [chatTransport],
+  );
+
+  const {
+    messages,
+    setMessages,
+    status,
+    error,
+    sendMessage,
+    stop,
+  } = useChat<TemplateStudioUIMessage>({
+    id: `template-studio-${template.id}`,
+    messages: normalizedInitialMessages,
+    transport: resolvedTransport,
+    onData(part) {
+      if (part.type !== "data-templateStudioSync") {
+        return;
+      }
+
+      onStoppedMessageChange(undefined);
+      onSync(part.data as TemplateStudioChatDataParts["templateStudioSync"]);
+    },
+    onFinish({ message, isAbort }) {
+      const messageText = getTemplateStudioMessageText(message).trim();
+      if (isAbort && message.parts.length === 0) {
+        const sanitizedMessages = sanitizeTemplateStudioMessages(messagesRef.current);
+        if (sanitizedMessages !== messagesRef.current) {
+          setMessages(sanitizedMessages);
+        }
+        onStoppedMessageChange(undefined);
+        return;
+      }
+
+      if (isAbort && messageText.length > 0) {
+        onStoppedMessageChange(message.id);
+        return;
+      }
+
+      if (!isAbort) {
+        onStoppedMessageChange(undefined);
+      }
+    },
+  });
+
+  const isBusy = status === "submitted" || status === "streaming";
+  const pendingWithoutAssistant = isBusy && messages[messages.length - 1]?.role !== "assistant";
+
+  useEffect(() => {
+    onMessagesChangeRef.current = onMessagesChange;
+  }, [onMessagesChange]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+    onMessagesChangeRef.current(messages);
+  }, [messages]);
+
+  useEffect(() => {
+    const container = chatLogRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
+  }, [messages, pendingWithoutAssistant]);
+
+  useEffect(() => () => {
+    void stop();
+  }, [stop]);
+
+  const submit = async (): Promise<void> => {
+    const nextInput = input.trim();
+    if (nextInput.length === 0 || isBusy) {
+      return;
+    }
+
+    onInputChange("");
+    onStoppedMessageChange(undefined);
+    try {
+      const sanitizedMessages = sanitizeTemplateStudioMessages(messages);
+      if (sanitizedMessages !== messages) {
+        setMessages(sanitizedMessages);
+      }
+
+      await sendMessage(
+        { text: nextInput },
+        {
+          body: {
+            templateId: template.id,
+            modelProfileId,
+          },
+        },
+      );
+    } catch (caughtError) {
+      void caughtError;
+      onInputChange(nextInput);
+    }
+  };
+
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    void submit();
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4 pt-4">
+      <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Bot size={18} />
+            <p className="m-0 text-base font-semibold tracking-tight">Team template chat</p>
+          </div>
+          <p className="m-0 text-sm leading-6 text-muted-foreground">
+            By default, the model edits the selected team template, <span className="font-medium">{template.name}</span>. You can also explicitly ask it to create a new team template or change a different one. It can read and update the files under {globalConfig.directory}, and each new turn includes the prior chat history.
+          </p>
+        </div>
+      </section>
+
+      <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
+        <div ref={chatLogRef} className="min-h-0 flex-1 overflow-y-auto pr-1" data-testid="template-chat-log" aria-live="polite">
+          {messages.length === 0 ? (
+            <div className="flex h-full min-h-[16rem] items-center justify-center rounded-xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+              Short requests work too. Try “把 checker 改成 QA reviewer”, “加一个 scribe 负责总结”, or “新建一个只包含 lead 和 builder 的 team template”.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {messages.map((message) => {
+                const content = getTemplateStudioMessageText(message);
+                const showStoppedBadge = message.role === "assistant" && stoppedMessageId === message.id;
+
+                if (content.trim().length === 0 && !showStoppedBadge) {
+                  return null;
+                }
+
+                return (
+                  <div
+                    key={message.id}
+                    className={cn(
+                      "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm",
+                      message.role === "user"
+                        ? "ml-auto bg-primary text-primary-foreground"
+                        : "bg-muted text-foreground",
+                    )}
+                  >
+                    {content}
+                    {showStoppedBadge ? <p className="m-0 mt-2 text-xs text-muted-foreground">Stopped before completion.</p> : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {pendingWithoutAssistant ? (
+            <div className="mt-3 max-w-[85%] rounded-2xl border border-border/70 bg-muted/60 px-4 py-3 text-sm text-foreground shadow-sm" data-testid="template-chat-pending">
+              <div className="flex items-start gap-3">
+                <LoaderCircle size={16} className="mt-0.5 animate-spin text-muted-foreground" />
+                <div className="space-y-1">
+                  <p className="m-0 font-medium">Updating team template…</p>
+                  <p className="m-0 text-sm text-muted-foreground">
+                    Codex ACP may take around 30 seconds while it reads and edits the config files.
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {error ? <p className="m-0 text-sm text-destructive">{error.message}</p> : null}
+
+        <div className="overflow-visible rounded-[1.75rem] border border-border/70 bg-card/95 shadow-sm">
+          <div className="flex flex-col gap-2 p-3 md:p-3.5">
+            <Textarea
+              aria-label="Template chat input"
+              className="min-h-20 resize-none border-0 bg-transparent px-0 py-0 text-[1.05rem] leading-7 shadow-none ring-0 focus-visible:border-transparent focus-visible:ring-0"
+              placeholder="Tell Team Template Studio what to change. Press Enter to send, Shift+Enter for newline."
+              value={input}
+              onChange={(event) => onInputChange(event.currentTarget.value)}
+              onKeyDown={handleComposerKeyDown}
+            />
+            <div className="flex flex-col gap-3 border-t border-border/50 pt-2 md:flex-row md:items-end md:justify-between">
+              <div className="min-w-0 flex-1">
+                <p className="m-0 text-xs text-muted-foreground">
+                  The model can read `templates.json` and `template.schema.json` under {globalConfig.directory}. Keep the prompt short: by default it edits the selected template, and if you want a new template just say so directly.
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-col gap-2 md:min-w-[19rem]">
+                <label className="flex flex-col gap-2">
+                  <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Chat model</span>
+                  <Select value={modelProfileId} onValueChange={onModelProfileChange} disabled={isBusy}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select chat model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {globalConfig.modelProfiles.map((profile) => (
+                        <SelectItem key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
+                <Button
+                  onClick={() => {
+                    if (isBusy) {
+                      void stop();
+                      return;
+                    }
+                    void submit();
+                  }}
+                  disabled={!isBusy && input.trim().length === 0}
+                >
+                  {isBusy ? <X size={16} /> : <ArrowUp size={16} />}
+                  {isBusy ? "Stop" : "Send change request"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function TemplateStudioDialog(props: {
   open: boolean;
   templates: TeamTemplate[];
@@ -189,11 +454,8 @@ export function TemplateStudioDialog(props: {
   onDeleteTemplate: (templateId: string) => void | Promise<void>;
   onSaveConfig: (input: UpdateTemplateInput) => void | Promise<void>;
   onSaveGlobalConfig: (input: UpdateGlobalConfigInput) => void | Promise<void>;
-  onSendChat: (input: {
-    templateId: string;
-    messages: TemplateStudioChatMessage[];
-    modelProfileId?: string;
-  }) => Promise<{ assistantMessage: string; modelProfileId: string }>;
+  onApplyChatSync?: (payload: TemplateStudioChatDataParts["templateStudioSync"]) => void;
+  chatTransport?: ChatTransport<TemplateStudioUIMessage>;
 }) {
   const {
     open,
@@ -205,7 +467,8 @@ export function TemplateStudioDialog(props: {
     onDeleteTemplate,
     onSaveConfig,
     onSaveGlobalConfig,
-    onSendChat,
+    onApplyChatSync,
+    chatTransport,
   } = props;
   const globalConfig = incomingGlobalConfig ?? createDefaultGlobalWorkspaceConfig();
   const templatesById = useMemo(() => Object.fromEntries(templates.map((template) => [template.id, template])), [templates]);
@@ -217,19 +480,16 @@ export function TemplateStudioDialog(props: {
   const [globalConfigDraft, setGlobalConfigDraft] = useState(() => createGlobalConfigDraft(globalConfig));
   const [activeModelProfileId, setActiveModelProfileId] = useState<string | undefined>(globalConfig.modelProfiles[0]?.id);
   const [globalConfigError, setGlobalConfigError] = useState<string | undefined>(undefined);
-  const [chatMessagesByTemplate, setChatMessagesByTemplate] = useState<Record<string, TemplateStudioChatEntry[]>>({});
+  const [chatMessagesByTemplate, setChatMessagesByTemplate] = useState<Record<string, TemplateStudioUIMessage[]>>({});
   const [chatInputByTemplate, setChatInputByTemplate] = useState<Record<string, string>>({});
   const [chatModelProfileIdByTemplate, setChatModelProfileIdByTemplate] = useState<Record<string, string | undefined>>({});
-  const [chatErrorByTemplate, setChatErrorByTemplate] = useState<Record<string, string | undefined>>({});
-  const [pendingChatByTemplate, setPendingChatByTemplate] = useState<Record<string, boolean>>({});
+  const [stoppedChatMessageIdByTemplate, setStoppedChatMessageIdByTemplate] = useState<Record<string, string | undefined>>({});
   const [pendingDeleteTemplateId, setPendingDeleteTemplateId] = useState<string | undefined>(undefined);
   const [templateDeleteError, setTemplateDeleteError] = useState<string | undefined>(undefined);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [savingGlobalConfig, setSavingGlobalConfig] = useState(false);
-  const [sendingChat, setSendingChat] = useState(false);
   const wasOpenRef = useRef(false);
   const previousSelectedTemplateIdRef = useRef<string | undefined>(undefined);
-  const chatLogRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const openedNow = open && !wasOpenRef.current;
@@ -284,23 +544,11 @@ export function TemplateStudioDialog(props: {
   const activeMember =
     selectedTemplateDraft?.members.find((member) => member.id === activeMemberId) ?? selectedTemplateDraft?.members[0];
   const templateBadge = selectedTemplateDraft ? badgeToneProps(selectedTemplateDraft.accentTone) : undefined;
-  const activeChatMessages = selectedTemplate ? chatMessagesByTemplate[selectedTemplate.id] ?? [] : [];
-  const activeChatMessageCount = activeChatMessages.length;
   const activeChatInput = selectedTemplate ? chatInputByTemplate[selectedTemplate.id] ?? "" : "";
-  const activeChatPending = selectedTemplate ? pendingChatByTemplate[selectedTemplate.id] ?? false : false;
   const activeChatModelProfileId = selectedTemplate
     ? chatModelProfileIdByTemplate[selectedTemplate.id] ?? globalConfig.templateChatModelProfileId ?? globalConfig.modelProfiles[0]?.id
     : undefined;
   const activeModelProfile = globalConfigDraft.modelProfiles.find((profile) => profile.id === activeModelProfileId) ?? globalConfigDraft.modelProfiles[0];
-
-  useEffect(() => {
-    const container = chatLogRef.current;
-    if (!container) {
-      return;
-    }
-
-    container.scrollTop = container.scrollHeight;
-  }, [activeChatMessageCount, activeChatPending, selectedTemplate?.id]);
 
   if (!open) {
     return null;
@@ -397,77 +645,6 @@ export function TemplateStudioDialog(props: {
     }
   };
 
-  const sendTemplateChat = async (): Promise<void> => {
-    if (!selectedTemplate || activeChatInput.trim().length === 0) {
-      return;
-    }
-
-    const templateId = selectedTemplate.id;
-    const content = activeChatInput.trim();
-    const nextMessages: TemplateStudioChatEntry[] = [
-      ...(chatMessagesByTemplate[templateId] ?? []),
-      {
-        id: `user-${crypto.randomUUID()}`,
-        role: "user",
-        content,
-      },
-    ];
-    setSendingChat(true);
-    setChatErrorByTemplate((current) => ({
-      ...current,
-      [templateId]: undefined,
-    }));
-    setChatInputByTemplate((current) => ({
-      ...current,
-      [templateId]: "",
-    }));
-    setPendingChatByTemplate((current) => ({
-      ...current,
-      [templateId]: true,
-    }));
-    setChatMessagesByTemplate((current) => ({
-      ...current,
-      [templateId]: nextMessages,
-    }));
-
-    try {
-      const result = await onSendChat({
-        templateId,
-        messages: nextMessages.map(({ role, content: messageContent }) => ({
-          role,
-          content: messageContent,
-        })),
-        modelProfileId: activeChatModelProfileId,
-      });
-      setChatModelProfileIdByTemplate((current) => ({
-        ...current,
-        [templateId]: result.modelProfileId,
-      }));
-      setChatMessagesByTemplate((current) => ({
-        ...current,
-        [templateId]: [
-          ...(current[templateId] ?? []),
-          {
-            id: `assistant-${crypto.randomUUID()}`,
-            role: "assistant",
-            content: result.assistantMessage,
-          },
-        ],
-      }));
-    } catch (error) {
-      setChatErrorByTemplate((current) => ({
-        ...current,
-        [templateId]: error instanceof Error ? error.message : String(error),
-      }));
-    } finally {
-      setPendingChatByTemplate((current) => ({
-        ...current,
-        [templateId]: false,
-      }));
-      setSendingChat(false);
-    }
-  };
-
   const handleDeleteTemplate = async (templateId: string): Promise<void> => {
     try {
       setTemplateDeleteError(undefined);
@@ -478,15 +655,6 @@ export function TemplateStudioDialog(props: {
     } catch (error) {
       setTemplateDeleteError(error instanceof Error ? error.message : String(error));
     }
-  };
-
-  const handleChatComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key !== "Enter" || event.shiftKey) {
-      return;
-    }
-
-    event.preventDefault();
-    void sendTemplateChat();
   };
 
   return (
@@ -862,110 +1030,43 @@ export function TemplateStudioDialog(props: {
               {!selectedTemplate ? (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a team template to chat about.</div>
               ) : (
-                <div className="flex h-full min-h-0 flex-col gap-4 pt-4">
-                  <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Bot size={18} />
-                        <p className="m-0 text-base font-semibold tracking-tight">Team template chat</p>
-                      </div>
-                      <p className="m-0 text-sm leading-6 text-muted-foreground">
-                        By default, the model edits the selected team template, <span className="font-medium">{selectedTemplate.name}</span>. You can also explicitly ask it to create a new team template or change a different one. It can read and update the files under {globalConfig.directory}, and each new turn includes the prior chat history.
-                      </p>
-                    </div>
-                  </section>
-
-                  <section className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
-                    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
-                      <div ref={chatLogRef} className="min-h-0 flex-1 overflow-y-auto pr-1" data-testid="template-chat-log" aria-live="polite">
-                        {activeChatMessages.length === 0 ? (
-                          <div className="flex h-full min-h-[16rem] items-center justify-center rounded-xl border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-                            Short requests work too. Try “把 checker 改成 QA reviewer”, “加一个 scribe 负责总结”, or “新建一个只包含 lead 和 builder 的 team template”.
-                          </div>
-                        ) : (
-                          <div className="flex flex-col gap-3">
-                            {activeChatMessages.map((message) => (
-                              <div
-                                key={message.id}
-                                className={cn(
-                                  "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm",
-                                  message.role === "user"
-                                    ? "ml-auto bg-primary text-primary-foreground"
-                                    : "bg-muted text-foreground",
-                                )}
-                              >
-                                {message.content}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {activeChatPending ? (
-                          <div className="mt-3 max-w-[85%] rounded-2xl border border-border/70 bg-muted/60 px-4 py-3 text-sm text-foreground shadow-sm" data-testid="template-chat-pending">
-                            <div className="flex items-start gap-3">
-                              <LoaderCircle size={16} className="mt-0.5 animate-spin text-muted-foreground" />
-                              <div className="space-y-1">
-                                <p className="m-0 font-medium">Updating team template…</p>
-                                <p className="m-0 text-sm text-muted-foreground">
-                                  Codex ACP may take around 30 seconds while it reads and edits the config files.
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                      {chatErrorByTemplate[selectedTemplate.id] ? (
-                        <p className="m-0 text-sm text-destructive">{chatErrorByTemplate[selectedTemplate.id]}</p>
-                      ) : null}
-                      <div className="border-t border-border pt-3">
-                        <Textarea
-                          aria-label="Template chat input"
-                          className="min-h-24 border-0 bg-transparent p-0 shadow-none focus-visible:ring-0"
-                          placeholder="Tell Team Template Studio what to change. Press Enter to send, Shift+Enter for newline."
-                          value={activeChatInput}
-                          onChange={(event) => {
-                            const nextValue = event.currentTarget.value;
-                            setChatInputByTemplate((current) => ({
-                              ...current,
-                              [selectedTemplate.id]: nextValue,
-                            }));
-                          }}
-                          onKeyDown={handleChatComposerKeyDown}
-                        />
-                        <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem_auto] md:items-end">
-                          <p className="m-0 text-xs text-muted-foreground">
-                            The model can read `templates.json` and `template.schema.json` under {globalConfig.directory}. Keep the prompt short: by default it edits the selected template, and if you want a new template just say so directly.
-                          </p>
-                          <label className="flex flex-col gap-2">
-                            <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Chat model</span>
-                            <Select
-                              value={activeChatModelProfileId}
-                              onValueChange={(value) =>
-                                setChatModelProfileIdByTemplate((current) => ({
-                                  ...current,
-                                  [selectedTemplate.id]: value,
-                                }))}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Select chat model" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {globalConfig.modelProfiles.map((profile) => (
-                                  <SelectItem key={profile.id} value={profile.id}>
-                                    {profile.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </label>
-                          <Button onClick={() => void sendTemplateChat()} disabled={sendingChat || activeChatInput.trim().length === 0}>
-                            {activeChatPending ? <LoaderCircle size={16} className="animate-spin" /> : <MessageSquare size={16} />}
-                            {activeChatPending ? "Updating team template..." : "Send change request"}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </section>
-                </div>
+                <TemplateStudioChatPanel
+                  key={selectedTemplate.id}
+                  template={selectedTemplate}
+                  globalConfig={globalConfig}
+                  input={activeChatInput}
+                  initialMessages={chatMessagesByTemplate[selectedTemplate.id] ?? []}
+                  modelProfileId={activeChatModelProfileId}
+                  stoppedMessageId={stoppedChatMessageIdByTemplate[selectedTemplate.id]}
+                  chatTransport={chatTransport}
+                  onInputChange={(nextValue) =>
+                    setChatInputByTemplate((current) => ({
+                      ...current,
+                      [selectedTemplate.id]: nextValue,
+                    }))}
+                  onMessagesChange={(messages) =>
+                    setChatMessagesByTemplate((current) => ({
+                      ...current,
+                      [selectedTemplate.id]: messages,
+                    }))}
+                  onModelProfileChange={(value) =>
+                    setChatModelProfileIdByTemplate((current) => ({
+                      ...current,
+                      [selectedTemplate.id]: value,
+                    }))}
+                  onStoppedMessageChange={(messageId) =>
+                    setStoppedChatMessageIdByTemplate((current) => ({
+                      ...current,
+                      [selectedTemplate.id]: messageId,
+                    }))}
+                  onSync={(payload) => {
+                    onApplyChatSync?.(payload);
+                    setChatModelProfileIdByTemplate((current) => ({
+                      ...current,
+                      [selectedTemplate.id]: payload.modelProfileId,
+                    }));
+                  }}
+                />
               )}
             </TabsContent>
 

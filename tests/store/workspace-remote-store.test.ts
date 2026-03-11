@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { UpdateMemberConfigInput, UpdateTemplateInput, WorkspaceSnapshot } from "@/domain/model";
+import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { createWorkspaceRemoteStore, type WorkspaceRemoteClient } from "@/store/workspace-remote-store";
@@ -88,6 +89,21 @@ describe("workspace remote store", () => {
     store.getState().setConnected(true);
 
     expect(store.getState().connected).toBe(true);
+    expect(store.getState().error).toBeUndefined();
+  });
+
+  it("can replace snapshot and global config together from a streamed sync payload", () => {
+    const snapshot = createSeedWorkspace();
+    const store = createWorkspaceRemoteStore(createClient(createDefaultWorkspaceSnapshot()));
+    const nextConfig = createDefaultGlobalWorkspaceConfig("/tmp/stream-sync");
+
+    store.getState().replaceRemoteState({
+      snapshot,
+      globalConfig: nextConfig,
+    });
+
+    expect(store.getState().snapshot.projectOrder).toEqual(snapshot.projectOrder);
+    expect(store.getState().globalConfig.directory).toBe("/tmp/stream-sync");
     expect(store.getState().error).toBeUndefined();
   });
 });

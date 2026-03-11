@@ -89,6 +89,7 @@ export interface WorkspaceRemoteStoreState {
   upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number }): Promise<void>;
   generateTemplate(brief: string): Promise<TeamTemplate>;
   replaceSnapshot(snapshot: WorkspaceSnapshot): void;
+  replaceRemoteState(payload: { snapshot: WorkspaceSnapshot; globalConfig?: GlobalWorkspaceConfig }): void;
   setConnected(connected: boolean): void;
 }
 
@@ -322,6 +323,14 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
     replaceSnapshot(snapshot) {
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+        loading: false,
+        error: undefined,
+      }));
+    },
+    replaceRemoteState(payload) {
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, payload.snapshot),
+        globalConfig: payload.globalConfig ?? state.globalConfig,
         loading: false,
         error: undefined,
       }));

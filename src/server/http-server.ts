@@ -7,6 +7,7 @@ import { WebSocketServer } from "ws";
 import type { WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
 import { extractLastUserText } from "@/lib/chat/workspace-ui-message";
 import { resolveDirectTarget } from "@/lib/direct-target";
+import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
 import type { WorkspaceRuntime } from "./runtime";
@@ -542,16 +543,73 @@ export async function startWorkspaceHttpServer(args: {
       if (request.method === "POST" && url.pathname === "/api/template-studio/chat") {
         const body = await readJson<{
           templateId: string;
-          messages: Array<{
-            role: "user" | "assistant";
-            content: string;
-          }>;
+          messages: TemplateStudioUIMessage[];
           modelProfileId?: string;
         }>(request);
-        const result = await args.runtime.chatTemplateStudio(body);
-        sendJson(response, 200, {
-          ...result,
-          snapshot: buildTransportSnapshot(result.snapshot),
+        if (!body.templateId) {
+          sendJson(response, 400, { error: "Missing template id" });
+          return;
+        }
+
+        const messages = await validateUIMessages<TemplateStudioUIMessage>({
+          messages: body.messages ?? [],
+        });
+        if (messages.length === 0) {
+          sendJson(response, 400, { error: "Template Studio chat requires at least one message." });
+          return;
+        }
+
+        const abortController = new AbortController();
+        response.on("close", () => {
+          if (!response.writableEnded && !abortController.signal.aborted) {
+            abortController.abort("client_disconnected");
+          }
+        });
+
+        const stream = createUIMessageStream<TemplateStudioUIMessage>({
+          originalMessages: messages,
+          onError(error) {
+            return getErrorMessage(error as RuntimeError);
+          },
+          async execute({ writer }) {
+            const session = await args.runtime.streamTemplateStudioChat({
+              templateId: body.templateId,
+              messages,
+              modelProfileId: body.modelProfileId,
+              abortSignal: abortController.signal,
+            });
+
+            try {
+              writer.merge(
+                session.result.toUIMessageStream({
+                  originalMessages: messages,
+                  sendReasoning: false,
+                  sendSources: false,
+                }),
+              );
+              try {
+                await session.result.consumeStream();
+              } finally {
+                const synced = await session.finalize();
+                writer.write({
+                  type: "data-templateStudioSync",
+                  transient: true,
+                  data: {
+                    snapshot: buildTransportSnapshot(synced.snapshot),
+                    globalConfig: synced.globalConfig,
+                    modelProfileId: synced.modelProfileId,
+                  },
+                });
+              }
+            } finally {
+              await session.cleanup();
+            }
+          },
+        });
+
+        pipeUIMessageStreamToResponse({
+          response,
+          stream,
         });
         return;
       }
