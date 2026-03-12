@@ -6,7 +6,7 @@ import "../helpers/mock-streamdown-plugins";
 import { ActiveRoomStatusBadge, ChatPane } from "@/components/chat/chat-pane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createRuntimeContext } from "@/domain/identity";
-import { postUserMessage } from "@/domain/workspace";
+import { postMemberMessage, postUserMessage } from "@/domain/workspace";
 import { resolveRoomTeamSummary } from "@/lib/room-team";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
@@ -222,18 +222,45 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
   });
 
-  it("shows a static green dot only on running room member avatars", () => {
-    const snapshot = createSeedWorkspace();
+  it("shows static green dots on running member avatars in the transcript and sidebar only", () => {
+    let snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
     if (!builder) {
       throw new Error("Expected builder member in seeded room");
     }
+    const context = createRuntimeContext(610, "2026-03-09T09:40:00.000Z");
 
-    snapshot.members[builder.id] = {
-      ...builder,
-      status: "running",
-    };
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>builder 继续处理 running avatar dot",
+        mentionedMemberIds: [builder.id],
+      },
+      context,
+    );
+
+    const runningBuilder = snapshot.members[builder.id];
+    if (!runningBuilder?.activeTaskId) {
+      throw new Error("Expected builder to have a running task after the follow-up user message");
+    }
+
+    const builderMessageContent = "聊天区 bubble 头像也补上 running 绿点。";
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        memberId: runningBuilder.id,
+        taskId: runningBuilder.activeTaskId,
+        content: builderMessageContent,
+      },
+      context,
+    );
+
+    const builderMessages = snapshot.messageOrderByRoom[room.id]
+      ?.map((messageId) => snapshot.messages[messageId])
+      .filter((message) => message.author.kind === "member" && message.author.id === runningBuilder.id);
 
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
@@ -258,9 +285,17 @@ describe("ChatPane", () => {
     );
 
     const runningDots = container.querySelectorAll("[data-slot='avatar-badge']");
-    expect(runningDots).toHaveLength(1);
-    expect(runningDots[0]).toHaveClass("bg-emerald-500");
-    expect(runningDots[0]).not.toHaveClass("animate-oa-breathe");
+    const bubble = screen.getByText(builderMessageContent).closest("[data-message-kind='member']");
+    if (!(bubble instanceof HTMLElement)) {
+      throw new Error("Expected builder message to render inside a member bubble");
+    }
+
+    expect(bubble.querySelector("[data-slot='avatar-badge']")).toBeTruthy();
+    expect(runningDots).toHaveLength((builderMessages?.length ?? 0) + 1);
+    runningDots.forEach((dot) => {
+      expect(dot).toHaveClass("bg-emerald-500");
+      expect(dot).not.toHaveClass("animate-oa-breathe");
+    });
   });
 
   it("keeps the room header badge running when only a non-lead member is running", async () => {

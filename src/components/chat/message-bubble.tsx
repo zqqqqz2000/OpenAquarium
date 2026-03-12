@@ -150,7 +150,7 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             {authorMember ? (
-              <MemberIdentityChip member={authorMember} onClick={onAuthorClick} />
+              <MemberIdentityChip member={authorMember} onClick={onAuthorClick} showRunningDot />
             ) : (
               <div className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/70 bg-background/70 px-1.5 py-1 text-left">
                 <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-border bg-card">
@@ -182,7 +182,7 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
         <header className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             {authorMember ? (
-              <MemberAvatar member={authorMember} compact onClick={onAuthorClick} />
+              <MemberAvatar member={authorMember} compact onClick={onAuthorClick} showRunningDot />
             ) : (
               <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-border bg-card">
                 <Cpu size={18} />
