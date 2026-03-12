@@ -536,7 +536,6 @@ function RoomTopBar(props: {
             </Badge>
             <ActiveRoomStatusBadge runningMembers={runningMembers} />
           </div>
-          {room.topic.trim().length > 0 ? <p className="m-0 max-w-3xl text-sm text-muted-foreground">{room.topic}</p> : null}
           {activeStreamSummary ? <p className="m-0 text-sm text-muted-foreground">{activeStreamSummary}</p> : null}
         </div>
       </div>

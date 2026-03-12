@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import "../helpers/mock-streamdown-plugins";
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
 import { createRuntimeContext } from "@/domain/identity";
 import { postMemberMessage, postUserMessage } from "@/domain/workspace";

@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import "../helpers/mock-streamdown-plugins";
 import { ActiveRoomStatusBadge, ChatPane } from "@/components/chat/chat-pane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createRuntimeContext } from "@/domain/identity";

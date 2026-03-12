@@ -176,8 +176,8 @@ function buildSharedSections(args: {
   const roomStateScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-state"));
   const sourceMessage = snapshot.messages[task.sourceMessageId];
   const preferredTools = [
-    "oa_send_group_message: preferred for visible room replies. Sent content is rendered to the user as Markdown.",
-    "oa_send_direct_message: preferred for private teammate DMs and replies to @user. Sent content is rendered as Markdown.",
+    "oa_send_group_message: preferred for visible room replies. Sent content is rendered to the user as Markdown with code fences, Mermaid, math, and CJK support.",
+    "oa_send_direct_message: preferred for private teammate DMs and replies to @user. Sent content is rendered as Markdown with code fences, Mermaid, math, and CJK support.",
     "oa_room_state: inspect transcript and member/task state before retrying a send.",
     "oa_read_file: read transcript files or source files when you need deeper context.",
     "oa_run_room_watcher: trigger a watcher immediately when needed.",
@@ -273,7 +273,7 @@ function buildFullPrompt(args: {
     "13. Do not send the same room or DM content twice. If a send result is unclear, inspect room state first and only retry if the message is actually missing.",
     "14. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
     "15. Treat the shared room context directory as the durable source for room transcript and per-member histories. Read the relevant files when watcher context reports unseen messages or member state changes.",
-    "16. User-visible room and direct messages render as Markdown. Send plain text when simple is enough, but use valid Markdown when structure, code, links, or lists help.",
+    "16. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Send plain text when simple is enough, but use valid Markdown when structure, code, links, lists, diagrams, or formulas help. Prefer $$...$$ for formulas.",
     "",
     "[Member Skills]",
     member.skills.map((skill) => `- ${skill.name}: ${skill.description}\n  command: ${skill.command}`).join("\n") || "(none)",
@@ -326,7 +326,7 @@ function buildDeltaPrompt(args: {
     "4. Do not leak reasoning or tool narration into user-visible messages.",
     "5. Do not resend the same room or DM content unless room state confirms it is missing.",
     "6. Read the shared room context files when you need older context than the delta shown here, especially for watcher-triggered state changes.",
-    "7. User-visible room and direct messages render as Markdown, so send valid Markdown whenever formatting helps.",
+    "7. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas and send valid Markdown whenever formatting helps.",
     "",
     "[Instruction]",
     "Continue from the existing member session with only the new information above. Respond using tools when you need visible output, and finish once the current task is actually handled.",

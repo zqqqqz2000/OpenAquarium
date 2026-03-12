@@ -1,5 +1,9 @@
 import { memo, useMemo, type HTMLAttributes, type ReactNode } from "react";
 
+import { cjk } from "@streamdown/cjk";
+import { code } from "@streamdown/code";
+import { createMathPlugin } from "@streamdown/math";
+import { mermaid } from "@streamdown/mermaid";
 import remarkBreaks from "remark-breaks";
 import { Streamdown, defaultRemarkPlugins, type Components, type ExtraProps } from "streamdown";
 
@@ -50,6 +54,15 @@ const MESSAGE_MARKDOWN_ALLOWED_TAGS = {
 const MESSAGE_MARKDOWN_COMPONENTS = {
   [MESSAGE_MENTION_TAG]: MessageMention,
 } satisfies Components;
+const MESSAGE_MARKDOWN_MATH_PLUGIN = createMathPlugin({
+  singleDollarTextMath: true,
+});
+const MESSAGE_MARKDOWN_PLUGINS = {
+  code,
+  cjk,
+  math: MESSAGE_MARKDOWN_MATH_PLUGIN,
+  mermaid,
+} as const;
 
 function MessageMention(props: MessageMentionProps) {
   const { children, className, handle: _handle, kind, node: _node, ...rest } = props;
@@ -109,6 +122,7 @@ export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkd
       isAnimating={streaming}
       allowedTags={MESSAGE_MARKDOWN_ALLOWED_TAGS}
       literalTagContent={[MESSAGE_MENTION_TAG]}
+      plugins={MESSAGE_MARKDOWN_PLUGINS}
       remarkPlugins={remarkPlugins}
       components={MESSAGE_MARKDOWN_COMPONENTS}
     >
