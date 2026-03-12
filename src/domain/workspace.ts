@@ -123,6 +123,20 @@ function findLatestTaskTrace(
   return undefined;
 }
 
+function findLatestTaskTraceEntry(snapshot: WorkspaceSnapshot, taskId: TaskId): TaskTraceEntry | undefined {
+  const traceIds = snapshot.taskTraceOrderByTask[taskId] ?? [];
+
+  for (let index = traceIds.length - 1; index >= 0; index -= 1) {
+    const currentTraceId = traceIds[index];
+    if (!currentTraceId) {
+      continue;
+    }
+    return snapshot.taskTraces[currentTraceId];
+  }
+
+  return undefined;
+}
+
 function findBlueprint(template: TeamTemplate, predicate: (member: TeamMemberBlueprint) => boolean): TeamMemberBlueprint {
   const match = template.members.find(predicate);
 
@@ -1234,7 +1248,9 @@ export function upsertTaskTrace(
     (trace) => trace.kind === input.kind && trace.title === title,
   );
 
-  if (existing) {
+  const latestTrace = findLatestTaskTraceEntry(snapshot, input.taskId);
+
+  if (existing && latestTrace?.id === existing.id) {
     snapshot.taskTraces[existing.id] = {
       ...existing,
       content,

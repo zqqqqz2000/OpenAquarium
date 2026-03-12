@@ -7,11 +7,11 @@ import type { ContextBadge, MessageHandlerSummary } from "@/lib/message-feed";
 import { areMessageBubblePropsEqual } from "@/components/chat/message-bubble-equality";
 import { getCollapsedMessageContent } from "@/components/chat/message-content";
 import { MemberAvatar } from "@/components/members/member-avatar";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { MemberIdentityChip } from "@/components/members/member-identity-chip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { getMemberRoleLabel, getMemberRoleMonogram, getMemberRolePalette } from "@/lib/member-display";
+import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
 import { badgeToneProps, messageStatusBadgeProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn, formatTime } from "@/lib/utils";
 
@@ -57,7 +57,6 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
   const authorRoleLabel = authorMember ? getMemberRoleLabel(authorMember.handle) : message.author.label;
   const authorName = authorMember?.name;
   const authorRolePalette = authorMember ? getMemberRolePalette(authorMember.handle) : undefined;
-  const authorRoleMonogram = authorMember ? getMemberRoleMonogram(authorMember.handle) : undefined;
   const highlightedHandles = useMemo(
     () => ({
       mentionHandles: new Set([
@@ -141,40 +140,18 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
   }
 
   if (isCompactMember) {
-    const authorChipContent = (
-      <>
-        <Avatar size="sm" className="ring-0 after:border-border/80">
-          <AvatarFallback
-            className="text-[10px] font-semibold"
-            style={authorRolePalette ? { backgroundColor: authorRolePalette.background, color: authorRolePalette.foreground } : undefined}
-          >
-            {authorRoleMonogram ?? <Cpu size={12} strokeWidth={2.2} />}
-          </AvatarFallback>
-        </Avatar>
-        <span
-          className="truncate text-[11px] font-semibold uppercase tracking-[0.16em]"
-          style={authorRolePalette ? { color: authorRolePalette.background } : undefined}
-        >
-          {authorRoleLabel}
-        </span>
-      </>
-    );
-
     return (
       <div data-message-kind="member" data-message-surface="compact" className={memberCompactMessageClassName}>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-            {onAuthorClick ? (
-              <button
-                type="button"
-                className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/70 bg-background/70 px-1.5 py-1 text-left transition-colors hover:bg-background"
-                onClick={onAuthorClick}
-              >
-                {authorChipContent}
-              </button>
+            {authorMember ? (
+              <MemberIdentityChip member={authorMember} onClick={onAuthorClick} />
             ) : (
               <div className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/70 bg-background/70 px-1.5 py-1 text-left">
-                {authorChipContent}
+                <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-border bg-card">
+                  <Cpu size={18} />
+                </div>
+                <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em]">{authorRoleLabel}</span>
               </div>
             )}
             {authorName ? <span className="truncate text-xs text-muted-foreground">{authorName}</span> : null}

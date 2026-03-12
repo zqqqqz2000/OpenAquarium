@@ -15,6 +15,7 @@ import {
   postUserMessage,
   runWatcher,
   setEntryMember,
+  upsertTaskTrace,
   updateRoomTeam,
   updateTemplate,
   updateMemberConfig,
@@ -130,6 +131,70 @@ describe("workspace domain", () => {
     expect((snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId].author.kind)).toEqual(["user", "user"]);
     expect(snapshot.members[entryMember.id].activeTaskId).not.toBe(snapshot.tasks[entryMember.activeTaskId!]?.interruptedByMessageId);
     expect(snapshot.members[entryMember.id].status).toBe("running");
+  });
+
+  it("keeps an earlier draft trace when a status trace lands between draft updates", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const entryMember = Object.values(snapshot.members).find((member) => member.isEntryMember);
+
+    if (!entryMember?.activeTaskId) {
+      throw new Error("Expected an active entry member task");
+    }
+
+    const taskId = entryMember.activeTaskId;
+    const roomId = snapshot.tasks[taskId].roomId;
+
+    snapshot = upsertTaskTrace(
+      snapshot,
+      {
+        taskId,
+        roomId,
+        memberId: entryMember.id,
+        kind: "draft",
+        title: "Internal draft",
+        content: "我先查代码和文档里这些开关对应的字段与行为。",
+      },
+      context,
+    );
+    snapshot = appendTaskTrace(
+      snapshot,
+      {
+        taskId,
+        roomId,
+        memberId: entryMember.id,
+        kind: "status",
+        title: "Tool call",
+        content: "Read message-feed.ts (called)",
+      },
+      context,
+    );
+    snapshot = upsertTaskTrace(
+      snapshot,
+      {
+        taskId,
+        roomId,
+        memberId: entryMember.id,
+        kind: "draft",
+        title: "Internal draft",
+        content: "我先查代码和文档里这些开关对应的字段与行为。我已经定位到用户问的是成员配置/房间行为相关的开关。",
+      },
+      context,
+    );
+
+    const taskTraceIds = snapshot.taskTraceOrderByTask[taskId] ?? [];
+    const taskTraces = taskTraceIds.map((traceId) => snapshot.taskTraces[traceId]);
+    const draftTraces = taskTraces.filter((trace) => trace?.kind === "draft");
+
+    expect(taskTraces.map((trace) => `${trace?.kind}:${trace?.title}`)).toEqual([
+      "task-started:Respond to user",
+      "draft:Internal draft",
+      "status:Tool call",
+      "draft:Internal draft",
+    ]);
+    expect(draftTraces).toHaveLength(2);
+    expect(draftTraces[0]?.content).toBe("我先查代码和文档里这些开关对应的字段与行为。");
+    expect(draftTraces[1]?.content).toBe("我先查代码和文档里这些开关对应的字段与行为。我已经定位到用户问的是成员配置/房间行为相关的开关。");
   });
 
   it("extracts mentions by handle from message content", () => {

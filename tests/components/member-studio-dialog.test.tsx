@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -188,7 +188,75 @@ describe("MemberStudioDialog", () => {
       content: "[Recent Room Transcript]\n[07:30] You (group/sent): 原始上下文消息",
       createdAt: "2026-03-09T07:30:01.000Z",
     };
-    snapshot.taskTraceOrderByTask[leadTask.id] = ["trace_0100"];
+    snapshot.taskTraces.trace_0101 = {
+      id: "trace_0101",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "draft",
+      title: "Internal draft",
+      content: "我先查代码和文档里这些开关对应的字段与行为，确认它们在当前实现里的真实作用。",
+      createdAt: "2026-03-09T07:30:01.200Z",
+    };
+    snapshot.taskTraces.trace_0102 = {
+      id: "trace_0102",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "draft",
+      title: "Internal draft",
+      content: "我先查代码和文档里这些开关对应的字段与行为，确认它们在当前实现里的真实作用。我已经定位到用户问的是成员配置/房间行为相关的开关。",
+      createdAt: "2026-03-09T07:30:01.300Z",
+    };
+    snapshot.taskTraces.trace_0103 = {
+      id: "trace_0103",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "Tool call",
+      content: "Read message-feed.ts (called)",
+      createdAt: "2026-03-09T07:30:01.400Z",
+    };
+    snapshot.taskTraces.trace_0104 = {
+      id: "trace_0104",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "draft",
+      title: "Internal draft",
+      content: "我先查代码和文档里这些开关对应的字段与行为，确认它们在当前实现里的真实作用。我已经定位到用户问的是成员配置/房间行为相关的开关。接下来直接查这些字段在代码里的定义和触发逻辑。",
+      createdAt: "2026-03-09T07:30:01.600Z",
+    };
+    snapshot.taskTraces.trace_0105 = {
+      id: "trace_0105",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "Tool completed",
+      content: "Read message-feed.ts (completed)",
+      createdAt: "2026-03-09T07:30:01.700Z",
+    };
+    snapshot.taskTraces.trace_0106 = {
+      id: "trace_0106",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "completed",
+      title: "Task completed (end_turn)",
+      content: "@builder @research 先整理需求边界，然后由 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。",
+      createdAt: "2026-03-09T07:30:01.800Z",
+    };
+    snapshot.taskTraceOrderByTask[leadTask.id] = [
+      "trace_0100",
+      "trace_0101",
+      "trace_0102",
+      "trace_0103",
+      "trace_0104",
+      "trace_0105",
+      "trace_0106",
+    ];
 
     render(
       <MemberStudioDialog
@@ -209,9 +277,28 @@ describe("MemberStudioDialog", () => {
     await user.click(screen.getByRole("tab", { name: "Session" }));
 
     expect(screen.getByText("Member session")).toBeInTheDocument();
+    expect(screen.queryByText("Task prompt")).not.toBeInTheDocument();
+    const activity = screen.getByTestId("member-session-activity");
+    expect(within(activity).getByText("我先查代码和文档里这些开关对应的字段与行为，确认它们在当前实现里的真实作用。我已经定位到用户问的是成员配置/房间行为相关的开关。")).toBeInTheDocument();
+    const toolEvents = within(activity).getAllByTestId("member-session-tool-event");
+    expect(toolEvents).toHaveLength(1);
+    expect(within(toolEvents[0]!).getByText("completed")).toBeInTheDocument();
+    expect(within(toolEvents[0]!).getByText("Read message-feed.ts")).toBeInTheDocument();
+    expect(within(activity).getByText("接下来直接查这些字段在代码里的定义和触发逻辑。")).toBeInTheDocument();
+    expect(
+      within(activity).queryByText(
+        "我先查代码和文档里这些开关对应的字段与行为，确认它们在当前实现里的真实作用。我已经定位到用户问的是成员配置/房间行为相关的开关。接下来直接查这些字段在代码里的定义和触发逻辑。",
+      ),
+    ).not.toBeInTheDocument();
+    expect(within(activity).getByRole("button", { name: "Show room reply" })).toBeInTheDocument();
+    expect(screen.getByText("DM @lead")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Show room reply" }));
+    expect(screen.getByText(/先整理需求边界/)).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("member-session-prompt-toggle"));
     expect(screen.getByText("Task prompt")).toBeInTheDocument();
     expect(screen.getByText(/原始上下文消息/)).toBeInTheDocument();
-    expect(screen.getByText("DM @lead")).toBeInTheDocument();
 
     await user.type(screen.getByRole("textbox"), "先同步一个当前进度。");
     await user.click(screen.getByRole("button", { name: /Send/i }));
