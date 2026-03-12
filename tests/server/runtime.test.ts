@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createRuntimeContext } from "@/domain/identity";
 import { createProjectWithRoom, createWorkspaceSnapshot, postUserMessage } from "@/domain/workspace";
@@ -47,6 +47,12 @@ async function waitFor(assertion: () => void | Promise<void>, timeoutMs = 800): 
   await assertion();
 }
 
+async function flushMicrotasks(iterations = 8): Promise<void> {
+  for (let index = 0; index < iterations; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("WorkspaceRuntime", () => {
   const runtimes: WorkspaceRuntime[] = [];
 
@@ -63,6 +69,7 @@ describe("WorkspaceRuntime", () => {
   }
 
   afterEach(async () => {
+    vi.useRealTimers();
     await Promise.all(runtimes.map((runtime) => runtime.dispose()));
     runtimes.length = 0;
   });
@@ -672,6 +679,170 @@ describe("WorkspaceRuntime", () => {
 
     expect(digestMessages).toHaveLength(0);
     expect(snapshot.watchers[watcherId]?.lastConsumedMessageId).toBeUndefined();
+  });
+
+  it("runs a deferred watcher as soon as the room becomes idle", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-13T00:00:00.000Z"));
+
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-watcher-catch-up-"));
+    let holdLead = false;
+    let releaseLead: (() => void) | undefined;
+    const leadReleasePromise = new Promise<void>((resolve) => {
+      releaseLead = resolve;
+    });
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          if (member.handle === "lead" && holdLead) {
+            await leadReleasePromise;
+          }
+
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const { roomId } = await runtime.createProject({
+      projectName: "Watcher Catch Up",
+      templateId: "template-product-pod",
+    });
+
+    let snapshot = runtime.getSnapshot();
+    const scribe = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "scribe");
+    expect(scribe).toBeDefined();
+    if (!scribe) {
+      throw new Error("Expected scribe member");
+    }
+
+    await runtime.upsertWatcher({
+      memberId: scribe.id,
+      enabled: true,
+      intervalMinutes: 1,
+    });
+
+    await runtime.sendUserMessage({
+      roomId,
+      content: "先建立 watcher 基线",
+    });
+    await flushMicrotasks();
+
+    snapshot = runtime.getSnapshot();
+    const watcherId = snapshot.rooms[roomId].watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === scribe.id);
+    expect(watcherId).toBeDefined();
+    if (!watcherId) {
+      throw new Error("Expected watcher id");
+    }
+
+    await runtime.runWatcherNow(watcherId);
+
+    holdLead = true;
+    await runtime.sendUserMessage({
+      roomId,
+      content: "这条消息需要在 busy 结束后被 watcher 补抓到",
+    });
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+    await flushMicrotasks();
+
+    snapshot = runtime.getSnapshot();
+    expect(
+      Object.values(snapshot.messages).filter((message) => message.roomId === roomId && message.transport === "watch-digest"),
+    ).toHaveLength(0);
+
+    holdLead = false;
+    releaseLead?.();
+    await flushMicrotasks(20);
+
+    snapshot = runtime.getSnapshot();
+    const digestMessages = Object.values(snapshot.messages).filter(
+      (message) => message.roomId === roomId && message.transport === "watch-digest",
+    );
+
+    expect(digestMessages).toHaveLength(1);
+    expect(digestMessages[0].content).toContain("这条消息需要在 busy 结束后被 watcher 补抓到");
+  });
+
+  it("reschedules watcher timers when the interval changes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-13T01:00:00.000Z"));
+
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-watcher-interval-refresh-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const { roomId } = await runtime.createProject({
+      projectName: "Watcher Interval Refresh",
+      templateId: "template-product-pod",
+    });
+
+    let snapshot = runtime.getSnapshot();
+    const scribe = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "scribe");
+    expect(scribe).toBeDefined();
+    if (!scribe) {
+      throw new Error("Expected scribe member");
+    }
+
+    await runtime.sendUserMessage({
+      roomId,
+      content: "先建立 watcher 基线",
+    });
+    await flushMicrotasks();
+
+    await runtime.upsertWatcher({
+      memberId: scribe.id,
+      enabled: true,
+      intervalMinutes: 1,
+    });
+
+    snapshot = runtime.getSnapshot();
+    const watcherId = snapshot.rooms[roomId].watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === scribe.id);
+    expect(watcherId).toBeDefined();
+    if (!watcherId) {
+      throw new Error("Expected watcher id");
+    }
+
+    await runtime.runWatcherNow(watcherId);
+    await runtime.sendUserMessage({
+      roomId,
+      content: "interval 改完后应在 1 分钟触发 digest",
+    });
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(59 * 1000);
+    await flushMicrotasks();
+
+    snapshot = runtime.getSnapshot();
+    expect(
+      Object.values(snapshot.messages).filter((message) => message.roomId === roomId && message.transport === "watch-digest"),
+    ).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushMicrotasks();
+
+    snapshot = runtime.getSnapshot();
+    const digestMessages = Object.values(snapshot.messages).filter(
+      (message) => message.roomId === roomId && message.transport === "watch-digest",
+    );
+
+    expect(digestMessages).toHaveLength(1);
+    expect(digestMessages[0].content).toContain("interval 改完后应在 1 分钟触发 digest");
   });
 
   it("reloads templates from the global config directory after template studio chat writes them", async () => {

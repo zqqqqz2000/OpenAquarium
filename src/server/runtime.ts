@@ -89,6 +89,11 @@ interface TaskObserverEntry {
   resolve(): void;
 }
 
+interface WatcherTimerEntry {
+  intervalMs: number;
+  timer: ReturnType<typeof setInterval>;
+}
+
 function buildVisibleTaskFailureContent(message: string): string {
   const compactMessage = message
     .replace(/\s+/g, " ")
@@ -243,7 +248,8 @@ export class WorkspaceRuntime {
   private readonly listeners = new Set<SnapshotListener>();
   private readonly executors = new Map<MemberId, MemberExecutor>();
   private readonly runningTaskIds = new Set<string>();
-  private readonly watcherTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly watcherTimers = new Map<string, WatcherTimerEntry>();
+  private readonly pendingWatcherRuns = new Set<string>();
   private readonly taskObservers = new Map<string, TaskObserverEntry>();
   private readonly persistence: WorkspacePersistence;
   private readonly workspaceRoot: string;
@@ -257,6 +263,7 @@ export class WorkspaceRuntime {
   private pendingProgressPersist = false;
   private pendingProgressPersistTimer: ReturnType<typeof setTimeout> | undefined;
   private persistenceChain: Promise<void> = Promise.resolve();
+  private flushingPendingWatchers = false;
 
   constructor(args: {
     initialSnapshot: WorkspaceSnapshot;
@@ -722,6 +729,19 @@ export class WorkspaceRuntime {
   }
 
   async runWatcherNow(watcherId: string): Promise<WorkspaceSnapshot> {
+    const watcher = this.snapshot.watchers[watcherId];
+    if (!watcher || !watcher.enabled) {
+      this.pendingWatcherRuns.delete(watcherId);
+      return this.snapshot;
+    }
+
+    if (this.hasRunningTaskInRoom(watcher.roomId)) {
+      this.pendingWatcherRuns.add(watcherId);
+      return this.snapshot;
+    }
+
+    this.pendingWatcherRuns.delete(watcherId);
+
     if (!this.canRunWatcherNow(watcherId)) {
       return this.snapshot;
     }
@@ -798,8 +818,9 @@ export class WorkspaceRuntime {
   }
 
   async dispose(): Promise<void> {
-    this.watcherTimers.forEach((timer) => clearInterval(timer));
+    this.watcherTimers.forEach((entry) => clearInterval(entry.timer));
     this.watcherTimers.clear();
+    this.pendingWatcherRuns.clear();
     await this.persistImmediately(this.snapshot);
     await Promise.all([...this.executors.values()].map((executor) => executor.dispose()));
     this.executors.clear();
@@ -820,6 +841,7 @@ export class WorkspaceRuntime {
     this.syncWatchers();
     this.emit();
     this.dispatchNewTasks(previous, this.snapshot);
+    await this.flushPendingWatchers();
   }
 
   private cleanupRemovedRuntimeState(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): void {
@@ -1289,10 +1311,11 @@ export class WorkspaceRuntime {
   private syncWatchers(): void {
     const activeWatcherIds = new Set(Object.keys(this.snapshot.watchers));
 
-    this.watcherTimers.forEach((timer, watcherId) => {
+    this.watcherTimers.forEach((entry, watcherId) => {
       const watcher = this.snapshot.watchers[watcherId];
-      if (!watcher || !watcher.enabled) {
-        clearInterval(timer);
+      const intervalMs = watcher ? watcher.intervalMinutes * 60 * 1000 : undefined;
+      if (!watcher || !watcher.enabled || intervalMs !== entry.intervalMs) {
+        clearInterval(entry.timer);
         this.watcherTimers.delete(watcherId);
       }
     });
@@ -1302,19 +1325,33 @@ export class WorkspaceRuntime {
         return;
       }
 
+      const intervalMs = watcher.intervalMinutes * 60 * 1000;
       const timer = setInterval(() => {
         void this.runWatcherNow(watcherId);
-      }, watcher.intervalMinutes * 60 * 1000);
-      this.watcherTimers.set(watcherId, timer);
+      }, intervalMs);
+      this.watcherTimers.set(watcherId, {
+        intervalMs,
+        timer,
+      });
     });
 
     [...this.watcherTimers.keys()].forEach((watcherId) => {
       if (!activeWatcherIds.has(watcherId)) {
-        const timer = this.watcherTimers.get(watcherId);
-        if (timer) {
-          clearInterval(timer);
+        const entry = this.watcherTimers.get(watcherId);
+        if (entry) {
+          clearInterval(entry.timer);
         }
         this.watcherTimers.delete(watcherId);
+      }
+
+      if (!activeWatcherIds.has(watcherId) || !this.snapshot.watchers[watcherId]?.enabled) {
+        this.pendingWatcherRuns.delete(watcherId);
+      }
+    });
+
+    [...this.pendingWatcherRuns].forEach((watcherId) => {
+      if (!this.snapshot.watchers[watcherId]?.enabled) {
+        this.pendingWatcherRuns.delete(watcherId);
       }
     });
   }
@@ -1330,6 +1367,25 @@ export class WorkspaceRuntime {
     }
 
     return !this.hasRunningTaskInRoom(watcher.roomId);
+  }
+
+  private async flushPendingWatchers(): Promise<void> {
+    if (this.flushingPendingWatchers || this.pendingWatcherRuns.size === 0) {
+      return;
+    }
+
+    this.flushingPendingWatchers = true;
+    try {
+      for (const watcherId of [...this.pendingWatcherRuns]) {
+        if (!this.canRunWatcherNow(watcherId)) {
+          continue;
+        }
+
+        await this.runWatcherNow(watcherId);
+      }
+    } finally {
+      this.flushingPendingWatchers = false;
+    }
   }
 
   private async expireStaleRunningTasks(referenceTimeMs = Date.now()): Promise<void> {
