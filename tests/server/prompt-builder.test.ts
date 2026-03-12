@@ -62,7 +62,7 @@ describe("buildTaskPrompt", () => {
       snapshot,
       {
         roomId: room.id,
-        content: "继续，@lead 收口一下",
+        content: "继续，@>lead 收口一下",
       },
       context,
     );
@@ -87,7 +87,8 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("room transcript file: /tmp/room-transcript.md");
     expect(prompt).toContain(`room context directory: ${getRoomContextDirectoryPath(process.cwd(), snapshot.rooms[room.id])}`);
     expect(prompt).toContain("Recent Delta Transcript");
-    expect(prompt).toContain("\"handle: passive reference or quote only.");
+    expect(prompt).toContain("@handle: passive reference only.");
+    expect(prompt).toContain("@>handle: active routing.");
     expect(prompt).toContain("It does not notify the member, does not route work");
   });
 

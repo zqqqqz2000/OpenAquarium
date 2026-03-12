@@ -92,7 +92,7 @@ describe("ChatComposer", () => {
     expect(screen.getByText("Failed to fetch")).toBeInTheDocument();
   });
 
-  it("offers @ mention completion without showing a static member list", async () => {
+  it("offers passive reference completion with @ without showing a static member list", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
@@ -103,17 +103,17 @@ describe("ChatComposer", () => {
     const textbox = screen.getByRole("textbox");
     await user.type(textbox, "请 @re");
 
-    expect(screen.getByText("Mention member")).toBeInTheDocument();
+    expect(screen.getByText("Reference member")).toBeInTheDocument();
     expect(screen.getByText("@research")).toBeInTheDocument();
     expect(screen.queryByText("Quick direct targets")).not.toBeInTheDocument();
-    expect(screen.getByText("Mention member").parentElement?.className).toContain("bottom-[calc(100%+0.5rem)]");
+    expect(screen.getByText("Reference member").parentElement?.className).toContain("bottom-[calc(100%+0.5rem)]");
 
     await user.keyboard("{Enter}");
 
     expect(textbox).toHaveValue("请 @research ");
   });
 
-  it("offers quote completion with the quote trigger", async () => {
+  it("offers assignment completion with the @> trigger", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
@@ -122,14 +122,14 @@ describe("ChatComposer", () => {
     render(<ChatComposer connected error={undefined} members={members} onSend={vi.fn()} />);
 
     const textbox = screen.getByRole("textbox");
-    await user.type(textbox, "参考一下 \"re");
+    await user.type(textbox, "安排一下 @>re");
 
-    expect(screen.getByText("Quote member")).toBeInTheDocument();
-    expect(screen.getByText("\"research")).toBeInTheDocument();
+    expect(screen.getByText("Assign member")).toBeInTheDocument();
+    expect(screen.getByText("@>research")).toBeInTheDocument();
 
     await user.keyboard("{Enter}");
 
-    expect(textbox).toHaveValue("参考一下 \"research ");
+    expect(textbox).toHaveValue("安排一下 @>research ");
   });
 
   it("sends on Enter and keeps Shift+Enter for newlines", async () => {

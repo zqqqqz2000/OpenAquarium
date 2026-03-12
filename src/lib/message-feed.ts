@@ -141,8 +141,8 @@ export function getMemberHistory(snapshot: WorkspaceSnapshot, room: Room, member
       const contextBadges: ContextBadge[] = [];
       const ownHandlers = handlerBySourceMessageId.get(message.id) ?? [];
       const ownDraftHandler = ownTaskByDraftMessageId.get(message.id);
-      const mentioned = message.mentionedMemberIds.includes(member.id);
-      const quoted = (message.quotedMemberIds ?? []).includes(member.id);
+      const assigned = message.mentionedMemberIds.includes(member.id);
+      const referenced = (message.quotedMemberIds ?? []).includes(member.id);
       const directed = message.recipientMemberIds.includes(member.id);
       const authoredByMember = message.author.kind === "member" && message.author.id === member.id;
 
@@ -156,12 +156,12 @@ export function getMemberHistory(snapshot: WorkspaceSnapshot, room: Room, member
         contextBadges.push(buildContextBadge("direct", "Direct inbox", "postit"));
       }
 
-      if (mentioned) {
-        contextBadges.push(buildContextBadge("mentioned", "Mentioned", "postit"));
+      if (assigned) {
+        contextBadges.push(buildContextBadge("mentioned", "Assigned", "postit"));
       }
 
-      if (quoted) {
-        contextBadges.push(buildContextBadge("quoted", "Quoted", "paper"));
+      if (referenced) {
+        contextBadges.push(buildContextBadge("quoted", "Referenced", "paper"));
       }
 
       if (authoredByMember) {

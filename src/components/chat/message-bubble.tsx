@@ -210,8 +210,8 @@ function renderHighlightedMessage(
     quoteHandles: ReadonlySet<string>;
   },
 ) {
-  return content.split(/(@[\p{L}\p{N}_-]+|"[\p{L}\p{N}_-]+)/gu).map((segment, index) => {
-    const mentionMatch = /^@([\p{L}\p{N}_-]+)$/u.exec(segment);
+  return content.split(/(@>[\p{L}\p{N}_-]+|@[\p{L}\p{N}_-]+)/gu).map((segment, index) => {
+    const mentionMatch = /^@>([\p{L}\p{N}_-]+)$/u.exec(segment);
     if (mentionMatch && handles.mentionHandles.has(mentionMatch[1] ?? "")) {
       return (
         <span
@@ -223,7 +223,7 @@ function renderHighlightedMessage(
       );
     }
 
-    const quoteMatch = /^"([\p{L}\p{N}_-]+)$/u.exec(segment);
+    const quoteMatch = /^@([\p{L}\p{N}_-]+)$/u.exec(segment);
     if (quoteMatch && handles.quoteHandles.has(quoteMatch[1] ?? "")) {
       return (
         <span

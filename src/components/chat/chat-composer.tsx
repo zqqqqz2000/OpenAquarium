@@ -133,7 +133,7 @@ export function ChatComposer(props: {
               "min-h-20 resize-none border-0 bg-transparent px-0 py-0 text-[1.05rem] leading-7 shadow-none ring-0 focus-visible:border-transparent focus-visible:ring-0",
               textareaClassName,
             )}
-            placeholder={directMember ? `私发给 @${directMember.handle}，发送后会打断对方当前任务。` : "在群里说点什么。输入 @ 派单，输入 \" 只引用成员。"}
+            placeholder={directMember ? `私发给 @${directMember.handle}，发送后会打断对方当前任务。` : "在群里说点什么。输入 @ 提到成员，输入 @> 派单。"}
             disabled={!connected}
             value={text}
             onChange={(event) => {
@@ -192,7 +192,7 @@ export function ChatComposer(props: {
           {visibleMentionMatch && visibleMentionMatch.matches.length > 0 ? (
             <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-30 max-h-[min(18rem,40vh)] w-[min(24rem,calc(100vw-4rem))] overflow-y-auto rounded-2xl border border-border/70 bg-background/95 p-2 shadow-lg">
               <p className="m-0 px-2 pb-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                {visibleMentionMatch.trigger === "@" ? "Mention member" : "Quote member"}
+                {visibleMentionMatch.trigger === "@>" ? "Assign member" : "Reference member"}
               </p>
               <div className="flex flex-col gap-1">
                 {visibleMentionMatch.matches.map((member, index) => (
@@ -268,20 +268,20 @@ interface MentionMatch {
   key: string;
   start: number;
   end: number;
-  trigger: "@" | "\"";
+  trigger: "@" | "@>";
   matches: TeamMember[];
 }
 
 function resolveMentionMatch(text: string, caretPosition: number, members: TeamMember[]): MentionMatch | undefined {
   const textBeforeCaret = text.slice(0, caretPosition);
-  const match = /(?:^|\s)([@"])([^\s@"]*)$/u.exec(textBeforeCaret);
+  const match = /(?:^|\s)(@>|@)([^\s@>]*)$/u.exec(textBeforeCaret);
 
   if (!match) {
     return undefined;
   }
 
   const matchedText = match[0];
-  const trigger = match[1] === "\"" ? "\"" : "@";
+  const trigger = match[1] === "@>" ? "@>" : "@";
   const query = match[2]?.toLowerCase() ?? "";
   const mentionStart = (match.index ?? 0) + matchedText.lastIndexOf(trigger);
   const matches = members.filter((member) => {

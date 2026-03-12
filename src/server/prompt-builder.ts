@@ -16,20 +16,20 @@ export const MEMBER_FULL_PROMPT_REFRESH_INTERVAL = 4;
 
 type PromptMode = "full" | "delta";
 
-function summarizeHandles(prefix: string, memberIds: string[], snapshot: WorkspaceSnapshot): string {
+function summarizeHandles(prefix: string, memberIds: string[], snapshot: WorkspaceSnapshot, marker = "@"): string {
   if (memberIds.length === 0) {
     return "";
   }
 
-  return ` | ${prefix}: ${memberIds.map((memberId) => `@${snapshot.members[memberId]?.handle ?? memberId}`).join(", ")}`;
+  return ` | ${prefix}: ${memberIds.map((memberId) => `${marker}${snapshot.members[memberId]?.handle ?? memberId}`).join(", ")}`;
 }
 
-function summarizeQuotedHandles(message: ChatMessage, snapshot: WorkspaceSnapshot): string {
+function summarizeReferenceHandles(message: ChatMessage, snapshot: WorkspaceSnapshot): string {
   if ((message.quotedMemberIds?.length ?? 0) === 0) {
     return "";
   }
 
-  return ` | quotes: ${message.quotedMemberIds?.map((memberId) => `"${snapshot.members[memberId]?.handle ?? memberId}`).join(", ")}`;
+  return summarizeHandles("references", message.quotedMemberIds ?? [], snapshot);
 }
 
 function summarizeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): string {
@@ -38,7 +38,7 @@ function summarizeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): st
       ? " | recipients: You"
       : summarizeHandles("recipients", message.recipientMemberIds, snapshot);
 
-  return `[${formatTime(message.createdAt)}] ${message.author.label} (${message.transport}/${message.status}): ${message.content}${summarizeHandles("mentions", message.mentionedMemberIds, snapshot)}${summarizeQuotedHandles(message, snapshot)}${recipientSuffix}`;
+  return `[${formatTime(message.createdAt)}] ${message.author.label} (${message.transport}/${message.status}): ${message.content}${summarizeHandles("assignments", message.mentionedMemberIds, snapshot, "@>")}${summarizeReferenceHandles(message, snapshot)}${recipientSuffix}`;
 }
 
 function describeMember(member: TeamMember, workspaceRoot: string): string {
@@ -153,8 +153,8 @@ function buildRoomContextFileSections(workspaceRoot: string, room: Room, snapsho
 function buildMemberReferenceSyntaxSections(): string[] {
   return [
     "[Member Reference Syntax]",
-    "@handle: active routing. That member immediately receives the message as work and may be interrupted to act on it. Use @handle only when you want that member to start working now.",
-    "\"handle: passive reference or quote only. Use it when explaining, citing, or comparing members for the user or team. It does not notify the member, does not route work, and does not start a task for them.",
+    "@handle: passive reference only. Never use plain @handle to route work. Use it when explaining, citing, or comparing members for the user or team. It does not notify the member, does not route work, and does not start a task for them.",
+    "@>handle: active routing. That member immediately receives the message as work and may be interrupted to act on it. Use @>handle only when you want that member to start working now.",
   ];
 }
 
@@ -259,8 +259,8 @@ function buildFullPrompt(args: {
     "",
     "[Communication Rules]",
     "1. If you need to speak in the room or DM someone, prefer the dedicated ACP tools listed below instead of generic shell commands.",
-    "2. `@handle` is an active assignment. The mentioned teammate immediately gets that message as work and may be interrupted to act on it.",
-    "3. `\"handle` is only a reference or quote for explanation. It does not notify that member, does not route work, and does not start a task for them.",
+    "2. `@handle` is only a passive reference for explanation. Never use plain `@handle` to assign work. It does not notify that teammate, does not route work, and does not start a task for them.",
+    "3. `@>handle` is an active assignment. That teammate immediately gets the message as work and may be interrupted to act on it.",
     "4. Do not assume hidden roles. The prompt and skills define each member's current job.",
     "5. Keep room messages concise and actionable, but do not stay silent on long tasks.",
     "6. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
@@ -319,8 +319,8 @@ function buildDeltaPrompt(args: {
     deltaMessages || "(none)",
     "",
     "[Critical Rules]",
-    "1. `@handle` is active routing: that teammate immediately receives the message as work and may be interrupted to act on it.",
-    "2. `\"handle` is only a reference or quote. It does not notify the member, does not route work, and does not start a task.",
+    "1. `@handle` is only a passive reference. Never use plain `@handle` to assign work. It does not notify the member, does not route work, and does not start a task.",
+    "2. `@>handle` is active routing: that teammate immediately receives the message as work and may be interrupted to act on it.",
     "3. Send progress updates for work that lasts more than a short turn.",
     "4. Do not leak reasoning or tool narration into user-visible messages.",
     "5. Do not resend the same room or DM content unless room state confirms it is missing.",
@@ -343,8 +343,8 @@ export function buildTaskPrompt(args: {
   const { snapshot, room, member, task } = args;
   const sourceMessage = snapshot.messages[task.sourceMessageId];
   const addressedRoutingNote = extractAddressedMemberIds(snapshot, room.id, sourceMessage.content).length > 0
-    ? "This source message mentioned one or more @handles, so every mentioned teammate was routed as a real assignment."
-    : "This source message did not mention any teammate handle, so it followed the normal fallback routing.";
+    ? "This source message used one or more active @>handles, so every targeted teammate was routed as a real assignment."
+    : "This source message did not use any active @>handle, so it followed the normal fallback routing.";
   const { mode, turnsBeforeCurrent, previousTask } = resolvePromptMode(snapshot, member, task);
   const taskSequence = turnsBeforeCurrent + 1;
 

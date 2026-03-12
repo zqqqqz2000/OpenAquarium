@@ -197,38 +197,38 @@ describe("workspace domain", () => {
     expect(draftTraces[1]?.content).toBe("我先查代码和文档里这些开关对应的字段与行为。我已经定位到用户问的是成员配置/房间行为相关的开关。");
   });
 
-  it("extracts mentions by handle from message content", () => {
+  it("extracts active assignments by handle from message content", () => {
     const context = createRuntimeContext();
     const snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
-    const mentionIds = extractMentionMemberIds(snapshot, roomId, "@builder 帮我补 UI，@scribe 负责记录");
+    const mentionIds = extractMentionMemberIds(snapshot, roomId, "@>builder 帮我补 UI，@>scribe 负责记录");
     const handles = mentionIds.map((memberId) => snapshot.members[memberId].handle).sort();
 
     expect(handles).toEqual(["builder", "scribe"]);
   });
 
-  it("extracts quoted handles without routing them", () => {
+  it("extracts passive references without routing them", () => {
     const context = createRuntimeContext();
     const snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
-    const quoteIds = extractQuotedMemberIds(snapshot, roomId, "\"builder 作为参考，\"scribe 负责记录。");
+    const quoteIds = extractQuotedMemberIds(snapshot, roomId, "@builder 作为参考，@scribe 负责记录。");
     const handles = quoteIds.map((memberId) => snapshot.members[memberId].handle).sort();
 
     expect(handles).toEqual(["builder", "scribe"]);
-    expect(extractAddressedMemberIds(snapshot, roomId, "\"builder 作为参考")).toEqual([]);
+    expect(extractAddressedMemberIds(snapshot, roomId, "@builder 作为参考")).toEqual([]);
   });
 
-  it("treats every mentioned member as a routed recipient", () => {
+  it("treats only @> members as a routed recipient", () => {
     const context = createRuntimeContext();
     const snapshot = createStartedProjectSnapshot(context);
 
     const roomId = snapshot.selection.roomId!;
-    const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@builder @research 先同步一下，再提到 @scribe 作为引用。");
+    const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@>builder @>research 先同步一下，再提到 @scribe 作为引用。");
     const addressedHandles = addressedIds.map((memberId) => snapshot.members[memberId].handle);
 
-    expect(addressedHandles).toEqual(["builder", "research", "scribe"]);
+    expect(addressedHandles).toEqual(["builder", "research"]);
   });
 
   it("routes member tasks from inline mentions anywhere in the message body", () => {
@@ -246,7 +246,7 @@ describe("workspace domain", () => {
         roomId,
         memberId: lead.id,
         taskId: lead.activeTaskId,
-        content: "我负责接住需求，@research 负责调研，@builder 负责实现。",
+        content: "我负责接住需求，@>research 负责调研，@>builder 负责实现。",
       },
       context,
     );
@@ -385,7 +385,7 @@ describe("workspace domain", () => {
       {
         roomId,
         memberId: builder.id,
-        content: "收到任务。我会先整理当前房间上下文。如果需要协调其他成员，我会在最终消息里明确 @handle。",
+        content: "收到任务。我会先整理当前房间上下文。如果需要协调其他成员，我会在最终消息里明确 @>handle。",
       },
       context,
     );

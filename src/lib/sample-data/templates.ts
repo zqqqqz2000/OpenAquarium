@@ -18,7 +18,7 @@ export const defaultTemplates: TeamTemplate[] = [
         handle: "lead",
         summary: "入口成员，接住用户消息并拆解到其他成员。",
         prompt:
-          `你是团队入口成员。先理解用户意图，再按需要 @其他成员。顺序协作时只委派当前该行动的成员，不要把后续成员一次性全叫上，也不要用重复 DM 催办已经清楚的 room 任务。你可以打断自己当前任务去响应最新群消息。${ROOM_PROGRESS_PROMPT}`,
+          `你是团队入口成员。先理解用户意图，再按需要用 @>其他成员派活；只提到成员时用 @其他成员。顺序协作时只委派当前该行动的成员，不要把后续成员一次性全叫上，也不要用重复 DM 催办已经清楚的 room 任务。你可以打断自己当前任务去响应最新群消息。${ROOM_PROGRESS_PROMPT}`,
         accentTone: "postit",
         modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
@@ -34,8 +34,8 @@ export const defaultTemplates: TeamTemplate[] = [
           {
             id: "delegate",
             name: "委派成员",
-            description: "通过 @handle 委派给其他成员。",
-            command: "./bin/oa-room-send --scope group --text \"@builder 请实现这个方案\"",
+            description: "通过 @>handle 委派给其他成员。",
+            command: "./bin/oa-room-send --scope group --text \"@>builder 请实现这个方案\"",
           },
         ],
       },

@@ -1293,11 +1293,11 @@ function formatDigestLine(snapshot: WorkspaceSnapshot, messageId: MessageId): st
   const stamp = message.createdAt.slice(11, 16);
   const mentionSuffix =
     message.mentionedMemberIds.length > 0
-      ? ` @${message.mentionedMemberIds.map((memberId) => snapshot.members[memberId]?.handle ?? memberId).join(", @")}`
+      ? ` @>${message.mentionedMemberIds.map((memberId) => snapshot.members[memberId]?.handle ?? memberId).join(", @>")}`
       : "";
   const quoteSuffix =
     (message.quotedMemberIds?.length ?? 0) > 0
-      ? ` "${message.quotedMemberIds?.map((memberId) => snapshot.members[memberId]?.handle ?? memberId).join(', "')}`
+      ? ` @${message.quotedMemberIds?.map((memberId) => snapshot.members[memberId]?.handle ?? memberId).join(", @")}`
       : "";
 
   return `[${stamp}] ${message.author.label}: ${message.content}${mentionSuffix}${quoteSuffix}`;
@@ -1333,10 +1333,10 @@ function isTemplateAckMessage(message: ChatMessage): boolean {
   const content = normalizeWatcherMessageContent(message.content);
 
   return (
-    /^收到任务[。.!！]?我会先整理当前房间上下文[。.!！]?如果需要协调其他成员[，,]?(?:我会)?在最终消息里明确 @handle[。.!！]?$/u.test(
+    /^收到任务[。.!！]?我会先整理当前房间上下文[。.!！]?如果需要协调其他成员[，,]?(?:我会)?在最终消息里明确 @>handle[。.!！]?$/u.test(
       content,
     )
-    || /^收到群消息[。.!！]?我会按 .+ 先给出一版可执行方向[，,]?然后视情况 @其他成员[。.!！]?$/u.test(content)
+    || /^收到群消息[。.!！]?我会按 .+ 先给出一版可执行方向[，,]?然后视情况 @>其他成员[。.!！]?$/u.test(content)
     || /^收到私信[。.!！]?我先按 .+ 处理这个点[，,]?再决定是否回群里同步[。.!！]?$/u.test(content)
   );
 }
@@ -1557,7 +1557,7 @@ export function extractMentionMemberIds(snapshot: WorkspaceSnapshot, roomId: str
     return [];
   }
 
-  const handles = extractTaggedHandles(snapshot, roomId, content, "@");
+  const handles = extractTaggedHandles(snapshot, roomId, content, "@>");
 
   if (handles.length === 0) {
     return [];
@@ -1567,7 +1567,7 @@ export function extractMentionMemberIds(snapshot: WorkspaceSnapshot, roomId: str
 }
 
 export function extractQuotedMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {
-  return extractTaggedHandles(snapshot, roomId, content, "\"");
+  return extractTaggedHandles(snapshot, roomId, content, "@");
 }
 
 export function extractAddressedMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {
@@ -1578,7 +1578,7 @@ function extractTaggedHandles(
   snapshot: WorkspaceSnapshot,
   roomId: string,
   content: string,
-  trigger: "@" | "\"",
+  trigger: "@>" | "@",
 ): MemberId[] {
   const room = snapshot.rooms[roomId];
 
@@ -1591,9 +1591,9 @@ function extractTaggedHandles(
     room.memberIds.map((memberId) => [snapshot.members[memberId]?.handle.toLowerCase(), memberId] as const),
   );
   const handles: MemberId[] = [];
-  const pattern = trigger === "@"
-    ? /@([\p{L}\p{N}_-]+)/gu
-    : /"([\p{L}\p{N}_-]+)/gu;
+  const pattern = trigger === "@>"
+    ? /@>([\p{L}\p{N}_-]+)/gu
+    : /@([\p{L}\p{N}_-]+)/gu;
 
   for (const match of content.matchAll(pattern)) {
     const handle = match[1]?.toLowerCase();

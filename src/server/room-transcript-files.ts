@@ -5,28 +5,28 @@ import type { ChatMessage, Room, TeamMember, WorkspaceSnapshot } from "../domain
 import { getMemberSessionEntries, type MemberSessionEntry } from "../lib/member-session-feed";
 import { isVisibleMainRoomMessage } from "../lib/message-visibility";
 
-function formatHandles(prefix: string, memberIds: string[], snapshot: WorkspaceSnapshot): string[] {
+function formatHandles(prefix: string, memberIds: string[], snapshot: WorkspaceSnapshot, marker = "@"): string[] {
   if (memberIds.length === 0) {
     return [];
   }
 
-  return [`${prefix}: ${memberIds.map((memberId) => `@${snapshot.members[memberId]?.handle ?? memberId}`).join(", ")}`];
+  return [`${prefix}: ${memberIds.map((memberId) => `${marker}${snapshot.members[memberId]?.handle ?? memberId}`).join(", ")}`];
 }
 
-function formatQuotedHandles(message: ChatMessage, snapshot: WorkspaceSnapshot): string[] {
+function formatReferenceHandles(message: ChatMessage, snapshot: WorkspaceSnapshot): string[] {
   if ((message.quotedMemberIds?.length ?? 0) === 0) {
     return [];
   }
 
-  return [`quotes: ${message.quotedMemberIds?.map((memberId) => `"${snapshot.members[memberId]?.handle ?? memberId}`).join(", ")}`];
+  return formatHandles("references", message.quotedMemberIds ?? [], snapshot);
 }
 
 function formatTranscriptEntry(snapshot: WorkspaceSnapshot, message: ChatMessage): string {
   const lines = [
     `- [${message.createdAt}] ${message.author.label} (${message.transport}/${message.status})`,
     `  ${message.content.replace(/\n/gu, "\n  ")}`,
-    ...formatHandles("  mentions", message.mentionedMemberIds, snapshot),
-    ...formatQuotedHandles(message, snapshot).map((line) => `  ${line}`),
+    ...formatHandles("  assignments", message.mentionedMemberIds, snapshot, "@>"),
+    ...formatReferenceHandles(message, snapshot).map((line) => `  ${line}`),
   ];
 
   return `${lines.join("\n")}\n`;
@@ -72,8 +72,8 @@ async function ensureTranscriptFile(filePath: string, snapshot: WorkspaceSnapsho
   }
 }
 
-function formatHistoryHandles(prefix: string, handles: string[]): string[] {
-  return handles.length > 0 ? [`${prefix}: ${handles.map((handle) => `@${handle}`).join(", ")}`] : [];
+function formatHistoryHandles(prefix: string, handles: string[], marker = "@"): string[] {
+  return handles.length > 0 ? [`${prefix}: ${handles.map((handle) => `${marker}${handle}`).join(", ")}`] : [];
 }
 
 function formatHandlerSummaries(entry: Extract<MemberSessionEntry, { type: "message" }>): string[] {
@@ -95,8 +95,8 @@ function formatMemberHistoryEntry(entry: MemberSessionEntry): string {
     const lines = [
       `- [${entry.createdAt}] message ${entry.message.author.label} (${entry.message.transport}/${entry.message.status})`,
       `  ${entry.message.content.replace(/\n/gu, "\n  ")}`,
-      ...formatHistoryHandles("  mentions", entry.mentionedHandles),
-      ...formatHistoryHandles("  quotes", entry.quotedHandles),
+      ...formatHistoryHandles("  assignments", entry.mentionedHandles, "@>"),
+      ...formatHistoryHandles("  references", entry.quotedHandles),
       ...formatHistoryHandles("  recipients", entry.recipientHandles),
       ...formatContextBadges(entry).map((line) => `  ${line}`),
       ...formatHandlerSummaries(entry).map((line) => `  ${line}`),
