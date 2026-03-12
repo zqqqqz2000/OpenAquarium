@@ -1,7 +1,7 @@
 import { Bot, Eye, Radio } from "lucide-react";
 
 import type { TeamMember } from "@/domain/model";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarBadge, AvatarFallback } from "@/components/ui/avatar";
 import { getMemberRoleLabel, getMemberRoleMonogram, getMemberRolePalette } from "@/lib/member-display";
 import { cn } from "@/lib/utils";
 
@@ -9,9 +9,10 @@ export function MemberAvatar(props: {
   member: TeamMember;
   active?: boolean;
   compact?: boolean;
+  showRunningDot?: boolean;
   onClick?: () => void;
 }) {
-  const { member, active = false, compact = false, onClick } = props;
+  const { member, active = false, compact = false, showRunningDot = false, onClick } = props;
   const roleLabel = getMemberRoleLabel(member.handle);
   const roleMonogram = getMemberRoleMonogram(member.handle);
   const rolePalette = getMemberRolePalette(member.handle);
@@ -35,6 +36,9 @@ export function MemberAvatar(props: {
           active && "ring-2 ring-ring/50 ring-offset-2 ring-offset-background",
         )}
       >
+        {showRunningDot && member.status === "running" ? (
+          <AvatarBadge aria-hidden="true" className="-top-0.5 -right-0.5 bottom-auto bg-emerald-500" />
+        ) : null}
         <AvatarFallback className="text-sm font-semibold" style={{ backgroundColor: rolePalette.background, color: rolePalette.foreground }}>
           {roleMonogram || <Bot size={20} strokeWidth={2.2} />}
         </AvatarFallback>

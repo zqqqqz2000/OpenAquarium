@@ -276,14 +276,17 @@ export function Sidebar(props: {
                           {(roomsByProject[project.id] ?? []).length > 0 ? (
                             (roomsByProject[project.id] ?? []).map((room) => {
                               const roomActivity = roomActivityById[room.id];
+                              const isActiveRoom = room.id === activeRoomId;
+                              const hasRunningRoom = roomActivity?.hasRunning ?? false;
 
                               return (
                                 <div
                                   key={room.id}
                                   className={cn(
                                     "flex items-start gap-2 rounded-xl border border-border/70 bg-card/80 px-2.5 py-2 shadow-sm transition-colors",
-                                    room.id === activeRoomId && "border-ring bg-accent/5",
-                                    roomActivity?.hasRunning && "border-[color:var(--tone-blueprint-border)]/85 bg-[color:var(--tone-blueprint-surface)]/85",
+                                    isActiveRoom && "border-ring bg-accent/5",
+                                    hasRunningRoom && "border-[color:var(--tone-blueprint-border)]/85 bg-[color:var(--tone-blueprint-surface)]/85",
+                                    isActiveRoom && hasRunningRoom && "ring-1 ring-ring",
                                   )}
                                 >
                                   <Link

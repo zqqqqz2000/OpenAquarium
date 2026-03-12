@@ -222,6 +222,47 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
   });
 
+  it("shows a static green dot only on running room member avatars", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
+    if (!builder) {
+      throw new Error("Expected builder member in seeded room");
+    }
+
+    snapshot.members[builder.id] = {
+      ...builder,
+      status: "running",
+    };
+
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    const { container } = render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const runningDots = container.querySelectorAll("[data-slot='avatar-badge']");
+    expect(runningDots).toHaveLength(1);
+    expect(runningDots[0]).toHaveClass("bg-emerald-500");
+    expect(runningDots[0]).not.toHaveClass("animate-oa-breathe");
+  });
+
   it("keeps the room header badge running when only a non-lead member is running", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();

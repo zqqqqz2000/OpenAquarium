@@ -262,4 +262,109 @@ describe("Sidebar", () => {
     expect(screen.getAllByText(/Updated /).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/running/i).length).toBeGreaterThan(0);
   });
+
+  it("keeps the existing active room styling when the room is not running", () => {
+    const snapshot = createSeedWorkspace();
+    const projectId = snapshot.projectOrder[0];
+    const roomId = snapshot.selection.roomId;
+    if (!projectId || !roomId) {
+      throw new Error("Expected seeded project and room ids");
+    }
+
+    const project = snapshot.projects[projectId];
+    const room = snapshot.rooms[roomId];
+    if (!project || !room) {
+      throw new Error("Expected seeded project and room");
+    }
+
+    const sidebarData = buildSidebarData(snapshot);
+
+    render(
+      <AppThemeProvider>
+        <TooltipProvider>
+          <Sidebar
+            collapsed={false}
+            projects={sidebarData.projects}
+            roomsByProject={sidebarData.roomsByProject}
+            projectActivityById={sidebarData.projectActivityById}
+            roomActivityById={sidebarData.roomActivityById}
+            activeProjectId={project.id}
+            activeRoomId={room.id}
+            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+            connected
+            loading={false}
+            onDeleteProject={vi.fn()}
+            onDeleteRoom={vi.fn()}
+            onDeleteTemplate={vi.fn()}
+            onResizeStart={vi.fn()}
+            onOpenTemplate={vi.fn()}
+            onOpenTemplateStudio={vi.fn()}
+          />
+        </TooltipProvider>
+      </AppThemeProvider>,
+    );
+
+    const roomCard = screen.getByText(room.name).closest("a")?.parentElement;
+    expect(roomCard).toBeTruthy();
+    expect(roomCard).toHaveClass("border-ring");
+    expect(roomCard).not.toHaveClass("ring-1");
+  });
+
+  it("preserves the active focus ring when a room is running", () => {
+    const snapshot = createSeedWorkspace();
+    const projectId = snapshot.projectOrder[0];
+    const roomId = snapshot.selection.roomId;
+    if (!projectId || !roomId) {
+      throw new Error("Expected seeded project and room ids");
+    }
+
+    const project = snapshot.projects[projectId];
+    const room = snapshot.rooms[roomId];
+    if (!project || !room) {
+      throw new Error("Expected seeded project and room");
+    }
+
+    snapshot.tasks[Object.keys(snapshot.tasks)[0]!] = {
+      ...snapshot.tasks[Object.keys(snapshot.tasks)[0]!]!,
+      status: "running",
+    };
+    snapshot.members[room.entryMemberId] = {
+      ...snapshot.members[room.entryMemberId]!,
+      status: "running",
+    };
+
+    const sidebarData = buildSidebarData(snapshot);
+
+    render(
+      <AppThemeProvider>
+        <TooltipProvider>
+          <Sidebar
+            collapsed={false}
+            projects={sidebarData.projects}
+            roomsByProject={sidebarData.roomsByProject}
+            projectActivityById={sidebarData.projectActivityById}
+            roomActivityById={sidebarData.roomActivityById}
+            activeProjectId={project.id}
+            activeRoomId={room.id}
+            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+            connected
+            loading={false}
+            onDeleteProject={vi.fn()}
+            onDeleteRoom={vi.fn()}
+            onDeleteTemplate={vi.fn()}
+            onResizeStart={vi.fn()}
+            onOpenTemplate={vi.fn()}
+            onOpenTemplateStudio={vi.fn()}
+          />
+        </TooltipProvider>
+      </AppThemeProvider>,
+    );
+
+    const roomCard = screen.getByText(room.name).closest("a")?.parentElement;
+    expect(roomCard).toBeTruthy();
+    expect(roomCard).toHaveClass("border-[color:var(--tone-blueprint-border)]/85");
+    expect(roomCard).toHaveClass("bg-[color:var(--tone-blueprint-surface)]/85");
+    expect(roomCard).toHaveClass("ring-1");
+    expect(roomCard).toHaveClass("ring-ring");
+  });
 });

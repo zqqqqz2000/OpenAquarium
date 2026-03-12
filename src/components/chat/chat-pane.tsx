@@ -595,7 +595,7 @@ function RoomMembersSidebar(props: {
                       )}
                     >
                       <div className="flex items-start gap-3">
-                        <MemberAvatar member={member} compact active={member.id === selectedMemberId} />
+                        <MemberAvatar member={member} compact active={member.id === selectedMemberId} showRunningDot />
                         <div className="min-w-0 flex-1 space-y-3">
                           <div className="space-y-1">
                             <div className="flex flex-wrap items-center gap-2">
