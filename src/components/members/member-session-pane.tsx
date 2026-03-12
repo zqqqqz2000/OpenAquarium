@@ -17,6 +17,7 @@ import {
 import type { Room, TeamMember, WorkspaceSnapshot } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { getCollapsedMessageContent } from "@/components/chat/message-content";
+import { MessageMarkdown } from "@/components/chat/message-markdown";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { MemberIdentityChip } from "@/components/members/member-identity-chip";
 import { Badge } from "@/components/ui/badge";
@@ -252,9 +253,12 @@ function SessionRoomReplyRow(props: {
         </div>
         <span className="pt-1 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{formatTime(event.createdAt)}</span>
       </div>
-      <p className={cn("m-0 mt-2 whitespace-pre-wrap break-words text-sm leading-6", !expanded && "text-muted-foreground")}>
-        {displayContent}
-      </p>
+      <MessageMarkdown
+        content={displayContent}
+        className={cn("mt-2", !expanded && "text-muted-foreground")}
+        mentionHandles={new Set(event.message.mentionedHandles)}
+        quoteHandles={new Set(event.message.quotedHandles)}
+      />
       <Button
         type="button"
         variant="ghost"

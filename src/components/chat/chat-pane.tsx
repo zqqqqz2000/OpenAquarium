@@ -17,7 +17,13 @@ import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
 import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
 import type { RoomTeamSummary } from "@/lib/room-team";
 import { getUIMessageText, type WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
-import type { MessageHandlerSummary } from "@/lib/message-feed";
+import {
+  getMessageHandlers,
+  getMessageMentionHandles,
+  getMessageQuotedHandles,
+  getMessageRecipientHandles,
+  type MessageHandlerSummary,
+} from "@/lib/message-feed";
 import { badgeToneProps, memberStatusBadgeProps } from "@/lib/ui-tone";
 import { cn, summarizePrompt } from "@/lib/utils";
 
@@ -390,7 +396,7 @@ export function ChatPane(props: {
           <div className="relative min-h-0 flex-1">
             <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-0.5 py-0.5 md:px-1" onScroll={updateScrollState}>
               {roomChat.messages.map((message) => {
-                const bubble = toBubbleModel(message, room.id, snapshot.currentUserName);
+                const bubble = toBubbleModel(message, snapshot, room, snapshot.currentUserName);
                 const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
 
                 return (
@@ -664,7 +670,8 @@ function inferMessageStatus(message: WorkspaceUIMessage): ChatMessage["status"] 
 
 function toBubbleModel(
   message: WorkspaceUIMessage,
-  roomId: string,
+  snapshot: WorkspaceSnapshot,
+  room: Room,
   currentUserName: string,
   activeRoute?: {
     memberId: string;
@@ -684,11 +691,17 @@ function toBubbleModel(
   const authorKind = message.metadata?.authorKind ?? (message.role === "user" ? "user" : "member");
   const authorId = message.metadata?.authorId ?? (message.role === "user" ? "user" : activeRoute?.memberId ?? "assistant");
   const authorLabel = message.metadata?.authorLabel ?? (message.role === "user" ? currentUserName : activeRoute?.memberName ?? "Assistant");
+  const sourceMessageId = message.metadata?.domainMessageId;
+  const sourceMessage = sourceMessageId ? snapshot.messages[sourceMessageId] : undefined;
+  const handlerSummaries = message.metadata?.handlerSummaries ?? (sourceMessage ? getMessageHandlers(snapshot, sourceMessage) : []);
+  const mentionedHandles = message.metadata?.mentionedHandles ?? (sourceMessage ? getMessageMentionHandles(snapshot, sourceMessage) : []);
+  const quotedHandles = message.metadata?.quotedHandles ?? (sourceMessage ? getMessageQuotedHandles(snapshot, sourceMessage) : []);
+  const recipientHandles = message.metadata?.recipientHandles ?? (sourceMessage ? getMessageRecipientHandles(snapshot, room, sourceMessage) : []);
 
   return {
     message: {
       id: message.id,
-      roomId,
+      roomId: room.id,
       author: {
         kind: authorKind,
         id: authorId,
@@ -698,15 +711,15 @@ function toBubbleModel(
       createdAt: message.metadata?.createdAt ?? new Date().toISOString(),
       transport: message.metadata?.transport ?? "group",
       status,
-      mentionedMemberIds: [],
-      quotedMemberIds: [],
-      recipientMemberIds: [],
-      taskId: message.metadata?.handlerSummaries?.[0]?.taskId,
+      mentionedMemberIds: sourceMessage?.mentionedMemberIds ?? [],
+      quotedMemberIds: sourceMessage?.quotedMemberIds ?? [],
+      recipientMemberIds: sourceMessage?.recipientMemberIds ?? [],
+      taskId: handlerSummaries[0]?.taskId ?? sourceMessage?.taskId,
     },
     authorMemberId: message.metadata?.memberId ?? (message.role === "assistant" ? activeRoute?.memberId : undefined),
-    mentionedHandles: message.metadata?.mentionedHandles ?? [],
-    quotedHandles: message.metadata?.quotedHandles ?? [],
-    recipientHandles: message.metadata?.recipientHandles ?? [],
-    handlerSummaries: message.metadata?.handlerSummaries ?? [],
+    mentionedHandles,
+    quotedHandles,
+    recipientHandles,
+    handlerSummaries,
   };
 }

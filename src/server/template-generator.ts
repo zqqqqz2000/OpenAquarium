@@ -142,6 +142,7 @@ function buildTemplateGenerationPrompt(brief: string, references: TeamTemplate[]
     "[Guidance]",
     "- Keep prompts specific and operational.",
     "- Make each member prompt tell the model to publish brief visible progress updates during longer tasks so the user is not left waiting in silence.",
+    "- In generated prompts, make clear that visible room replies and direct messages are rendered as Markdown for the user.",
     "- In generated prompts, teach that @handle is only a passive reference and @>handle is the real active assignment syntax.",
     "- Use a mix of entry, implementation, research, QA, recorder, incident, or data roles as appropriate to the brief.",
     "- Make skills complementary; do not duplicate every member.",

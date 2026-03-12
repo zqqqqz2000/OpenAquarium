@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 
 import { Cpu, Lock, Megaphone, PencilLine } from "lucide-react";
 
@@ -6,6 +6,7 @@ import type { ChatMessage, TeamMember } from "@/domain/model";
 import type { ContextBadge, MessageHandlerSummary } from "@/lib/message-feed";
 import { areMessageBubblePropsEqual } from "@/components/chat/message-bubble-equality";
 import { getCollapsedMessageContent } from "@/components/chat/message-content";
+import { MessageMarkdown } from "@/components/chat/message-markdown";
 import { MemberAvatar } from "@/components/members/member-avatar";
 import { MemberIdentityChip } from "@/components/members/member-identity-chip";
 import { Badge } from "@/components/ui/badge";
@@ -93,9 +94,13 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
   const messageContent = (
     <>
       <div className={cn("space-y-1.5", usesCompactSurface && "space-y-1")}>
-        <p className={cn("m-0 whitespace-pre-wrap text-sm leading-6", usesCompactSurface && "leading-[1.35rem]")}>
-          {renderHighlightedMessage(displayContent, highlightedHandles)}
-        </p>
+        <MessageMarkdown
+          content={displayContent}
+          className={cn(usesCompactSurface && "space-y-2.5 leading-[1.35rem]")}
+          mentionHandles={highlightedHandles.mentionHandles}
+          quoteHandles={highlightedHandles.quoteHandles}
+          streaming={message.status === "streaming"}
+        />
         {showExpandToggle ? (
           <Button
             type="button"
@@ -202,39 +207,3 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
 }
 
 export const MessageBubble = memo(MessageBubbleComponent, areMessageBubblePropsEqual);
-
-function renderHighlightedMessage(
-  content: string,
-  handles: {
-    mentionHandles: ReadonlySet<string>;
-    quoteHandles: ReadonlySet<string>;
-  },
-) {
-  return content.split(/(@>[\p{L}\p{N}_-]+|@[\p{L}\p{N}_-]+)/gu).map((segment, index) => {
-    const mentionMatch = /^@>([\p{L}\p{N}_-]+)$/u.exec(segment);
-    if (mentionMatch && handles.mentionHandles.has(mentionMatch[1] ?? "")) {
-      return (
-        <span
-          key={`${segment}-${index}`}
-          className="rounded-md bg-[var(--tone-postit-badge)] px-1 py-0.5 text-[var(--tone-postit-foreground)]"
-        >
-          {segment}
-        </span>
-      );
-    }
-
-    const quoteMatch = /^@([\p{L}\p{N}_-]+)$/u.exec(segment);
-    if (quoteMatch && handles.quoteHandles.has(quoteMatch[1] ?? "")) {
-      return (
-        <span
-          key={`${segment}-${index}`}
-          className="rounded-md bg-[var(--tone-paper-badge)] px-1 py-0.5 text-[var(--tone-paper-foreground)]"
-        >
-          {segment}
-        </span>
-      );
-    }
-
-    return <Fragment key={`${segment}-${index}`}>{segment}</Fragment>;
-  });
-}

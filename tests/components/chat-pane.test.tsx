@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -60,6 +60,60 @@ describe("ChatPane", () => {
 
     expect(onToggleLeftSidebar).toHaveBeenCalledTimes(1);
     expect(onToggleRightSidebar).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders room messages as markdown while keeping @ and @> highlights", async () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const lead = members.find((member) => member.handle === "lead");
+    const builder = members.find((member) => member.handle === "builder");
+    const firstMessageId = snapshot.messageOrderByRoom[room.id]?.[0];
+
+    if (!lead || !builder || !firstMessageId) {
+      throw new Error("Expected lead, builder, and an initial room message");
+    }
+
+    const firstMessage = snapshot.messages[firstMessageId];
+    snapshot.messages[firstMessageId] = {
+      ...firstMessage,
+      content: "## 进度\n\n- 已对齐 `workspace`\n- @lead 复核\n- @>builder 开始实现",
+      mentionedMemberIds: [builder.id],
+      quotedMemberIds: [lead.id],
+    };
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const markdownHeading = screen.getByRole("heading", { level: 2, name: "进度" });
+    const markdownBubble = markdownHeading.closest("[data-message-kind]");
+
+    if (!(markdownBubble instanceof HTMLElement)) {
+      throw new Error("Expected markdown heading to render inside a message bubble");
+    }
+
+    expect(within(markdownBubble).getByText("workspace", { selector: "code" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(markdownBubble.querySelector('[data-message-mention-kind="reference"]')?.textContent).toBe("@lead");
+      expect(markdownBubble.querySelector('[data-message-mention-kind="assignment"]')?.textContent).toBe("@>builder");
+    });
   });
 
   it("lets the user target a member for direct messaging from the members sidebar", async () => {

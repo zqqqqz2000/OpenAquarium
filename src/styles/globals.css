@@ -1,7 +1,10 @@
+@source "../../node_modules/streamdown/dist/*.js";
+
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "streamdown/styles.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -211,6 +214,27 @@
 
 .animate-oa-breathe {
   animation: oa-breathe 1.8s ease-in-out infinite;
+}
+
+@layer components {
+  .oa-message-markdown {
+    min-width: 0;
+  }
+
+  .oa-message-markdown [data-streamdown="unordered-list"],
+  .oa-message-markdown [data-streamdown="ordered-list"] {
+    margin-block: 0.5rem;
+    padding-inline-start: 0;
+  }
+
+  .oa-message-markdown [data-streamdown="blockquote"] {
+    margin-block: 0.5rem;
+  }
+
+  .oa-message-markdown [data-streamdown="code-block"],
+  .oa-message-markdown [data-streamdown="table-wrapper"] {
+    margin-block: 0.75rem;
+  }
 }
 
 @media (max-width: 1200px) {

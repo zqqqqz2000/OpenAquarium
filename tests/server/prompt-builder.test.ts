@@ -34,6 +34,7 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("do not stay silent on long tasks");
     expect(prompt).toContain("send an early visible progress update");
     expect(prompt).toContain("Keep the user and team updated with short progress messages");
+    expect(prompt).toContain("rendered to the user as Markdown");
   });
 
   it("switches to a delta prompt after the first persisted member turn", () => {
@@ -90,6 +91,7 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("@handle: passive reference only.");
     expect(prompt).toContain("@>handle: active routing.");
     expect(prompt).toContain("It does not notify the member, does not route work");
+    expect(prompt).toContain("render as Markdown");
   });
 
   it("rewrites OpenAquarium notification commands to absolute paths when a project path is set", () => {

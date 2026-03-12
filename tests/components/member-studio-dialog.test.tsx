@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
 import { createRuntimeContext } from "@/domain/identity";
-import { postUserMessage } from "@/domain/workspace";
+import { postMemberMessage, postUserMessage } from "@/domain/workspace";
 import type { UpdateMemberConfigInput } from "@/domain/model";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
@@ -77,7 +77,17 @@ describe("MemberStudioDialog", () => {
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
     const lead = members.find((member) => member.handle === "lead")!;
+    const firstMessageId = snapshot.messageOrderByRoom[room.id]?.[0];
     const leadTask = Object.values(snapshot.tasks).find((task) => task.memberId === lead.id)!;
+
+    if (!firstMessageId) {
+      throw new Error("Expected an initial room message");
+    }
+
+    snapshot.messages[firstMessageId] = {
+      ...snapshot.messages[firstMessageId],
+      content: "**需求范围**\n\n- 先定义 transcript 结构",
+    };
     snapshot.taskTraces.trace_0001 = {
       id: "trace_0001",
       taskId: leadTask.id,
@@ -120,6 +130,7 @@ describe("MemberStudioDialog", () => {
     expect(screen.getByText("Processing history")).toBeInTheDocument();
     expect(screen.getByText("Accepted")).toBeInTheDocument();
     expect(screen.getByText("Reply")).toBeInTheDocument();
+    expect(screen.getByText("需求范围", { selector: '[data-streamdown="strong"]' })).toBeInTheDocument();
     expect(
       screen.getAllByText((_, element) =>
         element?.textContent?.includes("@builder @research 先整理需求边界，然后由 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。") ?? false,
@@ -172,7 +183,7 @@ describe("MemberStudioDialog", () => {
 
   it("shows the member session timeline and lets the user send a direct message", async () => {
     const user = userEvent.setup();
-    const snapshot = createSeedWorkspace();
+    let snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
     const lead = members.find((member) => member.handle === "lead")!;
@@ -257,6 +268,16 @@ describe("MemberStudioDialog", () => {
       "trace_0105",
       "trace_0106",
     ];
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        memberId: lead.id,
+        content: "**私聊更新**\n\n`done`",
+        directToUser: true,
+      },
+      createRuntimeContext(901, "2026-03-09T07:31:00.000Z"),
+    );
 
     render(
       <MemberStudioDialog
@@ -277,6 +298,8 @@ describe("MemberStudioDialog", () => {
     await user.click(screen.getByRole("tab", { name: "Session" }));
 
     expect(screen.getByText("Member session")).toBeInTheDocument();
+    expect(screen.getByText("私聊更新", { selector: '[data-streamdown="strong"]' })).toBeInTheDocument();
+    expect(screen.getByText("done", { selector: "code" })).toBeInTheDocument();
     expect(screen.queryByText("Task prompt")).not.toBeInTheDocument();
     const activity = screen.getByTestId("member-session-activity");
     expect(within(activity).getByText("我先查代码和文档里这些开关对应的字段与行为，确认它们在当前实现里的真实作用。我已经定位到用户问的是成员配置/房间行为相关的开关。")).toBeInTheDocument();
