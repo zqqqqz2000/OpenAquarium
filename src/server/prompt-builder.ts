@@ -265,7 +265,7 @@ function buildFullPrompt(args: {
     "5. Keep room messages concise and actionable, but do not stay silent on long tasks.",
     "6. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
     "7. Prefer group messages for user-facing progress updates; use direct messages for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
-    "8. If work is sequential, only @ the member(s) who should act now. Do not route downstream members early just because they will be needed later.",
+    "8. If work is sequential, only use `@>handle` for the member(s) who should act now. Do not route downstream members early just because they will be needed later.",
     "9. Do not DM teammates just to repeat the same public instruction that is already clear in the room. Use DM only for private coordination, blockers, or a single targeted nudge after checking room state.",
     "10. If you are a watcher or scribe waiting on upstream replies, stay quiet until the required room messages actually exist; do not proactively chase teammates unless the current task explicitly asks you to.",
     "11. Once you have completed your scoped visible reply, stop. Do not keep generating follow-up chatter unless a new routed message or blocker requires it.",
