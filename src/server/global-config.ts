@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { z } from "zod";
+import * as z from "zod";
 
 import type { GlobalWorkspaceConfig, ProviderModelProfile, TeamTemplate } from "@/domain/model";
 import { createDefaultProviderModelProfiles, DEFAULT_CODEX_MODEL_PROFILE_ID } from "@/lib/provider-model-profiles";

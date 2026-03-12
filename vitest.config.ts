@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -16,6 +16,8 @@ export default defineConfig({
     globals: true,
     pool: "forks",
     setupFiles: ["./tests/setup.ts"],
+    include: ["tests/**/*.test.{ts,tsx}"],
+    exclude: [...configDefaults.exclude, ".codex-output/**", "dogfood-output/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],

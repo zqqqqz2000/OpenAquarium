@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { acpTools, createACPProvider, ACP_PROVIDER_AGENT_DYNAMIC_TOOL_NAME } from "@mcpc-tech/acp-ai-provider";
 import { streamText, tool } from "ai";
-import { z } from "zod";
+import * as z from "zod";
 
 import type { Project, RoomId, TeamMember } from "../domain/model";
 import { CODEX_ACP_MODE_ENV_KEY, ensureCodexAcpSessionMode } from "../lib/acp";
