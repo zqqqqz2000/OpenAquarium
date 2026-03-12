@@ -31,6 +31,7 @@ import type {
   WorkspaceSnapshot,
 } from "./model";
 import type { MutationContext } from "./identity";
+import { formatTime } from "../lib/time";
 
 function cloneSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
   return {
@@ -1147,7 +1148,7 @@ export function updateRoomTeam(
 
 export function setEntryMember(current: WorkspaceSnapshot, memberId: MemberId): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
-  const { member, room } = resolveActiveRoomMember(snapshot, memberId);
+  const { room } = resolveActiveRoomMember(snapshot, memberId);
   room.memberIds.forEach((roomMemberId) => {
     snapshot.members[roomMemberId] = {
       ...snapshot.members[roomMemberId],
@@ -1290,17 +1291,17 @@ export function toggleWatcher(current: WorkspaceSnapshot, watcherId: string): Wo
 
 function formatDigestLine(snapshot: WorkspaceSnapshot, messageId: MessageId): string {
   const message = snapshot.messages[messageId];
-  const stamp = message.createdAt.slice(11, 16);
+  const stamp = formatTime(message.createdAt);
   const mentionSuffix =
     message.mentionedMemberIds.length > 0
       ? ` @>${message.mentionedMemberIds.map((memberId) => snapshot.members[memberId]?.handle ?? memberId).join(", @>")}`
       : "";
-  const quoteSuffix =
+  const referenceSuffix =
     (message.quotedMemberIds?.length ?? 0) > 0
       ? ` @${message.quotedMemberIds?.map((memberId) => snapshot.members[memberId]?.handle ?? memberId).join(", @")}`
       : "";
 
-  return `[${stamp}] ${message.author.label}: ${message.content}${mentionSuffix}${quoteSuffix}`;
+  return `[${stamp}] ${message.author.label}: ${message.content}${mentionSuffix}${referenceSuffix}`;
 }
 
 function truncateWatcherStateContent(content: string, maxLength = 180): string {
@@ -1409,7 +1410,7 @@ function findLatestWatcherStateChangeAt(snapshot: WorkspaceSnapshot, watcher: Wa
 }
 
 function formatWatcherStateDigestLine(snapshot: WorkspaceSnapshot, trace: TaskTraceEntry): string {
-  const stamp = trace.createdAt.slice(11, 16);
+  const stamp = formatTime(trace.createdAt);
   const memberHandle = snapshot.members[trace.memberId]?.handle ?? trace.memberId;
   const taskTitle = snapshot.tasks[trace.taskId]?.title ?? trace.title;
 
@@ -1429,7 +1430,7 @@ function formatWatcherStateDigestLine(snapshot: WorkspaceSnapshot, trace: TaskTr
     case "task-prompt":
       return `[${stamp}] @${memberHandle} prompt refreshed`;
     default:
-      return `[${stamp}] @${memberHandle} ${trace.kind}: ${truncateWatcherStateContent(trace.content)}`;
+      return `[${stamp}] @${memberHandle} ${String(trace.kind)}: ${truncateWatcherStateContent(trace.content)}`;
   }
 }
 
@@ -1551,19 +1552,7 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
 }
 
 export function extractMentionMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {
-  const room = snapshot.rooms[roomId];
-
-  if (!room) {
-    return [];
-  }
-
-  const handles = extractTaggedHandles(snapshot, roomId, content, "@>");
-
-  if (handles.length === 0) {
-    return [];
-  }
-
-  return handles;
+  return extractTaggedHandles(snapshot, roomId, content, "@>");
 }
 
 export function extractQuotedMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {

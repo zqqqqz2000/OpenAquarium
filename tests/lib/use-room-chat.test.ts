@@ -34,7 +34,7 @@ describe("useRoomChat helpers", () => {
         snapshot,
         room,
         membersById,
-        content: "@scribe 先记录一下，然后 @research 再补充事实。",
+        content: "@>scribe 先记录一下，然后 @research 再补充事实。",
       }),
     ).toBe(firstAddressedMember?.id);
   });
@@ -65,7 +65,7 @@ describe("useRoomChat helpers", () => {
         snapshot,
         room,
         membersById,
-        content: "先接住这条消息，再让 @research 后续补事实。",
+        content: "先接住这条消息，再让 @>research 后续补事实。",
       }),
     ).toBe(research?.id);
   });

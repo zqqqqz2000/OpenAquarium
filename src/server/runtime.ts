@@ -25,7 +25,7 @@ import {
   upsertTaskTrace,
   upsertMemberWatcher,
 } from "../domain/workspace";
-import { createRuntimeContext, type MutationContext } from "../domain/identity";
+import { createRuntimeContext, createSystemClockContext, type MutationContext } from "../domain/identity";
 import type {
   CreateProjectInput,
   CreateRoomInput,
@@ -92,6 +92,82 @@ interface TaskObserverEntry {
 interface WatcherTimerEntry {
   intervalMs: number;
   timer: ReturnType<typeof setInterval>;
+}
+
+class TaskExecutionTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TaskExecutionTimeoutError";
+  }
+}
+
+class TaskExecutionProtocolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TaskExecutionProtocolError";
+  }
+}
+
+interface TaskExecutionWatchdog {
+  timeoutPromise: Promise<never>;
+  touch(): void;
+  dispose(): void;
+}
+
+function createTaskExecutionWatchdog(args: {
+  timeoutMs: number | undefined;
+  label: string;
+  onTimeout(): void;
+}): TaskExecutionWatchdog | undefined {
+  if (!args.timeoutMs || args.timeoutMs <= 0) {
+    return undefined;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let active = true;
+  let rejectTimeout: ((error: Error) => void) | undefined;
+
+  const schedule = (): void => {
+    if (!active) {
+      return;
+    }
+
+    if (timer) {
+      clearTimeout(timer);
+    }
+
+    timer = setTimeout(() => {
+      if (!active) {
+        return;
+      }
+
+      active = false;
+      args.onTimeout();
+      rejectTimeout?.(new TaskExecutionTimeoutError(`${args.label} timed out after ${args.timeoutMs}ms`));
+    }, args.timeoutMs);
+  };
+
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+    schedule();
+  });
+
+  return {
+    timeoutPromise,
+    touch: schedule,
+    dispose: () => {
+      active = false;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    },
+  };
+}
+
+function buildTaskExecutionTimeoutMessage(timeoutMs: number): string {
+  const seconds = Math.max(1, Math.round(timeoutMs / 1_000));
+  return `当前任务在 ${seconds} 秒内没有新的进度或完成信号，已自动结束。可能是模型服务无响应、达到使用上限，或 ACP 会话卡住。`;
 }
 
 function buildVisibleTaskFailureContent(message: string): string {
@@ -225,7 +301,7 @@ function getSnapshotSequenceStart(snapshot: WorkspaceSnapshot): number {
   }, 10_000);
 }
 
-function getSnapshotTimeStart(snapshot: WorkspaceSnapshot): string {
+function getSnapshotTimeStart(snapshot: WorkspaceSnapshot): string | undefined {
   const timestamps = [
     ...Object.values(snapshot.projects).map((project) => project.createdAt),
     ...Object.values(snapshot.rooms).map((room) => room.createdAt),
@@ -236,8 +312,11 @@ function getSnapshotTimeStart(snapshot: WorkspaceSnapshot): string {
     .map((value) => Date.parse(value))
     .filter((value) => Number.isFinite(value));
 
-  const latest = timestamps.length > 0 ? Math.max(...timestamps) : Date.now();
-  return new Date(latest + 1_000).toISOString();
+  if (timestamps.length === 0) {
+    return undefined;
+  }
+
+  return new Date(Math.max(...timestamps)).toISOString();
 }
 
 export class WorkspaceRuntime {
@@ -257,6 +336,7 @@ export class WorkspaceRuntime {
   private readonly executorFactory: MemberExecutorFactory;
   private readonly templateStudioChatService: TemplateStudioChatServiceLike;
   private readonly templateGenerator: TemplateGenerator;
+  private readonly taskExecutionInactivityTimeoutMs?: number;
   private readonly logger?: DiagnosticsLogger;
   private globalConfig: GlobalWorkspaceConfig;
   private readonly executorKeys = new Map<MemberId, string>();
@@ -274,6 +354,7 @@ export class WorkspaceRuntime {
     workspaceRoot: string;
     executorFactory?: MemberExecutorFactory;
     templateGenerator?: TemplateGenerator;
+    taskExecutionInactivityTimeoutMs?: number;
     context?: MutationContext;
     logger?: DiagnosticsLogger;
   }) {
@@ -284,6 +365,10 @@ export class WorkspaceRuntime {
     this.globalConfigManager = args.globalConfigManager ?? new OpenAquariumGlobalConfigManager();
     this.globalConfig = args.globalConfig ?? createDefaultGlobalWorkspaceConfig(this.globalConfigManager.directory);
     this.templateStudioChatService = args.templateStudioChatService ?? new TemplateStudioChatService();
+    this.taskExecutionInactivityTimeoutMs =
+      args.taskExecutionInactivityTimeoutMs && args.taskExecutionInactivityTimeoutMs > 0
+        ? args.taskExecutionInactivityTimeoutMs
+        : undefined;
     this.logger = args.logger;
     this.executorFactory =
       args.executorFactory ??
@@ -338,6 +423,7 @@ export class WorkspaceRuntime {
     templateStudioChatService?: TemplateStudioChatServiceLike;
     executorFactory?: MemberExecutorFactory;
     templateGenerator?: TemplateGenerator;
+    taskExecutionInactivityTimeoutMs?: number;
     logger?: DiagnosticsLogger;
   }): Promise<WorkspaceRuntime> {
     const globalConfigManager = new OpenAquariumGlobalConfigManager(args.configDirPath);
@@ -359,7 +445,8 @@ export class WorkspaceRuntime {
       workspaceRoot: args.workspaceRoot,
       executorFactory: args.executorFactory,
       templateGenerator: args.templateGenerator,
-      context: createRuntimeContext(getSnapshotSequenceStart(initialSnapshot), getSnapshotTimeStart(initialSnapshot)),
+      taskExecutionInactivityTimeoutMs: args.taskExecutionInactivityTimeoutMs,
+      context: createSystemClockContext(getSnapshotSequenceStart(initialSnapshot), getSnapshotTimeStart(initialSnapshot)),
       logger: args.logger,
     });
     runtime.logger?.info("runtime-created", summarizeWorkspaceSnapshot(initialSnapshot));
@@ -742,10 +829,6 @@ export class WorkspaceRuntime {
 
     this.pendingWatcherRuns.delete(watcherId);
 
-    if (!this.canRunWatcherNow(watcherId)) {
-      return this.snapshot;
-    }
-
     const previous = this.snapshot;
     const next = runWatcher(previous, watcherId, this.context);
     await this.applySnapshot(previous, next);
@@ -934,6 +1017,8 @@ export class WorkspaceRuntime {
     const member = this.snapshot.members[task.memberId];
     const room = this.snapshot.rooms[task.roomId];
     const project = this.snapshot.projects[room.projectId];
+    let executor: MemberExecutor | undefined;
+    let taskTimedOut = false;
     this.runningTaskIds.add(taskId);
     try {
       this.logger?.info("task-execute-start", {
@@ -943,7 +1028,7 @@ export class WorkspaceRuntime {
         memberHandle: member.handle,
         runningTasks: this.runningTaskIds.size,
       });
-      const executor = this.getExecutor(member.id, member, room, project);
+      executor = this.getExecutor(member.id, member, room, project);
       const prompt = buildTaskPrompt({
         workspaceRoot: this.workspaceRoot,
         project,
@@ -968,200 +1053,274 @@ export class WorkspaceRuntime {
       this.scheduleProgressPersistence();
       this.emit();
 
-      await executor.execute(
-        {
-          project,
-          room,
-          member: this.resolveMemberForExecution(member),
-          task,
-          snapshot: this.snapshot,
-          prompt,
+      let acceptingExecutorUpdates = true;
+      let taskSettled = false;
+      const watchdog = createTaskExecutionWatchdog({
+        timeoutMs: this.taskExecutionInactivityTimeoutMs,
+        label: `Task ${taskId} for @${member.handle}`,
+        onTimeout: () => {
+          acceptingExecutorUpdates = false;
+          taskTimedOut = true;
         },
-        {
-          onDraft: async (content) => {
-            const currentTask = this.snapshot.tasks[taskId];
-            if (!currentTask || currentTask.status !== "running") {
-              return;
-            }
-            this.snapshot = compactWorkspaceSnapshot(upsertTaskTrace(
-              postMemberDraft(this.snapshot, { taskId, content }, this.context),
-              {
-                taskId,
-                roomId: currentTask.roomId,
-                memberId: currentTask.memberId,
-                kind: "draft",
-                title: "Internal draft",
-                content,
-              },
-              this.context,
-            ));
-            this.scheduleProgressPersistence();
-            this.emit();
-            const logger = this.logger;
-            if (logger && logger.shouldLog(`task-draft:${taskId}`, 800)) {
-              logger.info("task-draft", {
-                taskId,
-                roomId: currentTask.roomId,
-                memberId: currentTask.memberId,
-                chars: content.length,
-              });
-            }
-            const draftTask = this.snapshot.tasks[taskId];
-            const observer = this.taskObservers.get(taskId);
-            if (observer) {
-              await observer.callbacks.onDraft?.({
-                ...observer.route,
-                content,
-                messageId: draftTask?.draftMessageId,
-              });
-            }
+      });
+      const touchWatchdog = (): void => {
+        if (acceptingExecutorUpdates && watchdog) {
+          watchdog.touch();
+        }
+      };
+
+      const executionPromise = executor.execute(
+          {
+            project,
+            room,
+            member: this.resolveMemberForExecution(member),
+            task,
+            snapshot: this.snapshot,
+            prompt,
           },
-          onStatus: async (summary) => {
-            const currentTask = this.snapshot.tasks[taskId];
-            if (!currentTask || currentTask.status !== "running") {
-              return;
-            }
-            const statusTrace = describeTaskStatusTrace(summary);
-            this.snapshot = compactWorkspaceSnapshot(
-              statusTrace.append
-                ? appendTaskTrace(
-                    this.snapshot,
-                    {
-                      taskId,
-                      roomId: currentTask.roomId,
-                      memberId: currentTask.memberId,
-                      kind: "status",
-                      title: statusTrace.title,
-                      content: statusTrace.content,
-                    },
-                    this.context,
-                  )
-                : upsertTaskTrace(
-                    this.snapshot,
-                    {
-                      taskId,
-                      roomId: currentTask.roomId,
-                      memberId: currentTask.memberId,
-                      kind: "status",
-                      title: statusTrace.title,
-                      content: statusTrace.content,
-                    },
-                    this.context,
-                  ),
-            );
-            this.scheduleProgressPersistence();
-            this.emit();
-            this.logger?.info("task-status", {
-              taskId,
-              roomId: currentTask.roomId,
-              memberId: currentTask.memberId,
-              summary,
-              runningTasks: this.runningTaskIds.size,
-            });
-            const observer = this.taskObservers.get(taskId);
-            if (observer) {
-              await observer.callbacks.onStatus?.({
-                ...observer.route,
+          {
+            onDraft: async (content) => {
+              if (!acceptingExecutorUpdates) {
+                return;
+              }
+              touchWatchdog();
+              const currentTask = this.snapshot.tasks[taskId];
+              if (!currentTask || currentTask.status !== "running") {
+                return;
+              }
+              this.snapshot = compactWorkspaceSnapshot(upsertTaskTrace(
+                postMemberDraft(this.snapshot, { taskId, content }, this.context),
+                {
+                  taskId,
+                  roomId: currentTask.roomId,
+                  memberId: currentTask.memberId,
+                  kind: "draft",
+                  title: "Internal draft",
+                  content,
+                },
+                this.context,
+              ));
+              this.scheduleProgressPersistence();
+              this.emit();
+              const logger = this.logger;
+              if (logger && logger.shouldLog(`task-draft:${taskId}`, 800)) {
+                logger.info("task-draft", {
+                  taskId,
+                  roomId: currentTask.roomId,
+                  memberId: currentTask.memberId,
+                  chars: content.length,
+                });
+              }
+              const draftTask = this.snapshot.tasks[taskId];
+              const observer = this.taskObservers.get(taskId);
+              if (observer) {
+                await observer.callbacks.onDraft?.({
+                  ...observer.route,
+                  content,
+                  messageId: draftTask?.draftMessageId,
+                });
+              }
+            },
+            onStatus: async (summary) => {
+              if (!acceptingExecutorUpdates) {
+                return;
+              }
+              touchWatchdog();
+              const currentTask = this.snapshot.tasks[taskId];
+              if (!currentTask || currentTask.status !== "running") {
+                return;
+              }
+              const statusTrace = describeTaskStatusTrace(summary);
+              this.snapshot = compactWorkspaceSnapshot(
+                statusTrace.append
+                  ? appendTaskTrace(
+                      this.snapshot,
+                      {
+                        taskId,
+                        roomId: currentTask.roomId,
+                        memberId: currentTask.memberId,
+                        kind: "status",
+                        title: statusTrace.title,
+                        content: statusTrace.content,
+                      },
+                      this.context,
+                    )
+                  : upsertTaskTrace(
+                      this.snapshot,
+                      {
+                        taskId,
+                        roomId: currentTask.roomId,
+                        memberId: currentTask.memberId,
+                        kind: "status",
+                        title: statusTrace.title,
+                        content: statusTrace.content,
+                      },
+                      this.context,
+                    ),
+              );
+              this.scheduleProgressPersistence();
+              this.emit();
+              this.logger?.info("task-status", {
+                taskId,
+                roomId: currentTask.roomId,
+                memberId: currentTask.memberId,
                 summary,
+                runningTasks: this.runningTaskIds.size,
               });
-            }
-          },
-          onComplete: async (finalContent, stopReason) => {
-            const currentTask = this.snapshot.tasks[taskId];
-            if (!currentTask || currentTask.status !== "running") {
-              return;
-            }
-            const previous = this.snapshot;
-            const snapshotWithTrace = appendTaskTrace(
-              previous,
-              {
+              const observer = this.taskObservers.get(taskId);
+              if (observer) {
+                await observer.callbacks.onStatus?.({
+                  ...observer.route,
+                  summary,
+                });
+              }
+            },
+            onComplete: async (finalContent, stopReason) => {
+              if (!acceptingExecutorUpdates) {
+                return;
+              }
+              acceptingExecutorUpdates = false;
+              watchdog?.dispose();
+              const currentTask = this.snapshot.tasks[taskId];
+              if (!currentTask || currentTask.status !== "running") {
+                return;
+              }
+              const previous = this.snapshot;
+              const snapshotWithTrace = appendTaskTrace(
+                previous,
+                {
+                  taskId,
+                  roomId: currentTask.roomId,
+                  memberId: currentTask.memberId,
+                  kind: "completed",
+                  title: `Task completed (${stopReason})`,
+                  content: finalContent.trim().length > 0 ? finalContent : stopReason,
+                },
+                this.context,
+              );
+              const next = completeMemberTask(
+                snapshotWithTrace,
+                {
+                  taskId,
+                  finalContent:
+                    finalContent.trim().length > 0 ? finalContent : `${member.name} completed the task with stop reason: ${stopReason}`,
+                },
+                this.context,
+              );
+              await this.applySnapshot(previous, next);
+              this.logger?.info("task-complete", {
                 taskId,
                 roomId: currentTask.roomId,
                 memberId: currentTask.memberId,
-                kind: "completed",
-                title: `Task completed (${stopReason})`,
-                content: finalContent.trim().length > 0 ? finalContent : stopReason,
-              },
-              this.context,
-            );
-            const next = completeMemberTask(
-              snapshotWithTrace,
-              {
-                taskId,
-                finalContent:
-                  finalContent.trim().length > 0 ? finalContent : `${member.name} completed the task with stop reason: ${stopReason}`,
-              },
-              this.context,
-            );
-            await this.applySnapshot(previous, next);
-            this.logger?.info("task-complete", {
-              taskId,
-              roomId: currentTask.roomId,
-              memberId: currentTask.memberId,
-              stopReason,
-              chars: finalContent.length,
-              runningTasks: this.runningTaskIds.size,
-            });
-            const observer = this.taskObservers.get(taskId);
-            if (observer) {
-              await observer.callbacks.onComplete?.({
-                ...observer.route,
-                content: finalContent.trim().length > 0 ? finalContent : `${member.name} completed the task with stop reason: ${stopReason}`,
-                messageId: this.snapshot.tasks[taskId]?.draftMessageId,
                 stopReason,
+                chars: finalContent.length,
+                runningTasks: this.runningTaskIds.size,
               });
-              observer.resolve();
-            }
-          },
-          onError: async (message) => {
-            const currentTask = this.snapshot.tasks[taskId];
-            if (!currentTask || currentTask.status !== "running") {
-              return;
-            }
-            await this.completeFailedTask({
-              task: currentTask,
-              member: this.snapshot.members[currentTask.memberId],
-              traceTitle: "Task failed",
-              errorMessage: message,
-            });
-            this.logger?.error("task-error", {
-              taskId,
-              roomId: currentTask.roomId,
-              memberId: currentTask.memberId,
-              message,
-              runningTasks: this.runningTaskIds.size,
-            });
-            const observer = this.taskObservers.get(taskId);
-            if (observer) {
-              await observer.callbacks.onError?.({
-                ...observer.route,
+              const observer = this.taskObservers.get(taskId);
+              if (observer) {
+                await observer.callbacks.onComplete?.({
+                  ...observer.route,
+                  content: finalContent.trim().length > 0 ? finalContent : `${member.name} completed the task with stop reason: ${stopReason}`,
+                  messageId: this.snapshot.tasks[taskId]?.draftMessageId,
+                  stopReason,
+                });
+                observer.resolve();
+              }
+              taskSettled = true;
+            },
+            onError: async (message) => {
+              if (!acceptingExecutorUpdates) {
+                return;
+              }
+              acceptingExecutorUpdates = false;
+              watchdog?.dispose();
+              const currentTask = this.snapshot.tasks[taskId];
+              if (!currentTask || currentTask.status !== "running") {
+                return;
+              }
+              await this.completeFailedTask({
+                task: currentTask,
+                member: this.snapshot.members[currentTask.memberId],
+                traceTitle: "Task failed",
+                errorMessage: message,
+              });
+              this.logger?.error("task-error", {
+                taskId,
+                roomId: currentTask.roomId,
+                memberId: currentTask.memberId,
                 message,
-                messageId: this.snapshot.tasks[taskId]?.draftMessageId,
+                runningTasks: this.runningTaskIds.size,
               });
-              observer.resolve();
-            }
+              const observer = this.taskObservers.get(taskId);
+              if (observer) {
+                await observer.callbacks.onError?.({
+                  ...observer.route,
+                  message,
+                  messageId: this.snapshot.tasks[taskId]?.draftMessageId,
+                });
+                observer.resolve();
+              }
+              taskSettled = true;
+            },
           },
-        },
-      );
+        );
+      await (watchdog ? Promise.race([executionPromise, watchdog.timeoutPromise]) : executionPromise);
+      watchdog?.dispose();
+
+      if (!taskSettled) {
+        acceptingExecutorUpdates = false;
+        throw new TaskExecutionProtocolError("Executor returned without reporting completion or failure.");
+      }
     } catch (error) {
       const currentTask = this.snapshot.tasks[taskId];
       if (currentTask?.status === "running") {
         const currentMember = this.snapshot.members[currentTask.memberId];
-        const runtimeError = error as RuntimeError;
-        const errorMessage = getErrorMessage(runtimeError);
+        let errorMessage: string;
+        if (error instanceof TaskExecutionTimeoutError) {
+          const timeoutMs = this.taskExecutionInactivityTimeoutMs;
+          if (timeoutMs === undefined) {
+            throw new Error("Task timeout was raised without an inactivity timeout configured.", {
+              cause: error,
+            });
+          }
+
+          errorMessage = buildTaskExecutionTimeoutMessage(timeoutMs);
+        } else {
+          errorMessage = getErrorMessage(error as RuntimeError);
+        }
+
+        if (taskTimedOut && executor) {
+          void executor.cancel().catch((cancelError: unknown) => {
+            this.logger?.warn("task-timeout-cancel-failed", {
+              taskId,
+              roomId: currentTask.roomId,
+              memberId: currentTask.memberId,
+              message: getErrorMessage(cancelError as RuntimeError),
+            });
+          });
+        }
+
         await this.completeFailedTask({
           task: currentTask,
           member: currentMember,
-          traceTitle: "Task crashed before ACP completion",
+          traceTitle:
+            error instanceof TaskExecutionTimeoutError
+              ? "Task timed out waiting for executor progress"
+              : error instanceof TaskExecutionProtocolError
+                ? "Task ended without completion signal"
+                : "Task crashed before ACP completion",
           errorMessage,
         });
-        this.logger?.error("task-crash", {
-          taskId,
-          roomId: currentTask.roomId,
-          memberId: currentTask.memberId,
-          message: errorMessage,
-          runningTasks: this.runningTaskIds.size,
-        });
+        this.logger?.error(
+          error instanceof TaskExecutionTimeoutError ? "task-timeout" : "task-crash",
+          {
+            taskId,
+            roomId: currentTask.roomId,
+            memberId: currentTask.memberId,
+            message: errorMessage,
+            runningTasks: this.runningTaskIds.size,
+          },
+        );
         const observer = this.taskObservers.get(taskId);
         if (observer) {
           await observer.callbacks.onError?.({
@@ -1177,7 +1336,11 @@ export class WorkspaceRuntime {
       if (observer && this.snapshot.tasks[taskId]?.status !== "running") {
         observer.resolve();
       }
+      const settledTaskRoomId = this.snapshot.tasks[taskId]?.roomId ?? task.roomId;
       this.runningTaskIds.delete(taskId);
+      if (settledTaskRoomId && !this.hasRunningTaskInRoom(settledTaskRoomId)) {
+        await this.flushPendingWatchers();
+      }
     }
   }
 

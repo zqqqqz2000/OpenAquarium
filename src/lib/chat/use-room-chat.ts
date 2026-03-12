@@ -258,6 +258,7 @@ export function useRoomChat(args: {
 
   return {
     activeMembersById,
+    activeRoutes,
     hasActiveStreams,
     messages: seedMessages,
     roomStatus: activeRoutes[0],

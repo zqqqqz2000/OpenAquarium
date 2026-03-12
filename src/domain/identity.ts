@@ -5,6 +5,15 @@ export interface MutationContext {
   now(): string;
 }
 
+function parseStartedAtMs(startedAt?: string): number {
+  if (!startedAt) {
+    return 0;
+  }
+
+  const parsed = Date.parse(startedAt);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export function createSequenceIdFactory(start = 0): IdFactory {
   let index = start;
 
@@ -29,3 +38,16 @@ export function createRuntimeContext(start = 0, startedAt = "2026-03-09T00:00:00
   };
 }
 
+export function createSystemClockContext(start = 0, startedAt?: string): MutationContext {
+  const createId = createSequenceIdFactory(start);
+  let lastIssuedAtMs = parseStartedAtMs(startedAt);
+
+  return {
+    createId,
+    now() {
+      const nextMs = Math.max(Date.now(), lastIssuedAtMs + 1);
+      lastIssuedAtMs = nextMs;
+      return new Date(nextMs).toISOString();
+    },
+  };
+}

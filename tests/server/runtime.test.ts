@@ -53,6 +53,22 @@ async function flushMicrotasks(iterations = 8): Promise<void> {
   }
 }
 
+async function waitForRoomIdle(runtime: WorkspaceRuntime, roomId: string, attempts = 40): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const snapshot = runtime.getSnapshot();
+    const hasRunningTask = Object.values(snapshot.tasks).some((task) => task.roomId === roomId && task.status === "running");
+
+    if (!hasRunningTask) {
+      return;
+    }
+
+    await vi.advanceTimersByTimeAsync(20);
+    await flushMicrotasks(10);
+  }
+
+  throw new Error(`Room ${roomId} did not become idle in time`);
+}
+
 describe("WorkspaceRuntime", () => {
   const runtimes: WorkspaceRuntime[] = [];
 
@@ -123,7 +139,7 @@ describe("WorkspaceRuntime", () => {
       roomId,
       memberId: lead.id,
       taskId: leadTask.id,
-      content: "@builder 先把 ACP runtime 和 CLI 接起来。",
+      content: "@>builder 先把 ACP runtime 和 CLI 接起来。",
     });
 
     await waitFor(() => {
@@ -137,7 +153,7 @@ describe("WorkspaceRuntime", () => {
 
     snapshot = runtime.getSnapshot();
     const messages = (snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId].content);
-    expect(messages.some((message) => message.includes("@builder"))).toBe(true);
+    expect(messages.some((message) => message.includes("@>builder"))).toBe(true);
     expect(messages.some((message) => message.includes("lead internal plan"))).toBe(false);
     expect(messages.some((message) => message.includes("builder internal result"))).toBe(false);
     const leadTraceKinds = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map(
@@ -155,6 +171,7 @@ describe("WorkspaceRuntime", () => {
     const runtime = await WorkspaceRuntime.create({
       workspaceRoot,
       stateFilePath,
+      configDirPath: path.join(workspaceRoot, ".config"),
       executorFactory: ({ member }) =>
         new FakeExecutor(async (_request, callbacks) => {
           await callbacks.onComplete(`${member.handle} done`, "end_turn");
@@ -427,6 +444,163 @@ describe("WorkspaceRuntime", () => {
     });
   });
 
+  it("fails a task when the executor returns without a completion signal", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-no-settle-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      taskExecutionInactivityTimeoutMs: 200,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          if (member.handle === "lead") {
+            void callbacks;
+            return;
+          }
+
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "No Settle",
+      templateId: "template-product-pod",
+    });
+
+    const observedErrors: string[] = [];
+    await runtime.streamUserMessage(
+      {
+        roomId: created.roomId,
+        content: "@lead 请回应一下",
+      },
+      {
+        onError(route) {
+          observedErrors.push(route.message);
+        },
+      },
+    );
+
+    const snapshot = runtime.getSnapshot();
+    const lead = snapshot.rooms[created.roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead")!;
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === created.roomId && task.memberId === lead.id)!;
+    const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map((traceId) => snapshot.taskTraces[traceId]);
+    const roomMessages = (snapshot.messageOrderByRoom[created.roomId] ?? []).map((messageId) => snapshot.messages[messageId]);
+
+    expect(leadTask.status).toBe("completed");
+    expect(observedErrors).toEqual(["Executor returned without reporting completion or failure."]);
+    expect(
+      leadTraceEntries.some(
+        (entry) => entry?.kind === "error"
+          && entry.title === "Task ended without completion signal"
+          && entry.content === "Executor returned without reporting completion or failure.",
+      ),
+    ).toBe(true);
+    expect(roomMessages.some((message) => message.author.kind === "member" && message.content.includes("Executor returned without reporting completion or failure."))).toBe(true);
+  });
+
+  it("fails a task after the executor stops making progress", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-stall-timeout-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      taskExecutionInactivityTimeoutMs: 40,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          if (member.handle === "lead") {
+            await callbacks.onDraft("正在处理中");
+            await new Promise<void>(() => undefined);
+            return;
+          }
+
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Stall Timeout",
+      templateId: "template-product-pod",
+    });
+
+    const observedErrors: string[] = [];
+    await runtime.streamUserMessage(
+      {
+        roomId: created.roomId,
+        content: "@lead 请继续",
+      },
+      {
+        onError(route) {
+          observedErrors.push(route.message);
+        },
+      },
+    );
+
+    const snapshot = runtime.getSnapshot();
+    const lead = snapshot.rooms[created.roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead")!;
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === created.roomId && task.memberId === lead.id)!;
+    const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map((traceId) => snapshot.taskTraces[traceId]);
+
+    expect(leadTask.status).toBe("completed");
+    expect(observedErrors[0]).toContain("没有新的进度或完成信号");
+    expect((leadTraceEntries.filter((entry) => entry?.kind === "draft"))).toHaveLength(1);
+    expect(
+      leadTraceEntries.some(
+        (entry) => entry?.kind === "error"
+          && entry.title === "Task timed out waiting for executor progress"
+          && entry.content.includes("没有新的进度或完成信号"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps long-running tasks active when no inactivity timeout is configured", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-no-default-timeout-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          if (member.handle === "lead") {
+            await callbacks.onDraft("开始处理");
+            await new Promise<void>(() => undefined);
+            return;
+          }
+
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "No Default Timeout",
+      templateId: "template-product-pod",
+    });
+
+    await runtime.sendUserMessage({
+      roomId: created.roomId,
+      content: "@lead 慢慢处理",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const snapshot = runtime.getSnapshot();
+    const lead = snapshot.rooms[created.roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead")!;
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === created.roomId && task.memberId === lead.id)!;
+    const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map((traceId) => snapshot.taskTraces[traceId]);
+
+    expect(leadTask.status).toBe("running");
+    expect(leadTraceEntries.some((entry) => entry?.kind === "error")).toBe(false);
+    expect(leadTraceEntries.find((entry) => entry?.kind === "draft")?.content).toBe("开始处理");
+  });
+
   it("records internal draft/status in trace without publishing them into the room transcript", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-status-"));
     let allowCompletion: (() => void) | undefined;
@@ -464,12 +638,13 @@ describe("WorkspaceRuntime", () => {
         .find((member) => member.handle === "lead")!;
       const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === roomId && task.memberId === lead.id)!;
       const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map((traceId) => snapshot.taskTraces[traceId]);
+      const statusEntries = leadTraceEntries.filter((entry) => entry?.kind === "status");
 
       expect((snapshot.messageOrderByRoom[roomId] ?? []).map((messageId) => snapshot.messages[messageId].author.kind)).toEqual(["user"]);
       expect(leadTraceEntries.filter((entry) => entry?.kind === "draft")).toHaveLength(1);
-      expect(leadTraceEntries.filter((entry) => entry?.kind === "status")).toHaveLength(1);
+      expect(statusEntries).toHaveLength(2);
       expect(leadTraceEntries.find((entry) => entry?.kind === "draft")?.content).toBe("正在整理上下文，并补充最新事实");
-      expect(leadTraceEntries.find((entry) => entry?.kind === "status")?.content).toBe("Inspect room state (completed)");
+      expect(statusEntries.map((entry) => entry?.content)).toEqual(["Run room state (in_progress)", "Inspect room state"]);
     });
 
     allowCompletion?.();
@@ -513,7 +688,7 @@ describe("WorkspaceRuntime", () => {
     await runtime.streamUserMessage(
       {
         roomId: created.roomId,
-        content: "先让 @research 补事实，再让 @builder 搭骨架。",
+        content: "先让 @>research 补事实，再让 @>builder 搭骨架。",
       },
       {
         onTaskAccepted(route) {
@@ -550,6 +725,7 @@ describe("WorkspaceRuntime", () => {
     const firstRuntime = await WorkspaceRuntime.create({
       workspaceRoot,
       stateFilePath,
+      configDirPath: path.join(workspaceRoot, ".config"),
       executorFactory,
     });
     runtimes.push(firstRuntime);
@@ -570,6 +746,7 @@ describe("WorkspaceRuntime", () => {
     const secondRuntime = await WorkspaceRuntime.create({
       workspaceRoot,
       stateFilePath,
+      configDirPath: path.join(workspaceRoot, ".config"),
       executorFactory,
     });
     runtimes.push(secondRuntime);
@@ -682,9 +859,6 @@ describe("WorkspaceRuntime", () => {
   });
 
   it("runs a deferred watcher as soon as the room becomes idle", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-13T00:00:00.000Z"));
-
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-watcher-catch-up-"));
     let holdLead = false;
     let releaseLead: (() => void) | undefined;
@@ -730,7 +904,10 @@ describe("WorkspaceRuntime", () => {
       roomId,
       content: "先建立 watcher 基线",
     });
-    await flushMicrotasks();
+    await waitFor(() => {
+      const current = runtime.getSnapshot();
+      expect(Object.values(current.tasks).some((task) => task.roomId === roomId && task.status === "running")).toBe(false);
+    });
 
     snapshot = runtime.getSnapshot();
     const watcherId = snapshot.rooms[roomId].watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === scribe.id);
@@ -748,8 +925,8 @@ describe("WorkspaceRuntime", () => {
     });
     await flushMicrotasks();
 
-    await vi.advanceTimersByTimeAsync(60 * 1000);
-    await flushMicrotasks();
+    await runtime.runWatcherNow(watcherId);
+    await flushMicrotasks(10);
 
     snapshot = runtime.getSnapshot();
     expect(
@@ -758,15 +935,14 @@ describe("WorkspaceRuntime", () => {
 
     holdLead = false;
     releaseLead?.();
-    await flushMicrotasks(20);
-
-    snapshot = runtime.getSnapshot();
-    const digestMessages = Object.values(snapshot.messages).filter(
-      (message) => message.roomId === roomId && message.transport === "watch-digest",
-    );
-
-    expect(digestMessages).toHaveLength(1);
-    expect(digestMessages[0].content).toContain("这条消息需要在 busy 结束后被 watcher 补抓到");
+    await waitFor(() => {
+      snapshot = runtime.getSnapshot();
+      const digestMessages = Object.values(snapshot.messages).filter(
+        (message) => message.roomId === roomId && message.transport === "watch-digest",
+      );
+      expect(digestMessages).toHaveLength(1);
+      expect(digestMessages[0]?.content).toContain("这条消息需要在 busy 结束后被 watcher 补抓到");
+    });
   });
 
   it("reschedules watcher timers when the interval changes", async () => {
@@ -803,7 +979,7 @@ describe("WorkspaceRuntime", () => {
       roomId,
       content: "先建立 watcher 基线",
     });
-    await flushMicrotasks();
+    await waitForRoomIdle(runtime, roomId);
 
     await runtime.upsertWatcher({
       memberId: scribe.id,
@@ -823,7 +999,7 @@ describe("WorkspaceRuntime", () => {
       roomId,
       content: "interval 改完后应在 1 分钟触发 digest",
     });
-    await flushMicrotasks();
+    await waitForRoomIdle(runtime, roomId);
 
     await vi.advanceTimersByTimeAsync(59 * 1000);
     await flushMicrotasks();
@@ -834,15 +1010,20 @@ describe("WorkspaceRuntime", () => {
     ).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(1_000);
-    await flushMicrotasks();
-
-    snapshot = runtime.getSnapshot();
-    const digestMessages = Object.values(snapshot.messages).filter(
+    let digestMessages = Object.values(runtime.getSnapshot().messages).filter(
       (message) => message.roomId === roomId && message.transport === "watch-digest",
     );
+    for (let attempt = 0; attempt < 20 && digestMessages.length === 0; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(20);
+      await flushMicrotasks(10);
+      snapshot = runtime.getSnapshot();
+      digestMessages = Object.values(snapshot.messages).filter(
+        (message) => message.roomId === roomId && message.transport === "watch-digest",
+      );
+    }
 
     expect(digestMessages).toHaveLength(1);
-    expect(digestMessages[0].content).toContain("interval 改完后应在 1 分钟触发 digest");
+    expect(digestMessages[0]?.content).toContain("interval 改完后应在 1 分钟触发 digest");
   });
 
   it("reloads templates from the global config directory after template studio chat writes them", async () => {

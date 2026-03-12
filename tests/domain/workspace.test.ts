@@ -21,6 +21,7 @@ import {
   updateMemberConfig,
   upsertMemberWatcher,
 } from "@/domain/workspace";
+import { formatTime } from "@/lib/time";
 import { defaultTemplates } from "@/lib/sample-data/templates";
 
 const DEFAULT_FIRST_MESSAGE = "实现一个可中断的 agent team";
@@ -220,7 +221,7 @@ describe("workspace domain", () => {
     expect(extractAddressedMemberIds(snapshot, roomId, "@builder 作为参考")).toEqual([]);
   });
 
-  it("treats only @> members as a routed recipient", () => {
+  it("treats only @> members as routed recipients", () => {
     const context = createRuntimeContext();
     const snapshot = createStartedProjectSnapshot(context);
 
@@ -317,9 +318,15 @@ describe("workspace domain", () => {
     const digestMessages = (secondRun.messageOrderByRoom[roomId] ?? [])
       .map((messageId) => secondRun.messages[messageId])
       .filter((message) => message.transport === "watch-digest");
+    const latestRoomMessageId = secondSnapshot.messageOrderByRoom[roomId]?.at(-1);
+    const latestRoomMessage = latestRoomMessageId ? secondSnapshot.messages[latestRoomMessageId] : undefined;
 
     expect(digestMessages).toHaveLength(1);
     expect(digestMessages[0].content).toContain("这是一个新的房间消息");
+    expect(latestRoomMessage).toBeDefined();
+    expect(digestMessages[0].content).toContain(
+      `[${formatTime(latestRoomMessage!.createdAt)}] ${latestRoomMessage!.author.label}: ${latestRoomMessage!.content}`,
+    );
     expect(digestMessages[0].visibility).toBe("internal");
     const watcherMemberId = secondRun.watchers[watcherId].memberId;
     const watcherTask = Object.values(secondRun.tasks).find(
@@ -361,10 +368,14 @@ describe("workspace domain", () => {
     const digestMessages = (next.messageOrderByRoom[roomId] ?? [])
       .map((messageId) => next.messages[messageId])
       .filter((message) => message.transport === "watch-digest");
+    const latestTraceId = snapshot.taskTraceOrderByTask[lead.activeTaskId]?.at(-1);
+    const latestTrace = latestTraceId ? snapshot.taskTraces[latestTraceId] : undefined;
 
     expect(digestMessages).toHaveLength(1);
     expect(digestMessages[0].content).toContain("[Member state changes]");
     expect(digestMessages[0].content).toContain("@lead status: Plan updated (2 step(s))");
+    expect(latestTrace).toBeDefined();
+    expect(digestMessages[0].content).toContain(`[${formatTime(latestTrace!.createdAt)}] @lead status: Plan updated (2 step(s))`);
     expect(digestMessages[0].content).not.toContain("[Unseen messages]");
     expect(next.watchers[watcherId].lastConsumedStateAt).toBeDefined();
   });
