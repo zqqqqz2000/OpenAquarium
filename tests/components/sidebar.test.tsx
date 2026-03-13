@@ -43,11 +43,27 @@ function buildSidebarData(snapshot: ReturnType<typeof createSeedWorkspace>) {
   };
 }
 
+function buildSidebarViewState(snapshot: ReturnType<typeof createSeedWorkspace>) {
+  const sidebarData = buildSidebarData(snapshot);
+
+  return {
+    ...sidebarData,
+    projectUnreadCountById: Object.fromEntries(sidebarData.projects.map((project) => [project.id, 0])),
+    roomUnreadCountById: Object.fromEntries(
+      Object.values(sidebarData.roomsByProject)
+        .flat()
+        .map((room) => [room.id, 0]),
+    ),
+    projectRunningMembersById: Object.fromEntries(sidebarData.projects.map((project) => [project.id, []])),
+    roomRunningMembersById: Object.fromEntries(Object.keys(sidebarData.roomActivityById).map((roomId) => [roomId, []])),
+  };
+}
+
 describe("Sidebar", () => {
   it("keeps templates collapsed by default and scrolls the expanded list", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
-    const sidebarData = buildSidebarData(snapshot);
+    const sidebarData = buildSidebarViewState(snapshot);
 
     render(
       <AppThemeProvider>
@@ -58,6 +74,10 @@ describe("Sidebar", () => {
             roomsByProject={sidebarData.roomsByProject}
             projectActivityById={sidebarData.projectActivityById}
             roomActivityById={sidebarData.roomActivityById}
+            projectUnreadCountById={sidebarData.projectUnreadCountById}
+            roomUnreadCountById={sidebarData.roomUnreadCountById}
+            projectRunningMembersById={sidebarData.projectRunningMembersById}
+            roomRunningMembersById={sidebarData.roomRunningMembersById}
             templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
             connected
             loading={false}
@@ -96,7 +116,7 @@ describe("Sidebar", () => {
     const onDeleteProject = vi.fn();
     const onDeleteRoom = vi.fn();
     const onDeleteTemplate = vi.fn();
-    const sidebarData = buildSidebarData(snapshot);
+    const sidebarData = buildSidebarViewState(snapshot);
 
     render(
       <AppThemeProvider>
@@ -107,6 +127,10 @@ describe("Sidebar", () => {
             roomsByProject={project ? { [project.id]: sidebarData.roomsByProject[project.id] ?? [] } : {}}
             projectActivityById={project ? { [project.id]: sidebarData.projectActivityById[project.id] } : {}}
             roomActivityById={room ? { [room.id]: sidebarData.roomActivityById[room.id] } : {}}
+            projectUnreadCountById={project ? { [project.id]: 0 } : {}}
+            roomUnreadCountById={room ? { [room.id]: 0 } : {}}
+            projectRunningMembersById={project ? { [project.id]: [] } : {}}
+            roomRunningMembersById={room ? { [room.id]: [] } : {}}
             templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
             connected
             loading={false}
@@ -159,7 +183,7 @@ describe("Sidebar", () => {
       name: "今天有什么热门的github Trending 有什么和llm相关的热门项目",
     };
     snapshot.rooms[room.id] = longRoom;
-    const sidebarData = buildSidebarData(snapshot);
+    const sidebarData = buildSidebarViewState(snapshot);
 
     render(
       <AppThemeProvider>
@@ -170,6 +194,10 @@ describe("Sidebar", () => {
             roomsByProject={sidebarData.roomsByProject}
             projectActivityById={sidebarData.projectActivityById}
             roomActivityById={sidebarData.roomActivityById}
+            projectUnreadCountById={sidebarData.projectUnreadCountById}
+            roomUnreadCountById={sidebarData.roomUnreadCountById}
+            projectRunningMembersById={sidebarData.projectRunningMembersById}
+            roomRunningMembersById={sidebarData.roomRunningMembersById}
             templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
             connected
             loading={false}
@@ -189,7 +217,7 @@ describe("Sidebar", () => {
       throw new Error("Expected room link");
     }
 
-    const roomTextBlock = roomLink.querySelector("span.min-w-0.flex-1");
+    const roomTextBlock = roomLink.querySelector(".min-w-0");
     expect(roomTextBlock).toBeTruthy();
 
     const roomActionIcon = roomLink.querySelector("svg.lucide-message-square-share");
@@ -233,7 +261,7 @@ describe("Sidebar", () => {
       ...snapshot.members[room.entryMemberId]!,
       status: "running",
     };
-    const sidebarData = buildSidebarData(snapshot);
+    const sidebarData = buildSidebarViewState(snapshot);
 
     render(
       <AppThemeProvider>
@@ -244,6 +272,10 @@ describe("Sidebar", () => {
             roomsByProject={sidebarData.roomsByProject}
             projectActivityById={sidebarData.projectActivityById}
             roomActivityById={sidebarData.roomActivityById}
+            projectUnreadCountById={sidebarData.projectUnreadCountById}
+            roomUnreadCountById={sidebarData.roomUnreadCountById}
+            projectRunningMembersById={sidebarData.projectRunningMembersById}
+            roomRunningMembersById={sidebarData.roomRunningMembersById}
             templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
             connected
             loading={false}
@@ -277,7 +309,7 @@ describe("Sidebar", () => {
       throw new Error("Expected seeded project and room");
     }
 
-    const sidebarData = buildSidebarData(snapshot);
+    const sidebarData = buildSidebarViewState(snapshot);
 
     render(
       <AppThemeProvider>
@@ -288,6 +320,10 @@ describe("Sidebar", () => {
             roomsByProject={sidebarData.roomsByProject}
             projectActivityById={sidebarData.projectActivityById}
             roomActivityById={sidebarData.roomActivityById}
+            projectUnreadCountById={sidebarData.projectUnreadCountById}
+            roomUnreadCountById={sidebarData.roomUnreadCountById}
+            projectRunningMembersById={sidebarData.projectRunningMembersById}
+            roomRunningMembersById={sidebarData.roomRunningMembersById}
             activeProjectId={project.id}
             activeRoomId={room.id}
             templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
@@ -304,7 +340,7 @@ describe("Sidebar", () => {
       </AppThemeProvider>,
     );
 
-    const roomCard = screen.getByText(room.name).closest("a")?.parentElement;
+    const roomCard = screen.getByText(room.name).closest("div.rounded-xl");
     expect(roomCard).toBeTruthy();
     expect(roomCard).toHaveClass("border-ring");
     expect(roomCard).not.toHaveClass("ring-1");
@@ -333,7 +369,7 @@ describe("Sidebar", () => {
       status: "running",
     };
 
-    const sidebarData = buildSidebarData(snapshot);
+    const sidebarData = buildSidebarViewState(snapshot);
 
     render(
       <AppThemeProvider>
@@ -344,6 +380,10 @@ describe("Sidebar", () => {
             roomsByProject={sidebarData.roomsByProject}
             projectActivityById={sidebarData.projectActivityById}
             roomActivityById={sidebarData.roomActivityById}
+            projectUnreadCountById={sidebarData.projectUnreadCountById}
+            roomUnreadCountById={sidebarData.roomUnreadCountById}
+            projectRunningMembersById={sidebarData.projectRunningMembersById}
+            roomRunningMembersById={sidebarData.roomRunningMembersById}
             activeProjectId={project.id}
             activeRoomId={room.id}
             templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
@@ -360,11 +400,152 @@ describe("Sidebar", () => {
       </AppThemeProvider>,
     );
 
-    const roomCard = screen.getByText(room.name).closest("a")?.parentElement;
+    const roomCard = screen.getByText(room.name).closest("div.rounded-xl");
     expect(roomCard).toBeTruthy();
-    expect(roomCard).toHaveClass("border-[color:var(--tone-blueprint-border)]/85");
-    expect(roomCard).toHaveClass("bg-[color:var(--tone-blueprint-surface)]/85");
+    expect(roomCard).toHaveClass("border-[color:var(--tone-blueprint-border)]/75");
+    expect(roomCard).toHaveClass("bg-[color:var(--tone-blueprint-surface)]/70");
     expect(roomCard).toHaveClass("ring-1");
     expect(roomCard).toHaveClass("ring-ring");
+  });
+
+  it("keeps sidebar running badges on the shared compact spec", () => {
+    const snapshot = createSeedWorkspace();
+    const projectId = snapshot.projectOrder[0];
+    const roomId = snapshot.selection.roomId;
+    if (!projectId || !roomId) {
+      throw new Error("Expected seeded project and room ids");
+    }
+
+    const room = snapshot.rooms[roomId];
+    if (!room) {
+      throw new Error("Expected seeded room");
+    }
+
+    snapshot.tasks[Object.keys(snapshot.tasks)[0]!] = {
+      ...snapshot.tasks[Object.keys(snapshot.tasks)[0]!]!,
+      status: "running",
+    };
+    snapshot.members[room.entryMemberId] = {
+      ...snapshot.members[room.entryMemberId]!,
+      status: "running",
+    };
+
+    const sidebarData = buildSidebarViewState(snapshot);
+
+    render(
+      <AppThemeProvider>
+        <TooltipProvider>
+          <Sidebar
+            collapsed={false}
+            projects={sidebarData.projects}
+            roomsByProject={sidebarData.roomsByProject}
+            projectActivityById={sidebarData.projectActivityById}
+            roomActivityById={sidebarData.roomActivityById}
+            projectUnreadCountById={sidebarData.projectUnreadCountById}
+            roomUnreadCountById={sidebarData.roomUnreadCountById}
+            projectRunningMembersById={sidebarData.projectRunningMembersById}
+            roomRunningMembersById={sidebarData.roomRunningMembersById}
+            activeProjectId={projectId}
+            activeRoomId={roomId}
+            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+            connected
+            loading={false}
+            onDeleteProject={vi.fn()}
+            onDeleteRoom={vi.fn()}
+            onDeleteTemplate={vi.fn()}
+            onResizeStart={vi.fn()}
+            onOpenTemplate={vi.fn()}
+            onOpenTemplateStudio={vi.fn()}
+          />
+        </TooltipProvider>
+      </AppThemeProvider>,
+    );
+
+    screen.getAllByText(/running|ready/i)
+      .map((element) => element.closest("[data-slot='badge']"))
+      .filter((badge): badge is HTMLElement => badge instanceof HTMLElement)
+      .forEach((badge) => {
+        expect(badge).toHaveClass("h-6");
+        expect(badge).not.toHaveClass("h-7");
+      });
+  });
+
+  it("opens members from a room running hover card without the room link swallowing the click", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const projectId = snapshot.projectOrder[0];
+    const roomId = snapshot.selection.roomId;
+    if (!projectId || !roomId) {
+      throw new Error("Expected seeded project and room ids");
+    }
+
+    const room = snapshot.rooms[roomId];
+    const project = snapshot.projects[projectId];
+    const runningMember = room ? snapshot.members[room.entryMemberId] : undefined;
+    if (!room || !project || !runningMember) {
+      throw new Error("Expected seeded project, room, and member");
+    }
+
+    snapshot.members[runningMember.id] = {
+      ...runningMember,
+      status: "running",
+    };
+    const sidebarData = buildSidebarViewState(snapshot);
+    const onOpenMember = vi.fn();
+
+    render(
+      <AppThemeProvider>
+        <TooltipProvider>
+          <Sidebar
+            collapsed={false}
+            projects={sidebarData.projects}
+            roomsByProject={sidebarData.roomsByProject}
+            projectActivityById={sidebarData.projectActivityById}
+            roomActivityById={sidebarData.roomActivityById}
+            projectUnreadCountById={sidebarData.projectUnreadCountById}
+            roomUnreadCountById={sidebarData.roomUnreadCountById}
+            projectRunningMembersById={{ [project.id]: [] }}
+            roomRunningMembersById={{
+              [room.id]: [
+                {
+                  roomId: room.id,
+                  memberId: runningMember.id,
+                  memberName: runningMember.name,
+                  memberHandle: runningMember.handle,
+                  latestContentPreview: "最新一条运行摘要",
+                },
+              ],
+            }}
+            activeProjectId={project.id}
+            activeRoomId={room.id}
+            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+            connected
+            loading={false}
+            onDeleteProject={vi.fn()}
+            onDeleteRoom={vi.fn()}
+            onDeleteTemplate={vi.fn()}
+            onResizeStart={vi.fn()}
+            onOpenMember={onOpenMember}
+            onOpenTemplate={vi.fn()}
+            onOpenTemplateStudio={vi.fn()}
+          />
+        </TooltipProvider>
+      </AppThemeProvider>,
+    );
+
+    const roomCard = screen.getByText(room.name).closest("div.rounded-xl");
+    if (!roomCard) {
+      throw new Error("Expected room card");
+    }
+
+    const runningTrigger = roomCard.querySelector('[aria-label="Show running members"]');
+    if (!(runningTrigger instanceof HTMLElement)) {
+      throw new Error("Expected running trigger");
+    }
+
+    await user.hover(runningTrigger);
+    await user.click(await screen.findByRole("button", { name: /@lead/i }));
+
+    expect(onOpenMember).toHaveBeenCalledWith(project.id, room.id, runningMember.id);
   });
 });

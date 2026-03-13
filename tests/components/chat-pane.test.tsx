@@ -46,8 +46,9 @@ describe("ChatPane", () => {
     expect(screen.queryByText("Room transcript")).not.toBeInTheDocument();
     expect(screen.queryByText("团队通常不大，右侧保留更多状态，便于快速切换到具体 member session。")).not.toBeInTheDocument();
     expect(screen.queryByText("成员内部推理只显示为处理状态；只有显式发送到 room 或 direct 的消息才会出现在消息流里。")).not.toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Direct" }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: "Chat" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: /Open @.* session panel/ }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Direct" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
     const userMessage = screen
       .getAllByText("做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品")
       .find((element) => element.closest("[data-message-kind='user']"));
@@ -117,12 +118,18 @@ describe("ChatPane", () => {
     });
   });
 
-  it("lets the user target a member for direct messaging from the members sidebar", async () => {
+  it("opens the session panel when the user clicks a member card in the sidebar", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
     const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const research = members.find((member) => member.handle === "research");
+    const onOpenMember = vi.fn();
+
+    if (!research) {
+      throw new Error("Expected research member in seeded room");
+    }
 
     render(
       <TooltipProvider>
@@ -135,7 +142,7 @@ describe("ChatPane", () => {
           members={members}
           selectedMemberId={room.entryMemberId}
           connected
-          onOpenMember={vi.fn()}
+          onOpenMember={onOpenMember}
           error={undefined}
           onToggleLeftSidebar={vi.fn()}
           onToggleRightSidebar={vi.fn()}
@@ -143,15 +150,9 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    const [, researchDirectButton] = screen.getAllByRole("button", { name: "Direct" });
-    if (!researchDirectButton) {
-      throw new Error("Expected a direct button for the research member");
-    }
+    await user.click(screen.getByRole("button", { name: "Open @research session panel" }));
 
-    await user.click(researchDirectButton);
-
-    expect(screen.getByText("DM @research")).toBeInTheDocument();
-    expect(screen.getByRole("textbox")).toHaveFocus();
+    expect(onOpenMember).toHaveBeenCalledWith(research.id);
   });
 
   it("emphasizes member roles over display names in the sidebar", () => {
@@ -217,7 +218,6 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getAllByText(/live now/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/live/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
   });
@@ -332,7 +332,10 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    const trigger = screen.getByRole("button", { name: "Show running members" });
+    const trigger = document.querySelector('[aria-label="Show running members"]');
+    if (!(trigger instanceof HTMLElement)) {
+      throw new Error("Expected running members trigger");
+    }
 
     expect(within(trigger).getByText("Running")).toBeInTheDocument();
 
@@ -349,20 +352,59 @@ describe("ChatPane", () => {
         runningMembers={[
           {
             memberId: "member_1",
+            roomId: "room_1",
             memberName: "Forge Crab",
             memberHandle: "builder",
-            summary: "正在补 room 顶部状态 tooltip 的 hover 列表。",
+            latestContentPreview: "正在补 room 顶部状态 tooltip 的 hover 列表。",
           },
         ]}
+        onOpenMember={vi.fn()}
       />,
     );
 
-    await user.hover(screen.getByRole("button", { name: "Show running members" }));
+    const trigger = document.querySelector('[aria-label="Show running members"]');
+    if (!(trigger instanceof HTMLElement)) {
+      throw new Error("Expected running members trigger");
+    }
+
+    await user.hover(trigger);
 
     expect(await screen.findByText("Running members")).toBeInTheDocument();
     expect(screen.getByText("@builder")).toBeInTheDocument();
     expect(screen.getByText("Forge Crab")).toBeInTheDocument();
     expect(screen.getByText("正在补 room 顶部状态 tooltip 的 hover 列表。")).toBeInTheDocument();
+  });
+
+  it("uses a compact team edit badge instead of the full template name", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          onOpenRoomTeam={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const teamTrigger = screen.getByRole("button", { name: new RegExp(`Edit ${roomTeam?.name ?? "Room team"}`) });
+
+    expect(within(teamTrigger).getByText("Team")).toBeInTheDocument();
+    expect(within(teamTrigger).queryByText(roomTeam?.name ?? "")).not.toBeInTheDocument();
   });
 
   it("shows a richer empty state before any room is selected", () => {
@@ -393,6 +435,98 @@ describe("ChatPane", () => {
     expect(screen.getByText("Project path supported")).toBeInTheDocument();
     expect(screen.getByText("新建 project")).toBeInTheDocument();
     expect(screen.getByText("Ready State")).toBeInTheDocument();
+  });
+
+  it("keeps room header badges compact", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
+    if (!builder) {
+      throw new Error("Expected builder member in seeded room");
+    }
+    snapshot.members[builder.id] = {
+      ...builder,
+      status: "running",
+    };
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const membersBadge = screen
+      .getAllByText("Members")
+      .find((element) => element.closest("[data-slot='badge']"))
+      ?.closest("[data-slot='badge']");
+    const watchersBadge = screen.getByText("Watchers").closest("[data-slot='badge']");
+
+    expect(membersBadge).toHaveClass("h-6");
+    expect(membersBadge).not.toHaveClass("h-8");
+    expect(watchersBadge).toHaveClass("h-6");
+    expect(watchersBadge).not.toHaveClass("h-8");
+
+    const runningTrigger = document.querySelector('[aria-label="Show running members"]');
+    if (!(runningTrigger instanceof HTMLElement)) {
+      throw new Error("Expected running members trigger");
+    }
+    const runningBadge = within(runningTrigger).getByText("Running").closest("[data-slot='badge']");
+
+    expect(runningBadge).toHaveClass("h-6");
+    expect(runningBadge).not.toHaveClass("h-7");
+
+    await user.hover(runningTrigger);
+    expect(await screen.findByText("Running members")).toBeInTheDocument();
+  });
+
+  it("keeps the room title block and badge block as separate wrap groups", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          onOpenRoomTeam={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const titleBlock = screen.getByText(room.name).closest("div.min-w-\\[min\\(100\\%\\,24rem\\)\\]");
+    const teamTrigger = screen.getByRole("button", { name: new RegExp(`Edit ${roomTeam?.name ?? "Room team"}`) });
+    const badgeGroup = teamTrigger.closest("div.flex.max-w-full.shrink-0.flex-nowrap.items-center.gap-1\\.5");
+
+    expect(titleBlock).toBeTruthy();
+    expect(badgeGroup).toBeTruthy();
   });
 
   it("scrolls the transcript to the newest message", () => {

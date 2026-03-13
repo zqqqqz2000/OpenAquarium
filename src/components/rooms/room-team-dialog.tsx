@@ -252,7 +252,7 @@ export function RoomTeamDialog(props: {
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => (!nextOpen ? onClose() : undefined)}>
-      <DialogContent className="h-[min(92vh,72rem)] max-w-[min(96vw,88rem)] p-0">
+      <DialogContent className="h-[min(92vh,72rem)] w-[min(96vw,88rem)] max-w-[88rem] overflow-hidden p-0 sm:max-w-[88rem]">
         <DialogHeader className="border-b border-border/70 px-6 py-5">
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-2">

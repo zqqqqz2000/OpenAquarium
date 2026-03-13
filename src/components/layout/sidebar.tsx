@@ -4,38 +4,54 @@ import { Link } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, FolderKanban, LoaderCircle, Settings2, Trash2, Waves, X } from "lucide-react";
 
 import type { Project, Room, TeamTemplate } from "@/domain/model";
+import { RunningMembersHoverCard, type RunningMemberPreview } from "@/components/members/running-members-hover-card";
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog";
 import { CreateRoomDialog } from "@/components/projects/create-room-dialog";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { badgeToneProps, compactBadgeClassName } from "@/lib/ui-tone";
 import { cn, summarizePrompt } from "@/lib/utils";
-import { badgeToneProps } from "@/lib/ui-tone";
-import type { ProjectActivitySummary, RoomActivitySummary } from "@/lib/workspace-activity";
-import { formatRelativeActivityShort } from "@/lib/workspace-activity";
+import { formatRelativeActivityShort, type ProjectActivitySummary, type RoomActivitySummary } from "@/lib/workspace-activity";
 
 function ActivityTimestamp(props: { updatedAt: string }) {
   const { updatedAt } = props;
 
   return (
-    <p className="m-0 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground" title={updatedAt}>
+    <p className="m-0 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground" title={updatedAt}>
       Updated {formatRelativeActivityShort(updatedAt)}
     </p>
   );
 }
 
-function RunningPresenceBadge(props: { hasRunning: boolean; runningCount: number; idleLabel?: string }) {
-  const { hasRunning, runningCount, idleLabel = "Idle" } = props;
+function UnreadCountBadge(props: { count: number }) {
+  const { count } = props;
+
+  if (count <= 0) {
+    return null;
+  }
+
+  return (
+    <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-sm">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+function RunningPresenceBadge(props: { hasRunning: boolean; runningCount: number; idleLabel?: string; className?: string }) {
+  const { hasRunning, runningCount, idleLabel = "Idle", className } = props;
 
   return (
     <Badge
       variant="outline"
       className={cn(
-        "gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]",
+        compactBadgeClassName,
+        "gap-1.5",
         hasRunning
           ? "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-badge)] text-[color:var(--tone-blueprint-foreground)] shadow-[0_0_0_1px_rgba(120,150,255,0.08)]"
           : "border-border/80 bg-background/70 text-muted-foreground",
+        className,
       )}
     >
       <span
@@ -47,8 +63,269 @@ function RunningPresenceBadge(props: { hasRunning: boolean; runningCount: number
             : "bg-muted-foreground/45",
         )}
       />
-      {hasRunning ? (runningCount > 1 ? `${runningCount} running` : "Running") : idleLabel}
+      {hasRunning ? (runningCount > 1 ? `${runningCount} live` : "Running") : idleLabel}
     </Badge>
+  );
+}
+
+function SidebarRunningBadge(props: {
+  runningMembers: RunningMemberPreview[];
+  hasRunning: boolean;
+  runningCount: number;
+  idleLabel?: string;
+  onOpenMember?: (preview: RunningMemberPreview) => void;
+}) {
+  const { runningMembers, hasRunning, runningCount, idleLabel, onOpenMember } = props;
+
+  if (!hasRunning || runningMembers.length === 0 || !onOpenMember) {
+    return <RunningPresenceBadge hasRunning={hasRunning} runningCount={runningCount} idleLabel={idleLabel} />;
+  }
+
+  return (
+    <RunningMembersHoverCard members={runningMembers} side="right" align="start" onOpenMember={onOpenMember}>
+      <span
+        aria-label="Show running members"
+        className="inline-flex align-middle"
+        onMouseDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
+        <RunningPresenceBadge hasRunning={hasRunning} runningCount={runningCount} idleLabel={idleLabel} />
+      </span>
+    </RunningMembersHoverCard>
+  );
+}
+
+function ProjectRow(props: {
+  project: Project;
+  rooms: Room[];
+  projectActivity?: ProjectActivitySummary;
+  roomActivityById: Record<string, RoomActivitySummary>;
+  projectUnreadCount: number;
+  roomUnreadCountById: Record<string, number>;
+  projectRunningMembers: RunningMemberPreview[];
+  roomRunningMembersById: Record<string, RunningMemberPreview[]>;
+  isActiveProject: boolean;
+  activeRoomId?: string;
+  expanded: boolean;
+  actionsDisabled: boolean;
+  templates: TeamTemplate[];
+  deletingProjectId?: string;
+  deletingRoomId?: string;
+  pendingDelete?: { kind: "project" | "room" | "template"; id: string };
+  onClearPendingDelete: () => void;
+  onToggleExpanded: () => void;
+  onSetPendingDelete: (payload: { kind: "project" | "room" | "template"; id: string }) => void;
+  onDeleteProject: (projectId: string) => void;
+  onDeleteRoom: (roomId: string) => void;
+  onOpenMember?: (projectId: string, roomId: string, memberId: string) => void;
+}) {
+  const {
+    project,
+    rooms,
+    projectActivity,
+    roomActivityById,
+    projectUnreadCount,
+    roomUnreadCountById,
+    projectRunningMembers,
+    roomRunningMembersById,
+    isActiveProject,
+    activeRoomId,
+    expanded,
+    actionsDisabled,
+    templates,
+    deletingProjectId,
+    deletingRoomId,
+    pendingDelete,
+    onClearPendingDelete,
+    onToggleExpanded,
+    onSetPendingDelete,
+    onDeleteProject,
+    onDeleteRoom,
+    onOpenMember,
+  } = props;
+  const isPendingDelete = pendingDelete?.kind === "project" && pendingDelete.id === project.id;
+
+  return (
+    <section
+      className={cn(
+        "rounded-[1.35rem] border border-border/75 bg-card/80 px-3 py-2.5 text-card-foreground shadow-[0_12px_24px_-28px_rgba(15,23,42,0.55)] transition-colors",
+        isActiveProject && "border-ring bg-accent/5",
+        projectActivity?.hasRunning && "border-[color:var(--tone-blueprint-border)]/85 bg-[color:var(--tone-blueprint-surface)]/60",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-1">
+          <button
+            type="button"
+            className="block w-full truncate rounded-none border-0 bg-transparent p-0 text-left text-[15px] font-semibold tracking-tight"
+            onClick={onToggleExpanded}
+          >
+            {project.name}
+          </button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className="h-6 rounded-full px-2 text-[10px] uppercase tracking-[0.14em]">
+              {rooms.length} rooms
+            </Badge>
+            <UnreadCountBadge count={projectUnreadCount} />
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <CreateRoomDialog
+            project={project}
+            templates={templates}
+            disabled={actionsDisabled}
+            triggerMode="icon"
+            triggerClassName="size-7"
+          />
+          {isPendingDelete ? (
+            <>
+              <Button type="button" variant="ghost" size="icon-xs" aria-label={`Cancel deleting ${project.name}`} onClick={onClearPendingDelete}>
+                <X size={14} />
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                size="icon-xs"
+                aria-label={`Delete ${project.name}`}
+                disabled={actionsDisabled || deletingProjectId === project.id}
+                onClick={() => {
+                  onClearPendingDelete();
+                  onDeleteProject(project.id);
+                }}
+              >
+                {deletingProjectId === project.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Delete ${project.name}`}
+              disabled={actionsDisabled}
+              onClick={() => onSetPendingDelete({ kind: "project", id: project.id })}
+            >
+              <Trash2 size={14} />
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label={expanded ? `Collapse ${project.name}` : `Expand ${project.name}`}
+            onClick={() => {
+              onClearPendingDelete();
+              onToggleExpanded();
+            }}
+          >
+            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-2">
+        <ActivityTimestamp updatedAt={projectActivity?.updatedAt ?? project.updatedAt ?? project.createdAt} />
+        <SidebarRunningBadge
+          runningMembers={projectRunningMembers}
+          hasRunning={projectActivity?.hasRunning ?? false}
+          runningCount={projectActivity?.runningCount ?? 0}
+          idleLabel="Idle"
+          onOpenMember={onOpenMember ? (preview) => onOpenMember(project.id, preview.roomId, preview.memberId) : undefined}
+        />
+      </div>
+
+      {expanded ? (
+        <div className="mt-2.5 flex flex-col gap-1.5">
+          {rooms.length > 0 ? (
+            rooms.map((room) => {
+              const roomActivity = roomActivityById[room.id];
+              const isActiveRoom = room.id === activeRoomId;
+              const roomPendingDelete = pendingDelete?.kind === "room" && pendingDelete.id === room.id;
+
+              return (
+                <div
+                  key={room.id}
+                  className={cn(
+                    "flex items-start gap-2 rounded-xl border border-border/70 bg-background/80 px-2.5 py-2 transition-colors",
+                    isActiveRoom && "border-ring bg-accent/7",
+                    roomActivity?.hasRunning && "border-[color:var(--tone-blueprint-border)]/75 bg-[color:var(--tone-blueprint-surface)]/70",
+                    isActiveRoom && roomActivity?.hasRunning && "ring-1 ring-ring",
+                  )}
+                >
+                  <div className="flex min-w-0 flex-1 items-start gap-2">
+                    <Link
+                      to="/projects/$projectId/rooms/$roomId"
+                      params={{ projectId: project.id, roomId: room.id }}
+                      className="min-w-0 flex-1 no-underline"
+                      onClick={onClearPendingDelete}
+                    >
+                      <div className="min-w-0">
+                        <p className="m-0 truncate text-sm font-medium">{room.name}</p>
+                        <p className="m-0 truncate pt-0.5 text-xs text-muted-foreground">
+                          {summarizePrompt(room.topic || "No topic yet.", 54)}
+                        </p>
+                        <div className="mt-1.5 flex items-center gap-2">
+                          <ActivityTimestamp updatedAt={roomActivity?.updatedAt ?? room.updatedAt ?? room.createdAt} />
+                        </div>
+                      </div>
+                    </Link>
+                    <div className="flex shrink-0 items-start gap-1.5 pt-0.5">
+                      <UnreadCountBadge count={roomUnreadCountById[room.id] ?? 0} />
+                      <SidebarRunningBadge
+                        runningMembers={roomRunningMembersById[room.id] ?? []}
+                        hasRunning={roomActivity?.hasRunning ?? false}
+                        runningCount={roomActivity?.runningCount ?? 0}
+                        idleLabel="Ready"
+                        onOpenMember={onOpenMember ? (preview) => onOpenMember(project.id, preview.roomId, preview.memberId) : undefined}
+                      />
+                    </div>
+                  </div>
+                  {roomPendingDelete ? (
+                    <div className="flex shrink-0 items-center gap-1 pt-0.5">
+                      <Button type="button" variant="ghost" size="icon-xs" aria-label={`Cancel deleting ${room.name}`} onClick={onClearPendingDelete}>
+                        <X size={14} />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon-xs"
+                        aria-label={`Delete ${room.name}`}
+                        disabled={actionsDisabled || deletingRoomId === room.id}
+                        onClick={() => {
+                          onClearPendingDelete();
+                          onDeleteRoom(room.id);
+                        }}
+                      >
+                        {deletingRoomId === room.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Delete ${room.name}`}
+                      disabled={actionsDisabled}
+                      onClick={() => onSetPendingDelete({ kind: "room", id: room.id })}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <div className="rounded-xl bg-muted/30 px-2.5 py-2 text-sm text-muted-foreground">No rooms yet.</div>
+          )}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -58,6 +335,10 @@ export function Sidebar(props: {
   roomsByProject: Record<string, Room[]>;
   projectActivityById: Record<string, ProjectActivitySummary>;
   roomActivityById: Record<string, RoomActivitySummary>;
+  projectUnreadCountById: Record<string, number>;
+  roomUnreadCountById: Record<string, number>;
+  projectRunningMembersById: Record<string, RunningMemberPreview[]>;
+  roomRunningMembersById: Record<string, RunningMemberPreview[]>;
   activeProjectId?: string;
   activeRoomId?: string;
   templates: TeamTemplate[];
@@ -74,6 +355,7 @@ export function Sidebar(props: {
   onDeleteTemplate: (templateId: string) => void;
   onOpenTemplate: (templateId: string) => void;
   onOpenTemplateStudio: () => void;
+  onOpenMember?: (projectId: string, roomId: string, memberId: string) => void;
 }) {
   const {
     collapsed,
@@ -81,6 +363,10 @@ export function Sidebar(props: {
     roomsByProject,
     projectActivityById,
     roomActivityById,
+    projectUnreadCountById,
+    roomUnreadCountById,
+    projectRunningMembersById,
+    roomRunningMembersById,
     activeProjectId,
     activeRoomId,
     templates,
@@ -97,6 +383,7 @@ export function Sidebar(props: {
     onDeleteTemplate,
     onOpenTemplate,
     onOpenTemplateStudio,
+    onOpenMember,
   } = props;
   const actionsDisabled = !connected || loading;
   const [expandedProjectOverrides, setExpandedProjectOverrides] = useState<Record<string, boolean>>({});
@@ -106,34 +393,21 @@ export function Sidebar(props: {
   const expandedProjectIds = Object.fromEntries(
     projects.map((project) => [project.id, expandedProjectOverrides[project.id] ?? project.id === defaultExpandedProjectId]),
   ) as Record<string, boolean>;
-  const toggleProjectExpanded = (projectId: string): void => {
-    setExpandedProjectOverrides((current) => ({
-      ...current,
-      [projectId]: !expandedProjectIds[projectId],
-    }));
-  };
-
-  const isPendingDelete = (kind: "project" | "room" | "template", id: string): boolean =>
-    pendingDelete?.kind === kind && pendingDelete.id === id;
-
-  const clearPendingDelete = (): void => {
-    setPendingDelete(undefined);
-  };
 
   if (collapsed) {
     return <aside className="min-h-0 min-w-0 overflow-hidden" data-collapsed="true" aria-hidden />;
   }
 
   return (
-    <aside className="relative z-20 flex h-full min-h-0 min-w-0 flex-col gap-3 overflow-hidden border-r border-border/60 bg-background/96 px-3 py-3 backdrop-blur md:px-4 max-[860px]:absolute max-[860px]:inset-y-0 max-[860px]:left-0 max-[860px]:w-[min(21rem,82vw)] max-[860px]:shadow-2xl">
-      <div className="shrink-0 space-y-2.5">
+    <aside className="relative z-20 flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden border-r border-border/60 bg-background/96 px-3 py-3 backdrop-blur md:px-3.5 max-[860px]:absolute max-[860px]:inset-y-0 max-[860px]:left-0 max-[860px]:w-[min(21rem,82vw)] max-[860px]:shadow-2xl">
+      <div className="shrink-0 space-y-2">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex size-9 items-center justify-center rounded-xl border border-border/70 bg-card shadow-sm">
-            <Waves size={20} />
+          <div className="flex size-8 items-center justify-center rounded-xl border border-border/70 bg-card shadow-sm">
+            <Waves size={18} />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <p className="m-0 truncate text-[1.9rem] font-semibold tracking-tight">OpenAquarium</p>
+              <p className="m-0 truncate text-[1.65rem] font-semibold tracking-tight">OpenAquarium</p>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
@@ -148,9 +422,9 @@ export function Sidebar(props: {
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{connected ? "Runtime online" : "Runtime offline"}</TooltipContent>
               </Tooltip>
-              {loading ? <Badge variant="secondary">Loading state…</Badge> : null}
+              {loading ? <Badge variant="secondary">Loading…</Badge> : null}
             </div>
-            <p className="m-0 text-sm text-muted-foreground">ACP multi-agent workspace.</p>
+            <p className="m-0 text-xs text-muted-foreground">ACP multi-agent workspace.</p>
           </div>
         </div>
         <ThemeToggle className="w-full" />
@@ -162,212 +436,57 @@ export function Sidebar(props: {
         {error ? <p className="m-0 text-xs leading-5 text-destructive">{error}</p> : null}
       </div>
 
-      <div className="min-h-0 flex-[1.35] border-t border-border/40 pt-3">
-        <div className="flex h-full min-h-0 flex-col gap-2.5">
+      <div className="min-h-0 flex-1 border-t border-border/40 pt-2.5">
+        <div className="flex h-full min-h-0 flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
             <div className="flex min-w-0 items-center gap-2">
               <FolderKanban size={18} />
-              <p className="m-0 text-xl font-semibold tracking-tight">Projects</p>
+              <p className="m-0 text-lg font-semibold tracking-tight">Projects</p>
               <Badge variant="outline">{projects.length}</Badge>
             </div>
-            <CreateProjectDialog
-              templates={templates}
-              triggerMode="icon"
-              disabled={actionsDisabled}
-            />
+            <CreateProjectDialog templates={templates} triggerMode="icon" disabled={actionsDisabled} />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-            <div className="flex flex-col gap-2.5">
-              {projects.map((project) => {
-                const projectActivity = projectActivityById[project.id];
-
-                return (
-                  <div
-                    key={project.id}
-                    className={cn(
-                      "rounded-[1.45rem] border border-border/80 bg-card px-3 py-2.5 text-sm text-card-foreground shadow-sm",
-                      project.id === activeProjectId && "border-ring bg-accent/5",
-                      projectActivity?.hasRunning && "border-[color:var(--tone-blueprint-border)]/90 shadow-[0_14px_28px_-26px_rgba(62,118,255,0.95)]",
-                    )}
-                  >
-                    <div className="flex flex-col gap-2.5">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <button
-                            type="button"
-                            className="block w-full truncate rounded-none border-0 bg-transparent p-0 text-left text-base font-semibold tracking-tight"
-                            onClick={() => toggleProjectExpanded(project.id)}
-                          >
-                            {project.name}
-                          </button>
-                          <p className="mt-1 m-0 text-sm text-muted-foreground">{roomsByProject[project.id]?.length ?? 0} rooms</p>
-                        </div>
-                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 self-start">
-                          <CreateRoomDialog
-                            project={project}
-                            templates={templates}
-                            disabled={actionsDisabled}
-                            triggerMode="icon"
-                            triggerClassName="size-6"
-                          />
-                          {isPendingDelete("project", project.id) ? (
-                            <>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-xs"
-                                aria-label={`Cancel deleting ${project.name}`}
-                                onClick={clearPendingDelete}
-                              >
-                                <X size={14} />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="destructive"
-                                size="icon-xs"
-                                aria-label={`Delete ${project.name}`}
-                                disabled={actionsDisabled || deletingProjectId === project.id}
-                                onClick={() => {
-                                  clearPendingDelete();
-                                  onDeleteProject(project.id);
-                                }}
-                              >
-                                {deletingProjectId === project.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                              </Button>
-                            </>
-                          ) : (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              aria-label={`Delete ${project.name}`}
-                              disabled={actionsDisabled}
-                              onClick={() => setPendingDelete({ kind: "project", id: project.id })}
-                            >
-                              <Trash2 size={14} />
-                            </Button>
-                          )}
-                          <button
-                            type="button"
-                            aria-label={expandedProjectIds[project.id] ? `Collapse ${project.name}` : `Expand ${project.name}`}
-                            className="flex shrink-0 items-center gap-2 rounded-none border-0 bg-transparent p-0"
-                            onClick={() => {
-                              clearPendingDelete();
-                              toggleProjectExpanded(project.id);
-                            }}
-                          >
-                            <Badge variant="outline">{roomsByProject[project.id]?.length ?? 0}</Badge>
-                            {expandedProjectIds[project.id] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-2">
-                        <ActivityTimestamp updatedAt={projectActivity?.updatedAt ?? project.createdAt} />
-                        <RunningPresenceBadge
-                          hasRunning={projectActivity?.hasRunning ?? false}
-                          runningCount={projectActivity?.runningCount ?? 0}
-                          idleLabel="Idle"
-                        />
-                      </div>
-
-                      {expandedProjectIds[project.id] ? (
-                        <div className="flex flex-col gap-1.5">
-                          {(roomsByProject[project.id] ?? []).length > 0 ? (
-                            (roomsByProject[project.id] ?? []).map((room) => {
-                              const roomActivity = roomActivityById[room.id];
-                              const isActiveRoom = room.id === activeRoomId;
-                              const hasRunningRoom = roomActivity?.hasRunning ?? false;
-
-                              return (
-                                <div
-                                  key={room.id}
-                                  className={cn(
-                                    "flex items-start gap-2 rounded-xl border border-border/70 bg-card/80 px-2.5 py-2 shadow-sm transition-colors",
-                                    isActiveRoom && "border-ring bg-accent/5",
-                                    hasRunningRoom && "border-[color:var(--tone-blueprint-border)]/85 bg-[color:var(--tone-blueprint-surface)]/85",
-                                    isActiveRoom && hasRunningRoom && "ring-1 ring-ring",
-                                  )}
-                                >
-                                  <Link
-                                    to="/projects/$projectId/rooms/$roomId"
-                                    params={{ projectId: project.id, roomId: room.id }}
-                                    className="min-w-0 flex-1 no-underline"
-                                    onClick={clearPendingDelete}
-                                  >
-                                    <div className="space-y-1.5 text-left">
-                                      <div className="flex items-start justify-between gap-3">
-                                        <span className="min-w-0 flex-1">
-                                          <span className="block truncate text-sm font-medium">{room.name}</span>
-                                          <span className="block truncate text-xs text-muted-foreground">
-                                            {summarizePrompt(room.topic, 40)}
-                                          </span>
-                                        </span>
-                                        <RunningPresenceBadge
-                                          hasRunning={roomActivity?.hasRunning ?? false}
-                                          runningCount={roomActivity?.runningCount ?? 0}
-                                          idleLabel="Ready"
-                                        />
-                                      </div>
-                                      <ActivityTimestamp updatedAt={roomActivity?.updatedAt ?? room.createdAt} />
-                                    </div>
-                                  </Link>
-                                  {isPendingDelete("room", room.id) ? (
-                                    <div className="flex shrink-0 items-center gap-1 pt-0.5">
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        aria-label={`Cancel deleting ${room.name}`}
-                                        onClick={clearPendingDelete}
-                                      >
-                                        <X size={14} />
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="destructive"
-                                        size="icon-xs"
-                                        aria-label={`Delete ${room.name}`}
-                                        disabled={actionsDisabled || deletingRoomId === room.id}
-                                        onClick={() => {
-                                          clearPendingDelete();
-                                          onDeleteRoom(room.id);
-                                        }}
-                                      >
-                                        {deletingRoomId === room.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                                      </Button>
-                                    </div>
-                                  ) : (
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon-xs"
-                                      aria-label={`Delete ${room.name}`}
-                                      disabled={actionsDisabled}
-                                      onClick={() => setPendingDelete({ kind: "room", id: room.id })}
-                                    >
-                                      <Trash2 size={14} />
-                                    </Button>
-                                  )}
-                                </div>
-                              );
-                            })
-                          ) : (
-                            <div className="rounded-lg bg-muted/25 px-2.5 py-1.5 text-sm text-muted-foreground">No rooms yet.</div>
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="flex flex-col gap-2">
+              {projects.map((project) => (
+                <ProjectRow
+                  key={project.id}
+                  project={project}
+                  rooms={roomsByProject[project.id] ?? []}
+                  projectActivity={projectActivityById[project.id]}
+                  roomActivityById={roomActivityById}
+                  projectUnreadCount={projectUnreadCountById[project.id] ?? 0}
+                  roomUnreadCountById={roomUnreadCountById}
+                  projectRunningMembers={projectRunningMembersById[project.id] ?? []}
+                  roomRunningMembersById={roomRunningMembersById}
+                  isActiveProject={project.id === activeProjectId}
+                  activeRoomId={activeRoomId}
+                  expanded={expandedProjectIds[project.id]}
+                  actionsDisabled={actionsDisabled}
+                  templates={templates}
+                  deletingProjectId={deletingProjectId}
+                  deletingRoomId={deletingRoomId}
+                  pendingDelete={pendingDelete}
+                  onClearPendingDelete={() => setPendingDelete(undefined)}
+                  onToggleExpanded={() =>
+                    setExpandedProjectOverrides((current) => ({
+                      ...current,
+                      [project.id]: !expandedProjectIds[project.id],
+                    }))
+                  }
+                  onSetPendingDelete={setPendingDelete}
+                  onDeleteProject={onDeleteProject}
+                  onDeleteRoom={onDeleteRoom}
+                  onOpenMember={onOpenMember}
+                />
+              ))}
             </div>
           </div>
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-border/40 pt-3">
-        <div className="flex min-h-0 flex-col gap-2.5">
+      <div className="shrink-0 border-t border-border/40 pt-2.5">
+        <div className="flex min-h-0 flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
             <button
               type="button"
@@ -377,7 +496,7 @@ export function Sidebar(props: {
               onClick={() => setTemplatesExpanded((current) => !current)}
             >
               <Settings2 size={18} />
-              <p className="m-0 text-xl font-semibold tracking-tight">Team templates</p>
+              <p className="m-0 text-lg font-semibold tracking-tight">Team templates</p>
               <Badge variant="outline">{templates.length}</Badge>
               {templatesExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
             </button>
@@ -386,19 +505,17 @@ export function Sidebar(props: {
             </Button>
           </div>
           {templatesExpanded ? (
-            <div
-              className="max-h-[min(18rem,30vh)] overflow-y-auto pr-1"
-              data-testid="sidebar-templates-scroll"
-            >
-              <div className="flex flex-col gap-2.5">
+            <div className="max-h-[min(18rem,30vh)] overflow-y-auto pr-1" data-testid="sidebar-templates-scroll">
+              <div className="flex flex-col gap-2">
                 {templates.map((template) => {
                   const templateBadge = badgeToneProps(template.accentTone);
+                  const isPendingDelete = pendingDelete?.kind === "template" && pendingDelete.id === template.id;
 
                   return (
                     <div
                       key={template.id}
                       className={cn(
-                        "rounded-[1.35rem] border border-border/80 bg-card px-3 py-3 shadow-sm transition-colors",
+                        "rounded-[1.2rem] border border-border/75 bg-card/85 px-3 py-2.5 shadow-[0_10px_22px_-28px_rgba(15,23,42,0.55)] transition-colors",
                         template.id === activeTemplateId && "border-ring bg-accent/5",
                       )}
                     >
@@ -407,11 +524,11 @@ export function Sidebar(props: {
                           type="button"
                           className="min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-left"
                           onClick={() => {
-                            clearPendingDelete();
+                            setPendingDelete(undefined);
                             onOpenTemplate(template.id);
                           }}
                         >
-                          <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start justify-between gap-2">
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-sm font-semibold tracking-tight">{template.name}</span>
                               <span className="mt-1 block text-xs leading-5 text-muted-foreground">{summarizePrompt(template.description, 88)}</span>
@@ -421,15 +538,9 @@ export function Sidebar(props: {
                             </Badge>
                           </div>
                         </button>
-                        {isPendingDelete("template", template.id) ? (
+                        {isPendingDelete ? (
                           <div className="flex shrink-0 items-center gap-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              aria-label={`Cancel deleting ${template.name}`}
-                              onClick={clearPendingDelete}
-                            >
+                            <Button type="button" variant="ghost" size="icon-xs" aria-label={`Cancel deleting ${template.name}`} onClick={() => setPendingDelete(undefined)}>
                               <X size={14} />
                             </Button>
                             <Button
@@ -439,7 +550,7 @@ export function Sidebar(props: {
                               aria-label={`Delete ${template.name}`}
                               disabled={actionsDisabled || deletingTemplateId === template.id}
                               onClick={() => {
-                                clearPendingDelete();
+                                setPendingDelete(undefined);
                                 onDeleteTemplate(template.id);
                               }}
                             >

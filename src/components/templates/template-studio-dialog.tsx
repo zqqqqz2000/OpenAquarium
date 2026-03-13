@@ -66,6 +66,11 @@ import { badgeToneProps } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
 
 const ACCENT_TONES = ["paper", "postit", "blueprint", "correction"] as const;
+const ROOM_MEMBER_MESSAGE_FILTER_OPTIONS = [
+  { value: "all", label: "All messages" },
+  { value: "only-members", label: "Only member messages" },
+  { value: "hide-members", label: "Hide member messages" },
+] as const;
 
 function ScopeNote(props: { directory: string }) {
   return (
@@ -1059,6 +1064,27 @@ export function TemplateStudioDialog(props: {
                                 {ACCENT_TONES.map((accentTone) => (
                                   <SelectItem key={accentTone} value={accentTone}>
                                     {accentTone}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </label>
+                          <label className="flex flex-col gap-2">
+                            <span className="text-sm font-medium">Default room message filter</span>
+                            <Select
+                              value={selectedTemplateDraft.defaultRoomMemberMessageFilter}
+                              onValueChange={(value) =>
+                                patchTemplateDraft(selectedTemplate.id, {
+                                  defaultRoomMemberMessageFilter: value as (typeof ROOM_MEMBER_MESSAGE_FILTER_OPTIONS)[number]["value"],
+                                })}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Select default room message filter" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {ROOM_MEMBER_MESSAGE_FILTER_OPTIONS.map((option) => (
+                                  <SelectItem key={option.value} value={option.value}>
+                                    {option.label}
                                   </SelectItem>
                                 ))}
                               </SelectContent>

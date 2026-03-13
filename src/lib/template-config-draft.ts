@@ -2,12 +2,14 @@ import type {
   AccentTone,
   ProviderBinding,
   ProviderModelProfileId,
+  RoomMemberMessageFilter,
   TeamMemberBlueprint,
   TeamTemplate,
   UpdateTemplateInput,
   WatchBlueprint,
 } from "@/domain/model";
 import { toSkillDefinitions, type SkillDraft } from "@/lib/member-config-draft";
+import { resolveTemplateRoomMemberMessageFilter } from "@/lib/room-message-preferences";
 
 export interface TemplateMemberDraft {
   id: string;
@@ -30,6 +32,7 @@ export interface TemplateConfigDraft {
   name: string;
   description: string;
   accentTone: AccentTone;
+  defaultRoomMemberMessageFilter: RoomMemberMessageFilter;
   members: TemplateMemberDraft[];
 }
 
@@ -110,6 +113,7 @@ export function createTemplateConfigDraft(template: TeamTemplate): TemplateConfi
     name: template.name,
     description: template.description,
     accentTone: template.accentTone,
+    defaultRoomMemberMessageFilter: resolveTemplateRoomMemberMessageFilter(template),
     members: template.members.map((member) => createTemplateMemberDraft(member)),
   };
 }
@@ -190,6 +194,7 @@ export function buildTemplateConfigInput(template: TeamTemplate, draft: Template
     name: draft.name.trim(),
     description: draft.description.trim(),
     accentTone: draft.accentTone,
+    defaultRoomMemberMessageFilter: draft.defaultRoomMemberMessageFilter,
     members: draft.members.map((memberDraft) => buildTemplateMemberBlueprint(memberDraft)),
   };
 }

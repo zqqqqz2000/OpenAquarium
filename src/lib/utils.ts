@@ -15,3 +15,17 @@ export function summarizePrompt(prompt: string, maxLength = 84): string {
 
   return `${trimmed.slice(0, maxLength - 1)}…`
 }
+
+export function summarizeLastLine(content: string, maxLength = 84): string {
+  const lines = content
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const tail = (lines.at(-1) ?? content).replace(/\s+/g, " ").trim()
+
+  if (!tail) {
+    return ""
+  }
+
+  return summarizePrompt(tail, maxLength)
+}

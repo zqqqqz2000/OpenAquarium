@@ -37,6 +37,7 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("rendered to the user as Markdown");
     expect(prompt).toContain("Mermaid");
     expect(prompt).toContain("Prefer $$...$$ for formulas");
+    expect(prompt).toContain(`prompt: ${member.prompt}`);
   });
 
   it("switches to a delta prompt after the first persisted member turn", () => {
@@ -95,6 +96,8 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("It does not notify the member, does not route work");
     expect(prompt).toContain("render as Markdown");
     expect(prompt).toContain("Prefer $$...$$ for formulas");
+    expect(prompt).toContain("prompt: omitted on this delta turn");
+    expect(prompt).not.toContain(`prompt: ${lead.prompt}`);
   });
 
   it("rewrites OpenAquarium notification commands to absolute paths when a project path is set", () => {

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ChatMessage, ProviderBinding, TeamMember, TeamMemberBlueprint, TeamTemplate, WorkspaceSnapshot } from "../domain/model";
 import { getErrorCode, type RuntimeError } from "./error-utils";
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND, createCodexAcpProvider, mergeCodexAcpEnv } from "../lib/acp";
+import { countUnreadRoomMemberMessages, resolveTemplateRoomMemberMessageFilter } from "../lib/room-message-preferences";
 import { resolveRoomTeamSummary } from "../lib/room-team";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
@@ -129,31 +130,75 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
   const normalizedMembers = Object.fromEntries(
     Object.entries(snapshot.members).map(([memberId, member]) => [memberId, normalizeMember(member)]),
   );
+  const normalizedMessages = Object.fromEntries(
+    Object.entries(snapshot.messages).map(([messageId, message]) => [messageId, normalizeMessage(message)]),
+  );
   const normalizedSnapshot = {
     ...snapshot,
     templates: normalizedTemplates,
     members: normalizedMembers,
+    messages: normalizedMessages,
+    messageOrderByRoom: normalizedMessageOrderByRoom,
   } satisfies WorkspaceSnapshot;
   const normalizedRooms = Object.fromEntries(
     Object.entries(snapshot.rooms).map(([roomId, room]) => [
       roomId,
-      {
-        ...room,
-        teamName: resolveRoomTeamSummary(normalizedSnapshot, room).name,
-        teamDescription: resolveRoomTeamSummary(normalizedSnapshot, room).description,
-        teamAccentTone: resolveRoomTeamSummary(normalizedSnapshot, room).accentTone,
-      },
+      (() => {
+        const resolvedRoom = {
+          ...room,
+          updatedAt: room.updatedAt ?? room.createdAt,
+          memberMessageFilter: room.memberMessageFilter ?? resolveTemplateRoomMemberMessageFilter(normalizedTemplates[room.templateId]),
+        };
+        const latestSeenMemberMessageAt =
+          (normalizedMessageOrderByRoom[roomId] ?? [])
+            .map((messageId) => normalizedMessages[messageId])
+            .filter((message): message is ChatMessage => Boolean(message))
+            .filter((message) => message.author.kind === "member" && message.transport !== "direct" && message.visibility !== "internal")
+            .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.createdAt
+          ?? resolvedRoom.createdAt;
+        const roomWithReadState = {
+          ...resolvedRoom,
+          teamName: resolveRoomTeamSummary(normalizedSnapshot, room).name,
+          teamDescription: resolveRoomTeamSummary(normalizedSnapshot, room).description,
+          teamAccentTone: resolveRoomTeamSummary(normalizedSnapshot, room).accentTone,
+          lastReadMemberMessageAt: resolvedRoom.lastReadMemberMessageAt ?? latestSeenMemberMessageAt,
+        };
+
+        return {
+          ...roomWithReadState,
+          unreadMemberMessageCount: countUnreadRoomMemberMessages(
+            {
+              ...normalizedSnapshot,
+              rooms: {
+                ...snapshot.rooms,
+                [roomId]: roomWithReadState,
+              },
+              messages: normalizedMessages,
+              messageOrderByRoom: normalizedMessageOrderByRoom,
+            },
+            roomWithReadState,
+            normalizedTemplates[room.templateId],
+          ),
+        };
+      })(),
     ]),
   );
 
   return {
     ...snapshot,
+    projects: Object.fromEntries(
+      Object.entries(snapshot.projects).map(([projectId, project]) => [
+        projectId,
+        {
+          ...project,
+          updatedAt: project.updatedAt ?? project.createdAt,
+        },
+      ]),
+    ),
     rooms: normalizedRooms,
     templates: normalizedTemplates,
     members: normalizedMembers,
-    messages: Object.fromEntries(
-      Object.entries(snapshot.messages).map(([messageId, message]) => [messageId, normalizeMessage(message)]),
-    ),
+    messages: normalizedMessages,
     messageOrderByRoom: normalizedMessageOrderByRoom,
     watchers: normalizedWatchers,
     taskTraces: snapshot.taskTraces ?? {},

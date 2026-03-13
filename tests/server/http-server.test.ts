@@ -233,6 +233,18 @@ describe("workspace http api routing", () => {
           && watcherPayload.snapshot.watchers[watcherId]?.intervalMinutes === 6,
       ),
     ).toBe(true);
+
+    const roomReadResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: `/api/rooms/${roomId}/read`,
+    });
+    expect(roomReadResult?.statusCode).toBe(200);
+    const roomReadPayload = roomReadResult?.payload as {
+      snapshot: { rooms: Record<string, { id: string }> };
+    };
+    expect(roomReadPayload.snapshot.rooms[roomId]?.id).toBe(roomId);
+
     const roomTeamResult = await handleWorkspaceJsonApiRequest({
       runtime,
       method: "POST",

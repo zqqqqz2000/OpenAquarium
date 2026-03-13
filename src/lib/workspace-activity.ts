@@ -33,20 +33,6 @@ function parseTimestamp(value: string | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function applyTimestamp(summary: MutableRoomActivitySummary, value: string | undefined): void {
-  if (!value) {
-    return;
-  }
-
-  const parsed = parseTimestamp(value);
-  if (parsed <= summary.updatedAtMs) {
-    return;
-  }
-
-  summary.updatedAt = value;
-  summary.updatedAtMs = parsed;
-}
-
 export function formatRelativeActivityShort(timestamp: string, referenceTimeMs = Date.now()): string {
   const updatedAtMs = parseTimestamp(timestamp);
   if (updatedAtMs <= 0) {
@@ -72,12 +58,13 @@ export function formatRelativeActivityShort(timestamp: string, referenceTimeMs =
 export function buildProjectActivitySummaries(snapshot: WorkspaceSnapshot): ProjectActivitySummary[] {
   const roomActivityById = Object.fromEntries(
     Object.values(snapshot.rooms).map((room) => {
-      const updatedAtMs = parseTimestamp(room.createdAt);
+      const updatedAt = room.updatedAt ?? room.createdAt;
+      const updatedAtMs = parseTimestamp(updatedAt);
       return [
         room.id,
         {
           room,
-          updatedAt: room.createdAt,
+          updatedAt,
           updatedAtMs,
           hasRunning: false,
           runningCount: 0,
@@ -86,39 +73,14 @@ export function buildProjectActivitySummaries(snapshot: WorkspaceSnapshot): Proj
     }),
   ) as Record<string, MutableRoomActivitySummary>;
 
-  Object.entries(snapshot.messageOrderByRoom).forEach(([roomId, messageIds]) => {
-    const activity = roomActivityById[roomId];
-    if (!activity) {
-      return;
-    }
-
-    messageIds.forEach((messageId) => {
-      applyTimestamp(activity, snapshot.messages[messageId]?.createdAt);
-    });
-  });
-
   Object.values(snapshot.tasks).forEach((task) => {
     const activity = roomActivityById[task.roomId];
-    if (!activity) {
+    if (!activity || task.status !== "running") {
       return;
     }
 
-    applyTimestamp(activity, task.startedAt);
-    applyTimestamp(activity, task.updatedAt);
-
-    if (task.status === "running") {
-      activity.hasRunning = true;
-      activity.runningCount += 1;
-    }
-  });
-
-  Object.values(snapshot.taskTraces).forEach((trace) => {
-    const activity = roomActivityById[trace.roomId];
-    if (!activity) {
-      return;
-    }
-
-    applyTimestamp(activity, trace.createdAt);
+    activity.hasRunning = true;
+    activity.runningCount += 1;
   });
 
   Object.values(snapshot.members).forEach((member) => {
@@ -142,18 +104,18 @@ export function buildProjectActivitySummaries(snapshot: WorkspaceSnapshot): Proj
       const rooms = (snapshot.roomOrderByProject[project.id] ?? [])
         .map((roomId) => roomActivityById[roomId])
         .filter((room): room is MutableRoomActivitySummary => Boolean(room))
-        .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
-      const projectCreatedAtMs = parseTimestamp(project.createdAt);
-      const latestRoom = rooms[0];
+        .sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.room.name.localeCompare(right.room.name));
+      const projectUpdatedAt = project.updatedAt ?? project.createdAt;
+      const projectUpdatedAtMs = parseTimestamp(projectUpdatedAt);
 
       return {
         project,
         rooms,
-        updatedAt: latestRoom?.updatedAt ?? project.createdAt,
-        updatedAtMs: Math.max(latestRoom?.updatedAtMs ?? 0, projectCreatedAtMs),
+        updatedAt: projectUpdatedAt,
+        updatedAtMs: projectUpdatedAtMs,
         hasRunning: rooms.some((room) => room.hasRunning),
         runningCount: rooms.reduce((count, room) => count + room.runningCount, 0),
       } satisfies ProjectActivitySummary;
     })
-    .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+    .sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.project.name.localeCompare(right.project.name));
 }

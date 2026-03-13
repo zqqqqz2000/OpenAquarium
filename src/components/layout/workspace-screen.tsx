@@ -8,11 +8,25 @@ import { clampLeftPanelWidth, getRoomGridColumns } from "@/lib/shell-panels";
 import { buildProjectActivitySummaries } from "@/lib/workspace-activity";
 import { Sidebar } from "@/components/layout/sidebar";
 import { useShellPanels } from "@/components/layout/use-shell-panels";
+import { getMemberActivitySummary } from "@/components/members/member-utils";
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
 import { RoomTeamDialog } from "@/components/rooms/room-team-dialog";
 import { TemplateStudioDialog } from "@/components/templates/template-studio-dialog";
 import { resolveRoomTeamSummary } from "@/lib/room-team";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
+
+function buildRunningMemberPreviewsForRoom(snapshot: WorkspaceSnapshot, room: Room) {
+  return room.memberIds
+    .map((memberId) => snapshot.members[memberId])
+    .filter((member): member is NonNullable<typeof member> => Boolean(member) && member.status === "running")
+    .map((member) => ({
+      roomId: room.id,
+      memberId: member.id,
+      memberName: member.name,
+      memberHandle: member.handle,
+      latestContentPreview: getMemberActivitySummary(snapshot, member).latestContentPreview,
+    }));
+}
 
 function currentRouteStillExists(args: {
   snapshot: WorkspaceSnapshot;
@@ -97,6 +111,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const toggleMemberMonitoring = useWorkspaceStore((state) => state.toggleMemberMonitoring);
   const runWatcher = useWorkspaceStore((state) => state.runWatcher);
   const updateMemberConfig = useWorkspaceStore((state) => state.updateMemberConfig);
+  const updateRoomSettings = useWorkspaceStore((state) => state.updateRoomSettings);
   const updateRoomTeam = useWorkspaceStore((state) => state.updateRoomTeam);
   const updateTemplate = useWorkspaceStore((state) => state.updateTemplate);
   const updateGlobalConfig = useWorkspaceStore((state) => state.updateGlobalConfig);
@@ -150,6 +165,24 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const roomActivityById = Object.fromEntries(
     projectSummaries.flatMap((summary) => summary.rooms.map((roomSummary) => [roomSummary.room.id, roomSummary])),
   );
+  const roomUnreadCountById = Object.fromEntries(
+    Object.values(snapshot.rooms).map((candidateRoom) => [candidateRoom.id, candidateRoom.unreadMemberMessageCount ?? 0]),
+  ) as Record<string, number>;
+  const projectUnreadCountById = Object.fromEntries(
+    projects.map((projectEntry) => [
+      projectEntry.id,
+      (roomsByProject[projectEntry.id] ?? []).reduce((count, candidateRoom) => count + (roomUnreadCountById[candidateRoom.id] ?? 0), 0),
+    ]),
+  ) as Record<string, number>;
+  const roomRunningMembersById = Object.fromEntries(
+    Object.values(snapshot.rooms).map((candidateRoom) => [candidateRoom.id, buildRunningMemberPreviewsForRoom(snapshot, candidateRoom)]),
+  ) as Record<string, ReturnType<typeof buildRunningMemberPreviewsForRoom>>;
+  const projectRunningMembersById = Object.fromEntries(
+    projects.map((projectEntry) => [
+      projectEntry.id,
+      (roomsByProject[projectEntry.id] ?? []).flatMap((candidateRoom) => roomRunningMembersById[candidateRoom.id] ?? []),
+    ]),
+  ) as Record<string, ReturnType<typeof buildRunningMemberPreviewsForRoom>>;
   const openMemberStudio = (targetMemberId: string): void => {
     selectMember(targetMemberId);
     if (!selectedProjectId || !selectedRoomId) {
@@ -161,6 +194,19 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
       params: {
         projectId: selectedProjectId,
         roomId: selectedRoomId,
+        memberId: targetMemberId,
+      },
+    });
+  };
+
+  const openRoomMemberFromSidebar = (targetProjectId: string, targetRoomId: string, targetMemberId: string): void => {
+    selectRoom(targetProjectId, targetRoomId);
+    selectMember(targetMemberId);
+    void navigate({
+      to: "/projects/$projectId/rooms/$roomId/members/$memberId",
+      params: {
+        projectId: targetProjectId,
+        roomId: targetRoomId,
         memberId: targetMemberId,
       },
     });
@@ -302,6 +348,10 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           roomsByProject={roomsByProject}
           projectActivityById={projectActivityById}
           roomActivityById={roomActivityById}
+          projectUnreadCountById={projectUnreadCountById}
+          roomUnreadCountById={roomUnreadCountById}
+          projectRunningMembersById={projectRunningMembersById}
+          roomRunningMembersById={roomRunningMembersById}
           activeProjectId={selectedProjectId}
           activeRoomId={selectedRoomId}
           templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
@@ -316,6 +366,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           onDeleteProject={(targetProjectId) => void handleDeleteProject(targetProjectId)}
           onDeleteRoom={(targetRoomId) => void handleDeleteRoom(targetRoomId)}
           onDeleteTemplate={(templateIdToDelete) => void handleDeleteTemplate(templateIdToDelete)}
+          onOpenMember={openRoomMemberFromSidebar}
           onOpenTemplate={openTemplateStudio}
           onOpenTemplateStudio={() => {
             setSelectedTemplateId((current) => current ?? template?.id ?? snapshot.templateOrder[0]);
@@ -334,6 +385,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           error={error}
           onOpenMember={openMemberStudio}
           onOpenRoomTeam={room ? openRoomTeam : undefined}
+          onUpdateRoomSettings={(input) => void updateRoomSettings(input)}
           onToggleLeftSidebar={toggleLeftCollapsed}
           onToggleRightSidebar={toggleRightCollapsed}
         />

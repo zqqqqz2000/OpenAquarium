@@ -1,5 +1,6 @@
 import type {
   GlobalWorkspaceConfig,
+  UpdateRoomSettingsInput,
   UpdateRoomTeamInput,
   TeamTemplate,
   TemplateStudioChatMessage,
@@ -106,6 +107,15 @@ export class WorkspaceRuntimeClient {
     return payload.snapshot;
   }
 
+  async acknowledgeRoom(roomId: string): Promise<WorkspaceSnapshot> {
+    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+      await fetch(`${this.baseUrl}/api/rooms/${roomId}/read`, {
+        method: "POST",
+      }),
+    );
+    return payload.snapshot;
+  }
+
   async sendUserMessage(input: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot> {
     const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
       await fetch(`${this.baseUrl}/api/rooms/${input.roomId}/messages`, {
@@ -155,6 +165,7 @@ export class WorkspaceRuntimeClient {
           name: input.name,
           description: input.description,
           accentTone: input.accentTone,
+          defaultRoomMemberMessageFilter: input.defaultRoomMemberMessageFilter,
           members: input.members,
         }),
       }),
@@ -172,6 +183,19 @@ export class WorkspaceRuntimeClient {
           teamDescription: input.teamDescription,
           teamAccentTone: input.teamAccentTone,
           members: input.members,
+        }),
+      }),
+    );
+    return payload.snapshot;
+  }
+
+  async updateRoomSettings(input: UpdateRoomSettingsInput): Promise<WorkspaceSnapshot> {
+    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+      await fetch(`${this.baseUrl}/api/rooms/${input.roomId}/settings`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          memberMessageFilter: input.memberMessageFilter,
         }),
       }),
     );

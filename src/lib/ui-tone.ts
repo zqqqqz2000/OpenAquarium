@@ -2,6 +2,8 @@ import type { AccentTone, MemberStatus, MessageStatus } from "@/domain/model";
 
 export type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 
+export const compactBadgeClassName = "h-6 rounded-full px-2 text-[10px] font-semibold uppercase leading-none tracking-[0.14em]";
+
 const surfaceClasses: Record<AccentTone, string> = {
   paper: "bg-[var(--tone-paper-surface)]",
   postit: "bg-[var(--tone-postit-surface)]",

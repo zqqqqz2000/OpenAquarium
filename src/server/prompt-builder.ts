@@ -169,8 +169,21 @@ function buildSharedSections(args: {
   routingNote: string;
   promptMode: PromptMode;
   taskSequence: number;
+  includeMemberPrompt: boolean;
 }): string[] {
-  const { workspaceRoot, project, room, member, task, snapshot, transcriptFilePath, routingNote, promptMode, taskSequence } = args;
+  const {
+    workspaceRoot,
+    project,
+    room,
+    member,
+    task,
+    snapshot,
+    transcriptFilePath,
+    routingNote,
+    promptMode,
+    taskSequence,
+    includeMemberPrompt,
+  } = args;
   const projectWorkingDirectory = resolveProjectWorkingDirectory(project, workspaceRoot);
   const roomSendScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-send"));
   const roomStateScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-state"));
@@ -197,7 +210,9 @@ function buildSharedSections(args: {
     "[Member Configuration]",
     `name: ${member.name}`,
     `handle: @${member.handle}`,
-    `prompt: ${member.prompt}`,
+    includeMemberPrompt
+      ? `prompt: ${member.prompt}`
+      : "prompt: omitted on this delta turn; reuse the persisted member/session instructions until the next full prompt refresh.",
     `summary: ${member.summary}`,
     `isEntryMember: ${member.isEntryMember ? "true" : "false"}`,
     `observeAllRoomMessages: ${member.observeAllRoomMessages ? "true" : "false"}`,
@@ -249,6 +264,7 @@ function buildFullPrompt(args: {
     ...buildSharedSections({
       ...args,
       promptMode: "full",
+      includeMemberPrompt: true,
     }),
     "",
     "[Team Roster]",
@@ -304,6 +320,7 @@ function buildDeltaPrompt(args: {
     ...buildSharedSections({
       ...args,
       promptMode: "delta",
+      includeMemberPrompt: false,
     }),
     "",
     "[Session Continuity]",

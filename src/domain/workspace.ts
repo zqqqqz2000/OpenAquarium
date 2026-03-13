@@ -3,6 +3,7 @@ import type {
   ChatAuthor,
   ChatMessage,
   CompleteTaskInput,
+  Project,
   ProjectId,
   CreateRoomInput,
   CreateProjectInput,
@@ -15,6 +16,7 @@ import type {
   ProviderBinding,
   RoomId,
   Room,
+  RoomMemberMessageFilter,
   RoomTeamMemberInput,
   SkillDefinition,
   TaskId,
@@ -25,6 +27,7 @@ import type {
   TeamTemplate,
   UpsertWatcherInput,
   UpdateMemberConfigInput,
+  UpdateRoomSettingsInput,
   UpdateRoomTeamInput,
   UpdateTemplateInput,
   WatchSubscription,
@@ -32,6 +35,12 @@ import type {
 } from "./model";
 import type { MutationContext } from "./identity";
 import { formatTime } from "../lib/time";
+import { isVisibleMainRoomMessage } from "../lib/message-visibility";
+import {
+  countUnreadRoomMemberMessages,
+  resolveRoomMemberMessageFilter,
+  resolveTemplateRoomMemberMessageFilter,
+} from "../lib/room-message-preferences";
 
 function cloneSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
   return {
@@ -80,6 +89,61 @@ function buildMemberAuthor(member: TeamMember): ChatAuthor {
     kind: "member",
     id: member.id,
     label: member.name,
+  };
+}
+
+function resolveProjectUpdatedAt(project: Project): string {
+  return project.updatedAt ?? project.createdAt;
+}
+
+function resolveRoomUpdatedAt(room: Room): string {
+  return room.updatedAt ?? room.createdAt;
+}
+
+function touchRoomActivity(snapshot: WorkspaceSnapshot, roomId: RoomId, timestamp: string): void {
+  const room = snapshot.rooms[roomId];
+  if (!room) {
+    return;
+  }
+
+  snapshot.rooms[roomId] = {
+    ...room,
+    updatedAt: timestamp,
+  };
+
+  const project = snapshot.projects[room.projectId];
+  if (!project) {
+    return;
+  }
+
+  snapshot.projects[project.id] = {
+    ...project,
+    updatedAt: timestamp,
+  };
+}
+
+function setRoomReadState(snapshot: WorkspaceSnapshot, roomId: RoomId, readAt: string): void {
+  const room = snapshot.rooms[roomId];
+  if (!room) {
+    return;
+  }
+
+  snapshot.rooms[roomId] = {
+    ...room,
+    lastReadMemberMessageAt: readAt,
+    unreadMemberMessageCount: 0,
+  };
+}
+
+function recalculateRoomUnreadCount(snapshot: WorkspaceSnapshot, roomId: RoomId): void {
+  const room = snapshot.rooms[roomId];
+  if (!room) {
+    return;
+  }
+
+  snapshot.rooms[roomId] = {
+    ...room,
+    unreadMemberMessageCount: countUnreadRoomMemberMessages(snapshot, room, snapshot.templates[room.templateId]),
   };
 }
 
@@ -412,6 +476,7 @@ export function createProjectWithRoom(
     name: input.projectName.trim(),
     path: input.path?.trim() || undefined,
     createdAt: now,
+    updatedAt: now,
   };
   snapshot.projectOrder.push(projectId);
   snapshot.roomOrderByProject[projectId] = [];
@@ -463,6 +528,10 @@ export function createRoomInProject(
     watcherIds: watcherIds.map((watcher) => watcher.id),
     entryMemberId: memberIdByBlueprint[entryBlueprint.id],
     createdAt: now,
+    updatedAt: now,
+    memberMessageFilter: resolveTemplateRoomMemberMessageFilter(template),
+    lastReadMemberMessageAt: now,
+    unreadMemberMessageCount: 0,
   };
   snapshot.messageOrderByRoom[roomId] = [];
   roomMembers.forEach((member) => {
@@ -475,6 +544,10 @@ export function createRoomInProject(
     projectId: input.projectId,
     roomId,
     memberId: memberIdByBlueprint[entryBlueprint.id],
+  };
+  snapshot.projects[input.projectId] = {
+    ...project,
+    updatedAt: now,
   };
   return snapshot;
 }
@@ -622,6 +695,8 @@ export function postUserMessage(
   };
 
   insertMessage(snapshot, message);
+  setRoomReadState(snapshot, room.id, now);
+  touchRoomActivity(snapshot, room.id, now);
   routeMessage(snapshot, message, now, context.createId);
   snapshot.selection.roomId = room.id;
   snapshot.selection.projectId = room.projectId;
@@ -996,7 +1071,89 @@ export function updateTemplate(current: WorkspaceSnapshot, input: UpdateTemplate
     name: input.name.trim(),
     description: input.description.trim(),
     accentTone: validateAccentTone(input.accentTone),
+    defaultRoomMemberMessageFilter: input.defaultRoomMemberMessageFilter ?? resolveTemplateRoomMemberMessageFilter(template),
     members: validateTemplateMembers(input.members),
+  };
+
+  return snapshot;
+}
+
+function validateRoomMemberMessageFilter(filter: RoomMemberMessageFilter): RoomMemberMessageFilter {
+  return filter;
+}
+
+export function acknowledgeRoom(
+  current: WorkspaceSnapshot,
+  roomId: RoomId,
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const room = snapshot.rooms[roomId];
+
+  if (!room) {
+    throw new Error(`Unknown room "${roomId}"`);
+  }
+
+  setRoomReadState(snapshot, roomId, context.now());
+  return snapshot;
+}
+
+export function updateRoomSettings(
+  current: WorkspaceSnapshot,
+  input: UpdateRoomSettingsInput,
+  context: MutationContext,
+  options?: { markAsRead?: boolean },
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const room = snapshot.rooms[input.roomId];
+
+  if (!room) {
+    throw new Error(`Unknown room "${input.roomId}"`);
+  }
+
+  snapshot.rooms[input.roomId] = {
+    ...room,
+    memberMessageFilter: validateRoomMemberMessageFilter(input.memberMessageFilter),
+  };
+
+  if (options?.markAsRead) {
+    setRoomReadState(snapshot, input.roomId, context.now());
+    return snapshot;
+  }
+
+  recalculateRoomUnreadCount(snapshot, input.roomId);
+  return snapshot;
+}
+
+export function syncUnreadStateForMessage(
+  current: WorkspaceSnapshot,
+  messageId: MessageId,
+  activeRoomId?: RoomId,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const message = snapshot.messages[messageId];
+
+  if (!message || message.author.kind !== "member") {
+    return snapshot;
+  }
+
+  const room = snapshot.rooms[message.roomId];
+  if (!room) {
+    return snapshot;
+  }
+
+  if (activeRoomId && activeRoomId === room.id && isVisibleMainRoomMessage(message)) {
+    setRoomReadState(snapshot, room.id, message.createdAt);
+    return snapshot;
+  }
+
+  if (!isVisibleMainRoomMessage(message, resolveRoomMemberMessageFilter(room, snapshot.templates[room.templateId]))) {
+    return snapshot;
+  }
+
+  snapshot.rooms[room.id] = {
+    ...room,
+    unreadMemberMessageCount: (room.unreadMemberMessageCount ?? 0) + 1,
   };
 
   return snapshot;

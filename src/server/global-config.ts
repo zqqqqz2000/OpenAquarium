@@ -10,6 +10,7 @@ import { defaultTemplates } from "@/lib/sample-data/templates";
 import { getErrorCode, type RuntimeError } from "@/server/error-utils";
 
 const accentToneSchema = z.enum(["paper", "postit", "blueprint", "correction"]);
+const roomMemberMessageFilterSchema = z.enum(["all", "only-members", "hide-members"]);
 
 const persistedSkillSchema = z.object({
   id: z.string().min(1).optional(),
@@ -62,6 +63,7 @@ const persistedTeamTemplateSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   accentTone: accentToneSchema,
+  defaultRoomMemberMessageFilter: roomMemberMessageFilterSchema.optional(),
   members: z.array(persistedTeamMemberBlueprintSchema).min(1),
 });
 
@@ -104,6 +106,7 @@ const TEMPLATE_JSON_SCHEMA = {
       name: { type: "string" },
       description: { type: "string" },
       accentTone: { enum: ["paper", "postit", "blueprint", "correction"] },
+      defaultRoomMemberMessageFilter: { enum: ["all", "only-members", "hide-members"] },
       members: {
         type: "array",
         minItems: 1,
@@ -212,6 +215,7 @@ function normalizePersistedTemplates(
     id: template.id.trim(),
     name: template.name.trim(),
     description: template.description.trim(),
+    defaultRoomMemberMessageFilter: template.defaultRoomMemberMessageFilter,
     members: template.members.map((member) => ({
       ...member,
       id: member.id.trim(),

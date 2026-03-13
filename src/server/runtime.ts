@@ -1,7 +1,16 @@
 import path from "node:path";
 
-import type { GlobalWorkspaceConfig, ProviderBinding, TeamMember, TeamTemplate, UpdateGlobalConfigInput, WorkspaceSnapshot } from "../domain/model";
+import type {
+  GlobalWorkspaceConfig,
+  ProviderBinding,
+  TeamMember,
+  TeamTemplate,
+  UpdateGlobalConfigInput,
+  UpdateRoomSettingsInput,
+  WorkspaceSnapshot,
+} from "../domain/model";
 import {
+  acknowledgeRoom,
   appendTaskTrace,
   completeMemberTask,
   createRoomInProject,
@@ -19,11 +28,13 @@ import {
   toggleMemberMonitor,
   toggleWatcher,
   updateMemberConfig,
+  updateRoomSettings as updateRoomSettingsInWorkspace,
   updateRoomTeam as updateRoomTeamInWorkspace,
   updateTemplate,
   updateMemberPrompt,
   upsertTaskTrace,
   upsertMemberWatcher,
+  syncUnreadStateForMessage,
 } from "../domain/workspace";
 import { createRuntimeContext, createSystemClockContext, type MutationContext } from "../domain/identity";
 import type {
@@ -344,6 +355,7 @@ export class WorkspaceRuntime {
   private pendingProgressPersistTimer: ReturnType<typeof setTimeout> | undefined;
   private persistenceChain: Promise<void> = Promise.resolve();
   private flushingPendingWatchers = false;
+  private activeRoomId?: string;
 
   constructor(args: {
     initialSnapshot: WorkspaceSnapshot;
@@ -359,6 +371,7 @@ export class WorkspaceRuntime {
     logger?: DiagnosticsLogger;
   }) {
     this.snapshot = args.initialSnapshot;
+    this.activeRoomId = args.initialSnapshot.selection.roomId;
     this.context = args.context ?? createRuntimeContext(10_000, "2026-03-09T10:00:00.000Z");
     this.persistence = args.persistence;
     this.workspaceRoot = args.workspaceRoot;
@@ -490,6 +503,7 @@ export class WorkspaceRuntime {
       },
       this.context,
     );
+    this.activeRoomId = next.selection.roomId;
     await this.applySnapshot(previous, next);
     return {
       snapshot: this.snapshot,
@@ -501,6 +515,7 @@ export class WorkspaceRuntime {
   async createRoom(input: CreateRoomInput): Promise<{ snapshot: WorkspaceSnapshot; roomId: string }> {
     const previous = this.snapshot;
     const next = createRoomInProject(previous, input, this.context);
+    this.activeRoomId = next.selection.roomId;
     await this.applySnapshot(previous, next);
     return {
       snapshot: this.snapshot,
@@ -524,6 +539,7 @@ export class WorkspaceRuntime {
 
   async sendUserMessage(args: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot> {
     const previous = this.snapshot;
+    this.activeRoomId = args.roomId;
     const next = postUserMessage(
       previous,
       {
@@ -614,6 +630,14 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
+  async acknowledgeRoom(roomId: string): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    this.activeRoomId = roomId;
+    const next = acknowledgeRoom(previous, roomId, this.context);
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
   async toggleMemberMonitoring(memberId: string): Promise<WorkspaceSnapshot> {
     const previous = this.snapshot;
     const next = toggleMemberMonitor(previous, memberId);
@@ -663,6 +687,18 @@ export class WorkspaceRuntime {
       }
     });
 
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
+  async updateRoomSettings(input: UpdateRoomSettingsInput): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    const next = updateRoomSettingsInWorkspace(
+      previous,
+      input,
+      this.context,
+      { markAsRead: this.activeRoomId === input.roomId },
+    );
     await this.applySnapshot(previous, next);
     return this.snapshot;
   }
@@ -912,19 +948,41 @@ export class WorkspaceRuntime {
   }
 
   private async applySnapshot(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): Promise<void> {
-    this.cleanupRemovedRuntimeState(previous, next);
+    const prepared = this.applyUnreadState(previous, next);
+    if (this.activeRoomId && !prepared.rooms[this.activeRoomId]) {
+      this.activeRoomId = prepared.selection.roomId && prepared.rooms[prepared.selection.roomId]
+        ? prepared.selection.roomId
+        : undefined;
+    }
+
+    this.cleanupRemovedRuntimeState(previous, prepared);
     await syncRoomTranscriptFiles({
       workspaceRoot: this.workspaceRoot,
       previous,
-      next,
+      next: prepared,
     });
-    this.snapshot = compactWorkspaceSnapshot(next);
+    this.snapshot = compactWorkspaceSnapshot(prepared);
     await this.persistImmediately(this.snapshot);
     this.logger?.info("snapshot-applied", summarizeWorkspaceSnapshot(this.snapshot));
     this.syncWatchers();
     this.emit();
     this.dispatchNewTasks(previous, this.snapshot);
     await this.flushPendingWatchers();
+  }
+
+  private applyUnreadState(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): WorkspaceSnapshot {
+    const nextMessageIds = Object.keys(next.messages)
+      .filter((messageId) => !previous.messages[messageId])
+      .sort((left, right) => {
+        const leftCreatedAt = next.messages[left]?.createdAt ?? "";
+        const rightCreatedAt = next.messages[right]?.createdAt ?? "";
+        return leftCreatedAt.localeCompare(rightCreatedAt) || left.localeCompare(right);
+      });
+
+    return nextMessageIds.reduce(
+      (snapshot, messageId) => syncUnreadStateForMessage(snapshot, messageId, this.activeRoomId),
+      next,
+    );
   }
 
   private cleanupRemovedRuntimeState(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): void {

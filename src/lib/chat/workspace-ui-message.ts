@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 import type { ChatMessage, Room, WorkspaceSnapshot } from "@/domain/model";
 import type { JsonValue } from "@/lib/json";
 import { isVisibleMainRoomMessage } from "@/lib/message-visibility";
+import { resolveRoomMemberMessageFilter } from "@/lib/room-message-preferences";
 import {
   getMessageHandlers,
   getMessageMentionHandles,
@@ -98,9 +99,12 @@ export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: R
 }
 
 export function mapRoomMessagesToUIMessages(snapshot: WorkspaceSnapshot, room: Room): WorkspaceUIMessage[] {
+  const template = snapshot.templates[room.templateId];
+  const memberMessageFilter = resolveRoomMemberMessageFilter(room, template);
+
   return (snapshot.messageOrderByRoom[room.id] ?? [])
     .map((messageId) => snapshot.messages[messageId])
-    .filter((message): message is ChatMessage => Boolean(message) && isVisibleMainRoomMessage(message))
+    .filter((message): message is ChatMessage => Boolean(message) && isVisibleMainRoomMessage(message, memberMessageFilter))
     .map((message) => mapDomainMessageToUIMessage(snapshot, room, message));
 }
 

@@ -14,6 +14,7 @@ function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
     createRoom: () => Promise.reject(new Error("not implemented")),
     deleteProject: () => Promise.reject(new Error("not implemented")),
     deleteRoom: () => Promise.reject(new Error("not implemented")),
+    acknowledgeRoom: () => Promise.reject(new Error("not implemented")),
     sendUserMessage: () => Promise.reject(new Error("not implemented")),
     updatePrompt: () => Promise.reject(new Error("not implemented")),
     updateMemberConfig: (input: UpdateMemberConfigInput) => {
@@ -21,6 +22,7 @@ function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
       return Promise.reject(new Error("not implemented"));
     },
     updateRoomTeam: () => Promise.reject(new Error("not implemented")),
+    updateRoomSettings: () => Promise.reject(new Error("not implemented")),
     updateTemplate: (input: UpdateTemplateInput) => {
       void input;
       return Promise.reject(new Error("not implemented"));

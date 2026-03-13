@@ -177,6 +177,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         name: string;
         description: string;
         accentTone: "paper" | "postit" | "blueprint" | "correction";
+        defaultRoomMemberMessageFilter?: "all" | "only-members" | "hide-members";
         members: Array<{
           id: string;
           name: string;
@@ -281,6 +282,43 @@ export async function handleWorkspaceJsonApiRequest(args: {
       };
     }
     const snapshot = await runtime.deleteRoom(roomId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const roomReadMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/read$/u);
+  if (method === "POST" && roomReadMatch) {
+    const [, roomId] = roomReadMatch;
+    if (!roomId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing room id" },
+      };
+    }
+    const snapshot = await runtime.acknowledgeRoom(roomId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const roomSettingsMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/settings$/u);
+  if (method === "POST" && roomSettingsMatch) {
+    const [, roomId] = roomSettingsMatch;
+    if (!roomId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing room id" },
+      };
+    }
+    const snapshot = await runtime.updateRoomSettings({
+      roomId,
+      ...(body as {
+        memberMessageFilter: "all" | "only-members" | "hide-members";
+      }),
+    });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -723,6 +761,7 @@ export async function startWorkspaceHttpServer(args: {
           name: string;
           description: string;
           accentTone: "paper" | "postit" | "blueprint" | "correction";
+          defaultRoomMemberMessageFilter?: "all" | "only-members" | "hide-members";
           members: Array<{
             id: string;
             name: string;
@@ -900,6 +939,34 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
         const snapshot = await args.runtime.deleteRoom(roomId);
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
+      const roomReadMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/read$/u);
+      if (request.method === "POST" && roomReadMatch) {
+        const [, roomId] = roomReadMatch;
+        if (!roomId) {
+          sendJson(response, 400, { error: "Missing room id" });
+          return;
+        }
+        const snapshot = await args.runtime.acknowledgeRoom(roomId);
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
+      const roomSettingsMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/settings$/u);
+      if (request.method === "POST" && roomSettingsMatch) {
+        const [, roomId] = roomSettingsMatch;
+        if (!roomId) {
+          sendJson(response, 400, { error: "Missing room id" });
+          return;
+        }
+        const body = await readJson<{ memberMessageFilter: "all" | "only-members" | "hide-members" }>(request);
+        const snapshot = await args.runtime.updateRoomSettings({
+          roomId,
+          memberMessageFilter: body.memberMessageFilter,
+        });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }

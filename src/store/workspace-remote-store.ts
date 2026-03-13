@@ -6,6 +6,7 @@ import type {
   TemplateStudioChatMessage,
   UpdateGlobalConfigInput,
   UpdateMemberConfigInput,
+  UpdateRoomSettingsInput,
   UpdateRoomTeamInput,
   UpdateTemplateInput,
   WorkspaceSnapshot,
@@ -15,15 +16,27 @@ import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profile
 import { WorkspaceRuntimeClient } from "@/lib/runtime-client";
 
 function mergeIncomingSnapshot(current: WorkspaceSnapshot, incoming: WorkspaceSnapshot): WorkspaceSnapshot {
+  const selectedProjectId =
+    current.selection.projectId && incoming.projects[current.selection.projectId]
+      ? current.selection.projectId
+      : incoming.selection.projectId;
+  const selectedRoomId =
+    current.selection.roomId
+    && incoming.rooms[current.selection.roomId]
+    && (!selectedProjectId || incoming.rooms[current.selection.roomId]?.projectId === selectedProjectId)
+      ? current.selection.roomId
+      : incoming.selection.roomId;
   const selectedMemberId = current.selection.memberId;
-  const roomId = incoming.selection.roomId;
   const memberStillVisible =
-    selectedMemberId && roomId ? incoming.rooms[roomId]?.memberIds.includes(selectedMemberId) : false;
+    selectedMemberId && selectedRoomId ? incoming.rooms[selectedRoomId]?.memberIds.includes(selectedMemberId) : false;
+  const roomProjectId = selectedRoomId ? incoming.rooms[selectedRoomId]?.projectId : undefined;
 
   return {
     ...incoming,
     selection: {
       ...incoming.selection,
+      projectId: roomProjectId ?? selectedProjectId,
+      roomId: selectedRoomId,
       memberId: memberStillVisible ? selectedMemberId : incoming.selection.memberId,
     },
   };
@@ -73,6 +86,7 @@ export interface WorkspaceRemoteStoreState {
   deleteRoom(roomId: string): Promise<WorkspaceSnapshot>;
   selectRoom(projectId: string, roomId: string): void;
   selectMember(memberId?: string): void;
+  updateRoomSettings(input: UpdateRoomSettingsInput): Promise<void>;
   sendUserMessage(content: string, directMemberId?: string): Promise<void>;
   toggleMemberMonitoring(memberId: string): Promise<void>;
   toggleWatcherSchedule(watcherId: string): Promise<void>;
@@ -110,9 +124,11 @@ export interface WorkspaceRemoteClient {
   }>;
   deleteProject(projectId: string): Promise<WorkspaceSnapshot>;
   deleteRoom(roomId: string): Promise<WorkspaceSnapshot>;
+  acknowledgeRoom(roomId: string): Promise<WorkspaceSnapshot>;
   sendUserMessage(input: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot>;
   updatePrompt(memberId: string, prompt: string): Promise<WorkspaceSnapshot>;
   updateMemberConfig(input: UpdateMemberConfigInput): Promise<WorkspaceSnapshot>;
+  updateRoomSettings(input: UpdateRoomSettingsInput): Promise<WorkspaceSnapshot>;
   updateRoomTeam(input: UpdateRoomTeamInput): Promise<WorkspaceSnapshot>;
   updateTemplate(input: UpdateTemplateInput): Promise<WorkspaceSnapshot>;
   deleteTemplate(templateId: string): Promise<WorkspaceSnapshot>;
@@ -221,6 +237,13 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
           },
         },
       }));
+      void runMutation(set, () => client.acknowledgeRoom(roomId))
+        .then((snapshot) => {
+          set((state) => ({
+            snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+          }));
+        })
+        .catch(() => undefined);
     },
     selectMember(memberId) {
       set((state) => ({
@@ -275,6 +298,12 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
     },
     async updateMemberConfig(input) {
       const snapshot = await runMutation(set, () => client.updateMemberConfig(input));
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+      }));
+    },
+    async updateRoomSettings(input) {
+      const snapshot = await runMutation(set, () => client.updateRoomSettings(input));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));

@@ -24,6 +24,9 @@ describe("RoomTeamDialog", () => {
       />,
     );
 
+    expect(screen.getByRole("dialog")).toHaveClass("w-[min(96vw,88rem)]");
+    expect(screen.getByRole("dialog")).toHaveClass("sm:max-w-[88rem]");
+
     expect(screen.getByText("这里改的是当前 room 里的团队结构和成员实例配置，不会同步回 team template。")).toBeInTheDocument();
 
     await user.clear(screen.getByRole("textbox", { name: "Team name" }));

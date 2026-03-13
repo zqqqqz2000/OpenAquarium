@@ -16,6 +16,7 @@ export type MessageStatus = "sent" | "streaming" | "completed" | "interrupted";
 export type MessageVisibility = "public" | "internal";
 export type AccentTone = "paper" | "postit" | "blueprint" | "correction";
 export type TaskTraceKind = "task-started" | "task-prompt" | "draft" | "status" | "completed" | "error" | "interrupted";
+export type RoomMemberMessageFilter = "all" | "only-members" | "hide-members";
 
 export interface SkillDefinition {
   id: string;
@@ -73,6 +74,7 @@ export interface TeamTemplate {
   name: string;
   description: string;
   accentTone: AccentTone;
+  defaultRoomMemberMessageFilter?: RoomMemberMessageFilter;
   members: TeamMemberBlueprint[];
 }
 
@@ -81,6 +83,7 @@ export interface Project {
   name: string;
   path?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Room {
@@ -96,6 +99,10 @@ export interface Room {
   watcherIds: WatcherId[];
   entryMemberId: MemberId;
   createdAt: string;
+  updatedAt?: string;
+  memberMessageFilter?: RoomMemberMessageFilter;
+  lastReadMemberMessageAt?: string;
+  unreadMemberMessageCount?: number;
 }
 
 export interface TeamMember {
@@ -255,6 +262,7 @@ export interface UpdateTemplateInput {
   name: string;
   description: string;
   accentTone: AccentTone;
+  defaultRoomMemberMessageFilter?: RoomMemberMessageFilter;
   members: TeamMemberBlueprint[];
 }
 
@@ -285,6 +293,11 @@ export interface UpdateRoomTeamInput {
   teamDescription: string;
   teamAccentTone: AccentTone;
   members: RoomTeamMemberInput[];
+}
+
+export interface UpdateRoomSettingsInput {
+  roomId: RoomId;
+  memberMessageFilter: RoomMemberMessageFilter;
 }
 
 export interface UpdateGlobalConfigInput {
