@@ -5,7 +5,6 @@ import { ArrowDown, Bot, FolderKanban, GitBranch, Link2, TerminalSquare, Users }
 import type {
   ChatMessage,
   Room,
-  RoomMemberMessageFilter,
   TeamMember,
   TeamTemplate,
   UpdateRoomSettingsInput,
@@ -17,13 +16,14 @@ import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import { MemberAvatar } from "@/components/members/member-avatar";
 import { MemberHoverPreview } from "@/components/members/member-hover-preview";
 import { RunningMembersHoverCard } from "@/components/members/running-members-hover-card";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getMemberActivitySummary, getWatcherForMember } from "@/components/members/member-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
+import { getMemberRoleLabel, getMemberRoleMonogram, getMemberRolePalette } from "@/lib/member-display";
 import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
-import { resolveRoomMemberMessageFilter } from "@/lib/room-message-preferences";
+import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
 import type { RoomTeamSummary } from "@/lib/room-team";
 import { getUIMessageText, type WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
 import {
@@ -150,32 +150,61 @@ function RoomMetaBadge(props: {
   );
 }
 
-function MemberMessageFilterToggle(props: {
-  value: RoomMemberMessageFilter;
-  onChange: (value: RoomMemberMessageFilter) => void;
+function MemberVisibilityFilter(props: {
+  members: TeamMember[];
+  visibleMemberIds: string[];
+  onChange: (visibleMemberIds: string[]) => void;
 }) {
-  const { value, onChange } = props;
-  const options = [
-    { value: "all" as const, label: "All" },
-    { value: "only-members" as const, label: "只看 member" },
-    { value: "hide-members" as const, label: "不看 member" },
-  ];
+  const { members, visibleMemberIds, onChange } = props;
+  const [draftVisibleMemberIds, setDraftVisibleMemberIds] = useState(visibleMemberIds);
+
+  useEffect(() => {
+    setDraftVisibleMemberIds(visibleMemberIds);
+  }, [visibleMemberIds]);
+
+  const visibleMemberIdSet = new Set(draftVisibleMemberIds);
+  const toggleMember = (memberId: string): void => {
+    const nextVisibleMemberIds = visibleMemberIdSet.has(memberId)
+      ? draftVisibleMemberIds.filter((candidateId) => candidateId !== memberId)
+      : [...draftVisibleMemberIds, memberId];
+    setDraftVisibleMemberIds(nextVisibleMemberIds);
+    onChange(nextVisibleMemberIds);
+  };
 
   return (
-    <div className="inline-flex w-fit flex-wrap items-center gap-1 rounded-full border border-border/70 bg-background/80 p-1">
-      {options.map((option) => (
-        <button
-          type="button"
-          key={option.value}
-          className={cn(
-            "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-            value === option.value ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
-          )}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
+    <div className="flex flex-wrap items-center gap-1.5" aria-label="Visible members filter">
+      {members.map((member) => {
+        const checked = visibleMemberIdSet.has(member.id);
+        const rolePalette = getMemberRolePalette(member.handle);
+        const roleMonogram = getMemberRoleMonogram(member.handle);
+
+        return (
+          <button
+            key={member.id}
+            type="button"
+            aria-pressed={checked}
+            aria-label={`Toggle @${member.handle} visibility`}
+            className={cn(
+              "group relative inline-flex h-8 max-w-full items-center gap-1.5 overflow-hidden rounded-full border px-2.5 text-xs font-medium transition-colors",
+              checked
+                ? "border-border/70 bg-background/90 text-foreground shadow-sm hover:border-border hover:bg-background"
+                : "border-border/55 bg-muted/40 text-muted-foreground grayscale hover:bg-muted/60",
+            )}
+            onClick={() => toggleMember(member.id)}
+          >
+            <Avatar size="sm" className="ring-0 after:hidden">
+              <AvatarFallback style={{ backgroundColor: rolePalette.background, color: rolePalette.foreground }}>{roleMonogram}</AvatarFallback>
+            </Avatar>
+            <span className="max-w-20 truncate">{member.handle}</span>
+            {!checked ? (
+              <>
+                <span aria-hidden className="absolute inset-0 bg-background/20" />
+                <span aria-hidden className="pointer-events-none absolute left-1.5 right-1.5 top-1/2 h-px -translate-y-1/2 -rotate-[24deg] bg-foreground/35" />
+              </>
+            ) : null}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -260,7 +289,7 @@ export function ChatPane(props: {
     snapshot,
     activeRoutes: roomChat.activeRoutes,
   });
-  const memberMessageFilter = room ? resolveRoomMemberMessageFilter(room, snapshot.templates[room.templateId]) : "all";
+  const visibleMemberIds = room ? resolveRoomVisibleMemberIds(snapshot, room, snapshot.templates[room.templateId]) : [];
   const updateScrollState = (): void => {
     const container = transcriptRef.current;
     if (!container) {
@@ -428,7 +457,7 @@ export function ChatPane(props: {
             room={room}
             roomTeam={roomTeam}
             members={members}
-            memberMessageFilter={memberMessageFilter}
+            visibleMemberIds={visibleMemberIds}
             runningMembers={runningMembers}
             activeStreamSummary={roomChat.activeStreamSummary}
             onOpenRoomTeam={onOpenRoomTeam}
@@ -528,7 +557,7 @@ function RoomTopBar(props: {
   room: Room;
   roomTeam?: RoomTeamSummary;
   members: TeamMember[];
-  memberMessageFilter: RoomMemberMessageFilter;
+  visibleMemberIds: string[];
   runningMembers: RunningRoomMemberPreview[];
   activeStreamSummary?: string;
   onOpenRoomTeam?: () => void;
@@ -543,7 +572,7 @@ function RoomTopBar(props: {
     room,
     roomTeam,
     members,
-    memberMessageFilter,
+    visibleMemberIds,
     runningMembers,
     activeStreamSummary,
     onOpenRoomTeam,
@@ -599,9 +628,10 @@ function RoomTopBar(props: {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground">Message filter</span>
-            <MemberMessageFilterToggle
-              value={memberMessageFilter}
-              onChange={(value) => onUpdateRoomSettings?.({ roomId: room.id, memberMessageFilter: value })}
+            <MemberVisibilityFilter
+              members={members}
+              visibleMemberIds={visibleMemberIds}
+              onChange={(nextVisibleMemberIds) => onUpdateRoomSettings?.({ roomId: room.id, visibleMemberIds: nextVisibleMemberIds })}
             />
           </div>
           {activeStreamSummary ? <p className="m-0 text-sm text-muted-foreground">{activeStreamSummary}</p> : null}

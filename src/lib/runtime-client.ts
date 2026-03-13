@@ -165,7 +165,7 @@ export class WorkspaceRuntimeClient {
           name: input.name,
           description: input.description,
           accentTone: input.accentTone,
-          defaultRoomMemberMessageFilter: input.defaultRoomMemberMessageFilter,
+          defaultVisibleMemberBlueprintIds: input.defaultVisibleMemberBlueprintIds,
           members: input.members,
         }),
       }),
@@ -195,7 +195,7 @@ export class WorkspaceRuntimeClient {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          memberMessageFilter: input.memberMessageFilter,
+          visibleMemberIds: input.visibleMemberIds,
         }),
       }),
     );

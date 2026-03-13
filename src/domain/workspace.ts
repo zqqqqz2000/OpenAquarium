@@ -16,7 +16,6 @@ import type {
   ProviderBinding,
   RoomId,
   Room,
-  RoomMemberMessageFilter,
   RoomTeamMemberInput,
   SkillDefinition,
   TaskId,
@@ -38,8 +37,9 @@ import { formatTime } from "../lib/time";
 import { isVisibleMainRoomMessage } from "../lib/message-visibility";
 import {
   countUnreadRoomMemberMessages,
-  resolveRoomMemberMessageFilter,
-  resolveTemplateRoomMemberMessageFilter,
+  resolveRoomVisibleMemberIds,
+  resolveRoomVisibleMemberIdSet,
+  resolveTemplateVisibleMemberBlueprintIds,
 } from "../lib/room-message-preferences";
 
 function cloneSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
@@ -511,6 +511,7 @@ export function createRoomInProject(
   const roomId = context.createId("room");
   const roomMembers = template.members.map((blueprint) => instantiateMember(roomId, blueprint, context.createId));
   const memberIdByBlueprint = Object.fromEntries(roomMembers.map((member) => [member.blueprintId, member.id]));
+  const defaultVisibleBlueprintIds = new Set(resolveTemplateVisibleMemberBlueprintIds(template));
   const entryBlueprint = findBlueprint(template, (member) => member.isEntryMember === true);
   const watcherIds = template.members
     .map((blueprint) => instantiateWatcher(roomId, memberIdByBlueprint[blueprint.id], blueprint, context.createId))
@@ -529,7 +530,9 @@ export function createRoomInProject(
     entryMemberId: memberIdByBlueprint[entryBlueprint.id],
     createdAt: now,
     updatedAt: now,
-    memberMessageFilter: resolveTemplateRoomMemberMessageFilter(template),
+    visibleMemberIds: roomMembers
+      .filter((member) => defaultVisibleBlueprintIds.has(member.blueprintId))
+      .map((member) => member.id),
     lastReadMemberMessageAt: now,
     unreadMemberMessageCount: 0,
   };
@@ -1071,15 +1074,19 @@ export function updateTemplate(current: WorkspaceSnapshot, input: UpdateTemplate
     name: input.name.trim(),
     description: input.description.trim(),
     accentTone: validateAccentTone(input.accentTone),
-    defaultRoomMemberMessageFilter: input.defaultRoomMemberMessageFilter ?? resolveTemplateRoomMemberMessageFilter(template),
     members: validateTemplateMembers(input.members),
+    defaultVisibleMemberBlueprintIds: validateVisibleIds(
+      input.defaultVisibleMemberBlueprintIds ?? resolveTemplateVisibleMemberBlueprintIds(template),
+      input.members.map((member) => member.id),
+    ),
   };
 
   return snapshot;
 }
 
-function validateRoomMemberMessageFilter(filter: RoomMemberMessageFilter): RoomMemberMessageFilter {
-  return filter;
+function validateVisibleIds(visibleIds: string[], allowedIds: string[]): string[] {
+  const allowedIdSet = new Set(allowedIds);
+  return [...new Set(visibleIds.filter((id) => allowedIdSet.has(id)))];
 }
 
 export function acknowledgeRoom(
@@ -1113,7 +1120,7 @@ export function updateRoomSettings(
 
   snapshot.rooms[input.roomId] = {
     ...room,
-    memberMessageFilter: validateRoomMemberMessageFilter(input.memberMessageFilter),
+    visibleMemberIds: validateVisibleIds(input.visibleMemberIds, room.memberIds),
   };
 
   if (options?.markAsRead) {
@@ -1142,12 +1149,14 @@ export function syncUnreadStateForMessage(
     return snapshot;
   }
 
-  if (activeRoomId && activeRoomId === room.id && isVisibleMainRoomMessage(message)) {
+  const visibleMemberIds = resolveRoomVisibleMemberIdSet(snapshot, room, snapshot.templates[room.templateId]);
+
+  if (activeRoomId && activeRoomId === room.id && isVisibleMainRoomMessage(message, visibleMemberIds)) {
     setRoomReadState(snapshot, room.id, message.createdAt);
     return snapshot;
   }
 
-  if (!isVisibleMainRoomMessage(message, resolveRoomMemberMessageFilter(room, snapshot.templates[room.templateId]))) {
+  if (!isVisibleMainRoomMessage(message, visibleMemberIds)) {
     return snapshot;
   }
 
@@ -1177,7 +1186,9 @@ export function updateRoomTeam(
 
   const normalizedMembers = validateRoomTeamMembers(input.members);
   const activeMemberIds = new Set(room.memberIds);
+  const previousVisibleMemberIds = new Set(resolveRoomVisibleMemberIds(snapshot, room, snapshot.templates[room.templateId]));
   const nextMemberIds: MemberId[] = [];
+  const nextVisibleMemberIds: MemberId[] = [];
   const nextWatcherIds: string[] = [];
   const now = context.now();
 
@@ -1223,6 +1234,9 @@ export function updateRoomTeam(
         };
 
     nextMemberIds.push(nextMemberId);
+    if (!existingMember || previousVisibleMemberIds.has(existingMember.id)) {
+      nextVisibleMemberIds.push(nextMemberId);
+    }
 
     const existingWatcherId = room.watcherIds.find((watcherId) => snapshot.watchers[watcherId]?.memberId === existingMember?.id);
     if (!memberInput.watch) {
@@ -1289,6 +1303,7 @@ export function updateRoomTeam(
     teamDescription: input.teamDescription.trim(),
     teamAccentTone: validateAccentTone(input.teamAccentTone),
     memberIds: nextMemberIds,
+    visibleMemberIds: validateVisibleIds(nextVisibleMemberIds, nextMemberIds),
     watcherIds: nextWatcherIds,
     entryMemberId,
   };

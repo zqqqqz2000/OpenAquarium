@@ -66,11 +66,6 @@ import { badgeToneProps } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
 
 const ACCENT_TONES = ["paper", "postit", "blueprint", "correction"] as const;
-const ROOM_MEMBER_MESSAGE_FILTER_OPTIONS = [
-  { value: "all", label: "All messages" },
-  { value: "only-members", label: "Only member messages" },
-  { value: "hide-members", label: "Hide member messages" },
-] as const;
 
 function ScopeNote(props: { directory: string }) {
   return (
@@ -766,6 +761,7 @@ export function TemplateStudioDialog(props: {
       ...current,
       [templateId]: {
         ...baseDraft,
+        defaultVisibleMemberBlueprintIds: [...baseDraft.defaultVisibleMemberBlueprintIds, nextMember.id],
         members: nextMembers,
       },
     }));
@@ -789,6 +785,7 @@ export function TemplateStudioDialog(props: {
       ...current,
       [templateId]: {
         ...baseDraft,
+        defaultVisibleMemberBlueprintIds: baseDraft.defaultVisibleMemberBlueprintIds.filter((visibleMemberId) => visibleMemberId !== memberId),
         members: nextMembers,
       },
     }));
@@ -1069,27 +1066,33 @@ export function TemplateStudioDialog(props: {
                               </SelectContent>
                             </Select>
                           </label>
-                          <label className="flex flex-col gap-2">
-                            <span className="text-sm font-medium">Default room message filter</span>
-                            <Select
-                              value={selectedTemplateDraft.defaultRoomMemberMessageFilter}
-                              onValueChange={(value) =>
-                                patchTemplateDraft(selectedTemplate.id, {
-                                  defaultRoomMemberMessageFilter: value as (typeof ROOM_MEMBER_MESSAGE_FILTER_OPTIONS)[number]["value"],
-                                })}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Select default room message filter" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {ROOM_MEMBER_MESSAGE_FILTER_OPTIONS.map((option) => (
-                                  <SelectItem key={option.value} value={option.value}>
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </label>
+                          <div className="flex flex-col gap-2">
+                            <span className="text-sm font-medium">Default visible members in new rooms</span>
+                            <div className="space-y-2 rounded-2xl border border-border/70 bg-muted/20 p-3">
+                              {selectedTemplateDraft.members.map((member) => {
+                                const visibleByDefault = selectedTemplateDraft.defaultVisibleMemberBlueprintIds.includes(member.id);
+
+                                return (
+                                  <label key={member.id} className="flex items-center justify-between gap-3 rounded-xl bg-background/80 px-3 py-2">
+                                    <div className="min-w-0">
+                                      <p className="m-0 truncate text-sm font-medium">{`@${member.handle}`}</p>
+                                      <p className="m-0 truncate text-xs text-muted-foreground">{member.name}</p>
+                                    </div>
+                                    <Switch
+                                      checked={visibleByDefault}
+                                      onCheckedChange={(checked) =>
+                                        patchTemplateDraft(selectedTemplate.id, {
+                                          defaultVisibleMemberBlueprintIds: checked
+                                            ? [...selectedTemplateDraft.defaultVisibleMemberBlueprintIds, member.id]
+                                            : selectedTemplateDraft.defaultVisibleMemberBlueprintIds.filter((memberId) => memberId !== member.id),
+                                        })}
+                                      aria-label={`Toggle @${member.handle} default visibility`}
+                                    />
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
                         </div>
                       </section>
 

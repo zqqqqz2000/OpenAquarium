@@ -7,6 +7,7 @@ import { ActiveRoomStatusBadge, ChatPane } from "@/components/chat/chat-pane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createRuntimeContext } from "@/domain/identity";
 import { postMemberMessage, postUserMessage } from "@/domain/workspace";
+import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
 import { resolveRoomTeamSummary } from "@/lib/room-team";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
@@ -405,6 +406,76 @@ describe("ChatPane", () => {
 
     expect(within(teamTrigger).getByText("Team")).toBeInTheDocument();
     expect(within(teamTrigger).queryByText(roomTeam?.name ?? "")).not.toBeInTheDocument();
+  });
+
+  it("lets the user toggle per-member room visibility from the header", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const onUpdateRoomSettings = vi.fn();
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          onUpdateRoomSettings={onUpdateRoomSettings}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Toggle @builder visibility" }));
+
+    expect(onUpdateRoomSettings).toHaveBeenCalledWith({
+      roomId: room.id,
+      visibleMemberIds: resolveRoomVisibleMemberIds(snapshot, room, snapshot.templates[room.templateId]).filter(
+        (memberId) => snapshot.members[memberId]?.handle !== "builder",
+      ),
+    });
+  });
+
+  it("shows flattened member chips with avatar and handle in the visibility filter", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          onUpdateRoomSettings={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const builderChip = screen.getByRole("button", { name: "Toggle @builder visibility" });
+
+    expect(builderChip).toHaveTextContent("builder");
+    expect(builderChip.querySelector("[data-slot='avatar']")).toBeTruthy();
   });
 
   it("shows a richer empty state before any room is selected", () => {

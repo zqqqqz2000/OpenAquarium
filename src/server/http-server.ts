@@ -177,7 +177,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         name: string;
         description: string;
         accentTone: "paper" | "postit" | "blueprint" | "correction";
-        defaultRoomMemberMessageFilter?: "all" | "only-members" | "hide-members";
+        defaultVisibleMemberBlueprintIds?: string[];
         members: Array<{
           id: string;
           name: string;
@@ -316,7 +316,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
     const snapshot = await runtime.updateRoomSettings({
       roomId,
       ...(body as {
-        memberMessageFilter: "all" | "only-members" | "hide-members";
+        visibleMemberIds: string[];
       }),
     });
     return {
@@ -761,7 +761,7 @@ export async function startWorkspaceHttpServer(args: {
           name: string;
           description: string;
           accentTone: "paper" | "postit" | "blueprint" | "correction";
-          defaultRoomMemberMessageFilter?: "all" | "only-members" | "hide-members";
+          defaultVisibleMemberBlueprintIds?: string[];
           members: Array<{
             id: string;
             name: string;
@@ -962,10 +962,10 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing room id" });
           return;
         }
-        const body = await readJson<{ memberMessageFilter: "all" | "only-members" | "hide-members" }>(request);
+        const body = await readJson<{ visibleMemberIds: string[] }>(request);
         const snapshot = await args.runtime.updateRoomSettings({
           roomId,
-          memberMessageFilter: body.memberMessageFilter,
+          visibleMemberIds: body.visibleMemberIds,
         });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;

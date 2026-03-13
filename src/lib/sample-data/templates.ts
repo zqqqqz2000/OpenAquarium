@@ -11,7 +11,7 @@ export const defaultTemplates: TeamTemplate[] = [
     name: "Product Pod",
     description: "入口协调、研究、实现和归档四个成员，适合产品探索和 coding agent 协作。",
     accentTone: "postit",
-    defaultRoomMemberMessageFilter: "all",
+    defaultVisibleMemberBlueprintIds: ["lead", "researcher", "builder", "scribe"],
     members: [
       {
         id: "lead",
@@ -117,7 +117,7 @@ export const defaultTemplates: TeamTemplate[] = [
     name: "Incident Pod",
     description: "偏排障和调试，适合稳定性问题跟进。",
     accentTone: "blueprint",
-    defaultRoomMemberMessageFilter: "all",
+    defaultVisibleMemberBlueprintIds: ["dispatcher", "investigator", "recorder"],
     members: [
       {
         id: "dispatcher",

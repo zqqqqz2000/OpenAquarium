@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ChatMessage, ProviderBinding, TeamMember, TeamMemberBlueprint, TeamTemplate, WorkspaceSnapshot } from "../domain/model";
 import { getErrorCode, type RuntimeError } from "./error-utils";
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND, createCodexAcpProvider, mergeCodexAcpEnv } from "../lib/acp";
-import { countUnreadRoomMemberMessages, resolveTemplateRoomMemberMessageFilter } from "../lib/room-message-preferences";
+import { countUnreadRoomMemberMessages, resolveTemplateVisibleMemberBlueprintIds } from "../lib/room-message-preferences";
 import { resolveRoomTeamSummary } from "../lib/room-team";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
@@ -144,10 +144,19 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
     Object.entries(snapshot.rooms).map(([roomId, room]) => [
       roomId,
       (() => {
+        const legacyRoom = room as typeof room & { memberMessageFilter?: "all" | "only-members" | "hide-members" };
+        const templateVisibleBlueprintIds = new Set(resolveTemplateVisibleMemberBlueprintIds(normalizedTemplates[room.templateId]));
         const resolvedRoom = {
           ...room,
           updatedAt: room.updatedAt ?? room.createdAt,
-          memberMessageFilter: room.memberMessageFilter ?? resolveTemplateRoomMemberMessageFilter(normalizedTemplates[room.templateId]),
+          visibleMemberIds:
+            room.visibleMemberIds
+            ?? (legacyRoom.memberMessageFilter === "hide-members"
+              ? []
+              : room.memberIds.filter((memberId) => {
+                const member = normalizedMembers[memberId];
+                return member ? templateVisibleBlueprintIds.has(member.blueprintId) : false;
+              })),
         };
         const latestSeenMemberMessageAt =
           (normalizedMessageOrderByRoom[roomId] ?? [])

@@ -10,7 +10,6 @@ import { defaultTemplates } from "@/lib/sample-data/templates";
 import { getErrorCode, type RuntimeError } from "@/server/error-utils";
 
 const accentToneSchema = z.enum(["paper", "postit", "blueprint", "correction"]);
-const roomMemberMessageFilterSchema = z.enum(["all", "only-members", "hide-members"]);
 
 const persistedSkillSchema = z.object({
   id: z.string().min(1).optional(),
@@ -63,7 +62,8 @@ const persistedTeamTemplateSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   accentTone: accentToneSchema,
-  defaultRoomMemberMessageFilter: roomMemberMessageFilterSchema.optional(),
+  defaultRoomMemberMessageFilter: z.enum(["all", "only-members", "hide-members"]).optional(),
+  defaultVisibleMemberBlueprintIds: z.array(z.string().min(1)).optional(),
   members: z.array(persistedTeamMemberBlueprintSchema).min(1),
 });
 
@@ -106,7 +106,7 @@ const TEMPLATE_JSON_SCHEMA = {
       name: { type: "string" },
       description: { type: "string" },
       accentTone: { enum: ["paper", "postit", "blueprint", "correction"] },
-      defaultRoomMemberMessageFilter: { enum: ["all", "only-members", "hide-members"] },
+      defaultVisibleMemberBlueprintIds: { type: "array", items: { type: "string" } },
       members: {
         type: "array",
         minItems: 1,
@@ -215,7 +215,19 @@ function normalizePersistedTemplates(
     id: template.id.trim(),
     name: template.name.trim(),
     description: template.description.trim(),
-    defaultRoomMemberMessageFilter: template.defaultRoomMemberMessageFilter,
+    defaultVisibleMemberBlueprintIds: (() => {
+      const allMemberIds = template.members.map((member) => member.id.trim());
+      if (template.defaultVisibleMemberBlueprintIds) {
+        const allowedIds = new Set(allMemberIds);
+        return [...new Set(template.defaultVisibleMemberBlueprintIds.map((id) => id.trim()).filter((id) => allowedIds.has(id)))];
+      }
+
+      if (template.defaultRoomMemberMessageFilter === "hide-members") {
+        return [];
+      }
+
+      return allMemberIds;
+    })(),
     members: template.members.map((member) => ({
       ...member,
       id: member.id.trim(),

@@ -16,7 +16,6 @@ export type MessageStatus = "sent" | "streaming" | "completed" | "interrupted";
 export type MessageVisibility = "public" | "internal";
 export type AccentTone = "paper" | "postit" | "blueprint" | "correction";
 export type TaskTraceKind = "task-started" | "task-prompt" | "draft" | "status" | "completed" | "error" | "interrupted";
-export type RoomMemberMessageFilter = "all" | "only-members" | "hide-members";
 
 export interface SkillDefinition {
   id: string;
@@ -74,7 +73,7 @@ export interface TeamTemplate {
   name: string;
   description: string;
   accentTone: AccentTone;
-  defaultRoomMemberMessageFilter?: RoomMemberMessageFilter;
+  defaultVisibleMemberBlueprintIds?: string[];
   members: TeamMemberBlueprint[];
 }
 
@@ -100,7 +99,7 @@ export interface Room {
   entryMemberId: MemberId;
   createdAt: string;
   updatedAt?: string;
-  memberMessageFilter?: RoomMemberMessageFilter;
+  visibleMemberIds?: MemberId[];
   lastReadMemberMessageAt?: string;
   unreadMemberMessageCount?: number;
 }
@@ -262,7 +261,7 @@ export interface UpdateTemplateInput {
   name: string;
   description: string;
   accentTone: AccentTone;
-  defaultRoomMemberMessageFilter?: RoomMemberMessageFilter;
+  defaultVisibleMemberBlueprintIds?: string[];
   members: TeamMemberBlueprint[];
 }
 
@@ -297,7 +296,7 @@ export interface UpdateRoomTeamInput {
 
 export interface UpdateRoomSettingsInput {
   roomId: RoomId;
-  memberMessageFilter: RoomMemberMessageFilter;
+  visibleMemberIds: MemberId[];
 }
 
 export interface UpdateGlobalConfigInput {

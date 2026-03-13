@@ -32,6 +32,7 @@ vi.mock("ai", () => ({
 }));
 
 import { AcpMemberExecutor } from "@/server/acp-executor";
+import type { DiagnosticsLogger } from "@/server/diagnostics";
 import type { ExecutionRequest } from "@/server/executor";
 
 function createRequest(provider = createCodexAcpProvider()): ExecutionRequest {
@@ -431,5 +432,60 @@ describe("AcpMemberExecutor", () => {
         cwd: projectPath,
       },
     });
+  });
+
+  it("records full streaming details to diagnostics logs", async () => {
+    const logger: DiagnosticsLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      shouldLog: vi.fn(() => true),
+    };
+    streamTextMock.mockImplementation(({ onChunk }: { onChunk: (event: { chunk: { type: string; text?: string; toolName?: string } }) => Promise<void> }) => {
+      void onChunk({ chunk: { type: "text-delta", text: "transport warning" } });
+      void onChunk({ chunk: { type: "tool-result", toolName: "oa_room_state" } });
+
+      return {
+        text: Promise.resolve("transport warning"),
+        finishReason: Promise.resolve("stop"),
+      };
+    });
+
+    const request = createRequest();
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      logger,
+      host: {
+        sendGroupMessage: () => Promise.resolve(),
+        sendDirectMessage: () => Promise.resolve(),
+        runWatcher: () => Promise.resolve(),
+        inspectRoomState: () => Promise.resolve("state"),
+      },
+    });
+
+    await executor.execute(request, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError: () => Promise.resolve(),
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      "acp-stream-text-delta",
+      expect.objectContaining({
+        taskId: "task_1",
+        delta: "transport warning",
+        accumulatedText: "transport warning",
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "acp-stream-finish",
+      expect.objectContaining({
+        taskId: "task_1",
+        finishReason: "stop",
+        finalText: "transport warning",
+      }),
+    );
   });
 });

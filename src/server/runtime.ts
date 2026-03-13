@@ -390,6 +390,7 @@ export class WorkspaceRuntime {
           workspaceRoot: this.workspaceRoot,
           project,
           member,
+          logger: this.logger,
           host: {
             sendGroupMessage: async (input) => {
               await this.sendMemberMessage({
@@ -1167,6 +1168,7 @@ export class WorkspaceRuntime {
                   roomId: currentTask.roomId,
                   memberId: currentTask.memberId,
                   chars: content.length,
+                  content,
                 });
               }
               const draftTask = this.snapshot.tasks[taskId];
@@ -1223,6 +1225,7 @@ export class WorkspaceRuntime {
                 roomId: currentTask.roomId,
                 memberId: currentTask.memberId,
                 summary,
+                state: currentTask.status,
                 runningTasks: this.runningTaskIds.size,
               });
               const observer = this.taskObservers.get(taskId);
@@ -1272,7 +1275,16 @@ export class WorkspaceRuntime {
                 memberId: currentTask.memberId,
                 stopReason,
                 chars: finalContent.length,
+                finalContent,
                 runningTasks: this.runningTaskIds.size,
+              });
+              this.logger?.info("task-state-change", {
+                taskId,
+                roomId: currentTask.roomId,
+                memberId: currentTask.memberId,
+                from: "running",
+                to: "completed",
+                reason: `onComplete:${stopReason}`,
               });
               const observer = this.taskObservers.get(taskId);
               if (observer) {
@@ -1307,7 +1319,16 @@ export class WorkspaceRuntime {
                 roomId: currentTask.roomId,
                 memberId: currentTask.memberId,
                 message,
+                state: currentTask.status,
                 runningTasks: this.runningTaskIds.size,
+              });
+              this.logger?.info("task-state-change", {
+                taskId,
+                roomId: currentTask.roomId,
+                memberId: currentTask.memberId,
+                from: "running",
+                to: "completed",
+                reason: "onError",
               });
               const observer = this.taskObservers.get(taskId);
               if (observer) {
@@ -1376,9 +1397,23 @@ export class WorkspaceRuntime {
             roomId: currentTask.roomId,
             memberId: currentTask.memberId,
             message: errorMessage,
+            state: currentTask.status,
             runningTasks: this.runningTaskIds.size,
           },
         );
+        this.logger?.info("task-state-change", {
+          taskId,
+          roomId: currentTask.roomId,
+          memberId: currentTask.memberId,
+          from: "running",
+          to: "completed",
+          reason:
+            error instanceof TaskExecutionTimeoutError
+              ? "timeout"
+              : error instanceof TaskExecutionProtocolError
+                ? "protocol-error"
+                : "crash",
+        });
         const observer = this.taskObservers.get(taskId);
         if (observer) {
           await observer.callbacks.onError?.({

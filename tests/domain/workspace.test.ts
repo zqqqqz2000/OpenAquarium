@@ -17,9 +17,11 @@ import {
   setEntryMember,
   upsertTaskTrace,
   updateRoomTeam,
+  updateRoomSettings,
   updateTemplate,
   updateMemberConfig,
   upsertMemberWatcher,
+  syncUnreadStateForMessage,
 } from "@/domain/workspace";
 import { formatTime } from "@/lib/time";
 import { defaultTemplates } from "@/lib/sample-data/templates";
@@ -230,6 +232,142 @@ describe("workspace domain", () => {
     const addressedHandles = addressedIds.map((memberId) => snapshot.members[memberId].handle);
 
     expect(addressedHandles).toEqual(["builder", "research"]);
+  });
+
+  it("copies template default visible members into new rooms", () => {
+    const context = createRuntimeContext();
+    const template = defaultTemplates[0];
+    if (!template) {
+      throw new Error("Expected default product template");
+    }
+
+    const snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot([
+        {
+          ...template,
+          defaultVisibleMemberBlueprintIds: ["builder"],
+        },
+      ]),
+      {
+        projectName: "ACP Lab",
+        templateId: template.id,
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId!;
+    const room = snapshot.rooms[roomId];
+    const visibleHandles = (room.visibleMemberIds ?? []).map((memberId) => snapshot.members[memberId]?.handle);
+
+    expect(visibleHandles).toEqual(["builder"]);
+  });
+
+  it("keeps user messages visible while filtering room member messages per member", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+    const room = snapshot.rooms[roomId];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const builder = members.find((member) => member.handle === "builder");
+    const research = members.find((member) => member.handle === "research");
+
+    if (!builder || !research) {
+      throw new Error("Expected builder and research members");
+    }
+
+    snapshot = updateRoomSettings(
+      snapshot,
+      {
+        roomId,
+        visibleMemberIds: [builder.id],
+      },
+      context,
+    );
+
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: research.id,
+        content: "这条 research 消息不应出现在 room 主视图。",
+      },
+      context,
+    );
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: builder.id,
+        content: "这条 builder 消息应该保留。",
+      },
+      context,
+    );
+
+    const updatedRoom = snapshot.rooms[roomId];
+    const visibleContents = (snapshot.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => snapshot.messages[messageId])
+      .filter((message) => message.transport !== "direct" && message.visibility !== "internal")
+      .filter((message) => message.author.kind !== "member" || updatedRoom.visibleMemberIds?.includes(message.author.id))
+      .map((message) => message.content);
+
+    expect(visibleContents).toContain(DEFAULT_FIRST_MESSAGE);
+    expect(visibleContents).toContain("这条 builder 消息应该保留。");
+    expect(visibleContents).not.toContain("这条 research 消息不应出现在 room 主视图。");
+  });
+
+  it("counts unread only for currently visible member messages", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+    const room = snapshot.rooms[roomId];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const builder = members.find((member) => member.handle === "builder");
+    const research = members.find((member) => member.handle === "research");
+
+    if (!builder || !research) {
+      throw new Error("Expected builder and research members");
+    }
+
+    snapshot = updateRoomSettings(
+      snapshot,
+      {
+        roomId,
+        visibleMemberIds: [builder.id],
+      },
+      context,
+    );
+
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: research.id,
+        content: "隐藏成员消息",
+      },
+      context,
+    );
+    const hiddenMessageId = snapshot.messageOrderByRoom[roomId]?.at(-1);
+    if (!hiddenMessageId) {
+      throw new Error("Expected hidden member message");
+    }
+    snapshot = syncUnreadStateForMessage(snapshot, hiddenMessageId);
+
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: builder.id,
+        content: "可见成员消息",
+      },
+      context,
+    );
+    const visibleMessageId = snapshot.messageOrderByRoom[roomId]?.at(-1);
+    if (!visibleMessageId) {
+      throw new Error("Expected visible member message");
+    }
+    snapshot = syncUnreadStateForMessage(snapshot, visibleMessageId);
+
+    expect(snapshot.rooms[roomId].unreadMemberMessageCount).toBe(1);
   });
 
   it("routes member tasks from inline mentions anywhere in the message body", () => {

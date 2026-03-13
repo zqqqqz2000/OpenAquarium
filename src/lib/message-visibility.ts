@@ -1,4 +1,4 @@
-import type { ChatMessage, MessageVisibility, RoomMemberMessageFilter } from "@/domain/model";
+import type { ChatMessage, MemberId, MessageVisibility } from "@/domain/model";
 
 export function resolveMessageVisibility(message: ChatMessage): MessageVisibility {
   if (message.transport === "watch-digest") {
@@ -22,19 +22,19 @@ export function isVisibleRoomMessage(message: ChatMessage): boolean {
 
 export function isVisibleMainRoomMessage(
   message: ChatMessage,
-  memberMessageFilter: RoomMemberMessageFilter = "all",
+  visibleMemberIds?: ReadonlySet<MemberId>,
 ): boolean {
   if (!isVisibleRoomMessage(message) || message.transport === "direct") {
     return false;
   }
 
-  if (memberMessageFilter === "only-members") {
-    return message.author.kind === "member";
+  if (message.author.kind !== "member") {
+    return true;
   }
 
-  if (memberMessageFilter === "hide-members") {
-    return message.author.kind !== "member";
+  if (!visibleMemberIds) {
+    return true;
   }
 
-  return true;
+  return visibleMemberIds.has(message.author.id);
 }

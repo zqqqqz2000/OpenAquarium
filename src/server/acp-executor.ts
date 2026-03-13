@@ -9,6 +9,7 @@ import type { Project, RoomId, TeamMember } from "../domain/model";
 import { CODEX_ACP_MODE_ENV_KEY, ensureCodexAcpSessionMode } from "../lib/acp";
 import { isJsonObject, type JsonValue } from "../lib/json";
 import type { ExecutionRequest, ExecutorCallbacks, MemberExecutor } from "./executor";
+import type { DiagnosticsLogger } from "./diagnostics";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { isPathInsideRoot, resolveAcpSessionWorkingDirectory, resolveProjectWorkingDirectory } from "./project-paths";
 import { TerminalRegistry } from "./terminal-registry";
@@ -90,6 +91,7 @@ export class AcpMemberExecutor implements MemberExecutor {
   private readonly project: Pick<Project, "path">;
   private readonly member: TeamMember;
   private readonly host: MemberToolHost;
+  private readonly logger?: DiagnosticsLogger;
   private readonly terminalRegistry = new TerminalRegistry();
   private readonly projectRoot: string;
   private readonly projectWorkingDirectory: string;
@@ -99,11 +101,18 @@ export class AcpMemberExecutor implements MemberExecutor {
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
 
-  constructor(args: { workspaceRoot: string; project?: Pick<Project, "path">; member: TeamMember; host: MemberToolHost }) {
+  constructor(args: {
+    workspaceRoot: string;
+    project?: Pick<Project, "path">;
+    member: TeamMember;
+    host: MemberToolHost;
+    logger?: DiagnosticsLogger;
+  }) {
     this.workspaceRoot = args.workspaceRoot;
     this.project = args.project ?? {};
     this.member = args.member;
     this.host = args.host;
+    this.logger = args.logger;
     this.providerSessionId = args.member.providerSessionId;
     this.projectRoot = resolveProjectWorkingDirectory(this.project, args.workspaceRoot);
     this.projectWorkingDirectory = resolveAcpSessionWorkingDirectory({
@@ -120,13 +129,41 @@ export class AcpMemberExecutor implements MemberExecutor {
 
     const abortController = new AbortController();
     this.currentAbortController = abortController;
+    this.logger?.info("acp-execute-start", {
+      taskId: request.task.id,
+      roomId: request.room.id,
+      memberId: request.member.id,
+      memberHandle: request.member.handle,
+      providerKind: request.member.provider.kind,
+      providerLabel: request.member.provider.label,
+      providerSessionId: this.providerSessionId ?? null,
+    });
 
     let finalContent = "";
     const tools = this.createWorkspaceTools(request);
     const currentTurn = (async () => {
       try {
+        this.logger?.info("acp-session-prepare-start", {
+          taskId: request.task.id,
+          memberId: request.member.id,
+          memberHandle: request.member.handle,
+          providerKind: request.member.provider.kind,
+          providerSessionId: this.providerSessionId ?? null,
+        });
         await this.prepareProviderSession(tools);
+        this.logger?.info("acp-session-prepare-complete", {
+          taskId: request.task.id,
+          memberId: request.member.id,
+          memberHandle: request.member.handle,
+          providerSessionId: this.providerSessionId ?? null,
+        });
         await this.persistSessionIdIfNeeded();
+        this.logger?.info("acp-stream-open", {
+          taskId: request.task.id,
+          memberId: request.member.id,
+          memberHandle: request.member.handle,
+          providerSessionId: this.providerSessionId ?? null,
+        });
         const result = streamText({
           abortSignal: abortController.signal,
           includeRawChunks: true,
@@ -137,23 +174,55 @@ export class AcpMemberExecutor implements MemberExecutor {
             switch (chunk.type) {
               case "text-delta":
                 finalContent = `${finalContent}${chunk.text}`;
+                this.logger?.info("acp-stream-text-delta", {
+                  taskId: request.task.id,
+                  memberId: request.member.id,
+                  memberHandle: request.member.handle,
+                  delta: chunk.text,
+                  accumulatedText: finalContent,
+                });
                 await callbacks.onDraft(finalContent);
                 return;
               case "tool-call":
+                this.logger?.info("acp-stream-tool-call", {
+                  taskId: request.task.id,
+                  memberId: request.member.id,
+                  memberHandle: request.member.handle,
+                  summary: summarizeToolChunk(chunk.input as { toolName?: string } | object | string | number | boolean | null | undefined),
+                });
                 await callbacks.onStatus(
                   `${summarizeToolChunk(chunk.input as { toolName?: string } | object | string | number | boolean | null | undefined)} (called)`,
                 );
                 return;
               case "tool-result":
+                this.logger?.info("acp-stream-tool-result", {
+                  taskId: request.task.id,
+                  memberId: request.member.id,
+                  memberHandle: request.member.handle,
+                  toolName: chunk.toolName,
+                });
                 await callbacks.onStatus(`${chunk.toolName} (completed)`);
                 return;
               case "reasoning-delta":
                 if (chunk.text.trim().length > 0) {
+                  this.logger?.info("acp-stream-reasoning-delta", {
+                    taskId: request.task.id,
+                    memberId: request.member.id,
+                    memberHandle: request.member.handle,
+                    delta: chunk.text.trim(),
+                  });
                   await callbacks.onStatus(`Reasoning: ${chunk.text.trim()}`);
                 }
                 return;
               case "raw": {
                 const summary = summarizeRawChunk(chunk.rawValue as JsonValue | object | undefined);
+                this.logger?.info("acp-stream-raw", {
+                  taskId: request.task.id,
+                  memberId: request.member.id,
+                  memberHandle: request.member.handle,
+                  rawValue: typeof chunk.rawValue === "string" ? chunk.rawValue : JSON.stringify(chunk.rawValue),
+                  summary: summary ?? null,
+                });
                 if (summary) {
                   await callbacks.onStatus(summary);
                 }
@@ -165,19 +234,56 @@ export class AcpMemberExecutor implements MemberExecutor {
           },
         });
 
+        this.logger?.info("acp-stream-await-finish", {
+          taskId: request.task.id,
+          memberId: request.member.id,
+          memberHandle: request.member.handle,
+          accumulatedText: finalContent,
+        });
         const [text, finishReason] = await Promise.all([result.text, result.finishReason]);
         if (abortController.signal.aborted) {
+          this.logger?.info("acp-stream-aborted", {
+            taskId: request.task.id,
+            memberId: request.member.id,
+            memberHandle: request.member.handle,
+            reason: String(abortController.signal.reason ?? "aborted"),
+          });
           return;
         }
 
+        this.logger?.info("acp-stream-finish", {
+          taskId: request.task.id,
+          memberId: request.member.id,
+          memberHandle: request.member.handle,
+          finishReason,
+          finalText: text.trim().length > 0 ? text : finalContent,
+        });
         await callbacks.onComplete(text.trim().length > 0 ? text : finalContent, finishReason);
       } catch (error) {
         if (abortController.signal.aborted && abortController.signal.reason === "cancelled") {
+          this.logger?.info("acp-stream-cancelled", {
+            taskId: request.task.id,
+            memberId: request.member.id,
+            memberHandle: request.member.handle,
+          });
           return;
         }
 
+        this.logger?.error("acp-stream-error", {
+          taskId: request.task.id,
+          memberId: request.member.id,
+          memberHandle: request.member.handle,
+          message: getErrorMessage(error as RuntimeError),
+          accumulatedText: finalContent,
+        });
         await callbacks.onError(getErrorMessage(error as RuntimeError));
       } finally {
+        this.logger?.info("acp-execute-finish", {
+          taskId: request.task.id,
+          memberId: request.member.id,
+          memberHandle: request.member.handle,
+          aborted: abortController.signal.aborted,
+        });
         if (this.currentAbortController === abortController) {
           this.currentAbortController = undefined;
           this.currentTurn = undefined;
@@ -196,6 +302,11 @@ export class AcpMemberExecutor implements MemberExecutor {
 
     const abortController = this.currentAbortController;
     const currentTurn = this.currentTurn;
+    this.logger?.warn("acp-cancel-start", {
+      memberId: this.member.id,
+      memberHandle: this.member.handle,
+      providerSessionId: this.providerSessionId ?? null,
+    });
     abortController.abort("cancelled");
     try {
       await withTimeout(
@@ -204,7 +315,17 @@ export class AcpMemberExecutor implements MemberExecutor {
         () => undefined,
         `ACP cancel for @${this.member.handle}`,
       );
+      this.logger?.info("acp-cancel-complete", {
+        memberId: this.member.id,
+        memberHandle: this.member.handle,
+        providerSessionId: this.providerSessionId ?? null,
+      });
     } catch {
+      this.logger?.warn("acp-cancel-timeout-reset-provider", {
+        memberId: this.member.id,
+        memberHandle: this.member.handle,
+        providerSessionId: this.providerSessionId ?? null,
+      });
       await this.resetProvider();
       if (this.currentAbortController === abortController) {
         this.currentAbortController = undefined;
@@ -362,6 +483,11 @@ export class AcpMemberExecutor implements MemberExecutor {
   }
 
   private async resetProvider(): Promise<void> {
+    this.logger?.warn("acp-provider-reset", {
+      memberId: this.member.id,
+      memberHandle: this.member.handle,
+      providerSessionId: this.providerSessionId ?? null,
+    });
     this.provider.cleanup();
     await this.terminalRegistry.disposeAll();
     this.providerSessionId = undefined;
@@ -389,6 +515,12 @@ export class AcpMemberExecutor implements MemberExecutor {
       return;
     }
 
+    this.logger?.info("acp-session-persist", {
+      memberId: this.member.id,
+      memberHandle: this.member.handle,
+      previousSessionId: this.providerSessionId ?? null,
+      nextSessionId: sessionId,
+    });
     this.providerSessionId = sessionId;
     await this.host.persistMemberSession?.({
       memberId: this.member.id,
