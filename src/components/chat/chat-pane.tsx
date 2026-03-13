@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { ArrowDown, Bot, FolderKanban, GitBranch, Link2, TerminalSquare, Users } from "lucide-react";
+import { ArrowDown, Bot, ChevronDown, ChevronRight, FolderKanban, GitBranch, Link2, TerminalSquare, Users } from "lucide-react";
 
 import type {
   ChatMessage,
@@ -17,7 +17,7 @@ import { MemberAvatar } from "@/components/members/member-avatar";
 import { MemberHoverPreview } from "@/components/members/member-hover-preview";
 import { RunningMembersHoverCard } from "@/components/members/running-members-hover-card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { getMemberActivitySummary, getWatcherForMember } from "@/components/members/member-utils";
+import { getMemberActivitySummary } from "@/components/members/member-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -73,6 +73,34 @@ interface RunningRoomMemberPreview {
   latestContentPreview?: string;
 }
 
+interface RoomRoleGroup {
+  roleId: string;
+  roleName: string;
+  members: TeamMember[];
+}
+
+function buildMemberCardBadges(member: TeamMember, room: Room, snapshot: WorkspaceSnapshot): string[] {
+  const badges: string[] = [];
+
+  if (member.isEntryMember) {
+    badges.push("Entry");
+  }
+
+  if (room.watcherIds.some((watcherId) => snapshot.watchers[watcherId]?.memberId === member.id)) {
+    badges.push("Watcher");
+  }
+
+  if (member.provider.kind === "codex-acp") {
+    badges.push("Codex ACP");
+  }
+
+  if (member.acceptsDirectMessages) {
+    badges.push("Direct messages");
+  }
+
+  return badges;
+}
+
 function buildRunningRoomMemberPreviews(args: {
   members: TeamMember[];
   snapshot: WorkspaceSnapshot;
@@ -95,6 +123,18 @@ function buildRunningRoomMemberPreviews(args: {
         latestContentPreview: summarizePrompt(routeSummary || activity.latestContentPreview || "正在处理当前消息。", 96),
       } satisfies RunningRoomMemberPreview;
     });
+}
+
+function groupMembersByRole(members: TeamMember[]): RoomRoleGroup[] {
+  return members.reduce<RoomRoleGroup[]>((groups, member) => {
+    const existingGroup = groups.find((group) => group.roleId === member.roleId);
+    if (existingGroup) {
+      existingGroup.members.push(member);
+      return groups;
+    }
+
+    return [...groups, { roleId: member.roleId, roleName: member.roleName, members: [member] }];
+  }, []);
 }
 
 export function ActiveRoomStatusBadge(props: {
@@ -516,6 +556,7 @@ export function ChatPane(props: {
             members={members}
             onSend={roomChat.sendMessage}
             sending={roomChat.hasActiveStreams}
+            draftKey={room ? `room:${room.id}` : undefined}
           />
         </section>
 
@@ -525,6 +566,11 @@ export function ChatPane(props: {
             snapshot={snapshot}
             members={members}
             selectedMemberId={selectedMemberId}
+            activeRouteSummaryByMemberId={Object.fromEntries(
+              roomChat.activeRoutes
+                .filter((route) => route.summary?.trim())
+                .map((route) => [route.memberId, summarizePrompt(route.summary?.trim() ?? "", 120)]),
+            )}
             onOpenMember={onOpenMember}
           />
         ) : null}
@@ -647,10 +693,20 @@ function RoomMembersSidebar(props: {
   snapshot: WorkspaceSnapshot;
   members: TeamMember[];
   selectedMemberId?: string;
+  activeRouteSummaryByMemberId: Record<string, string>;
   onOpenMember: (memberId: string) => void;
 }) {
-  const { room, snapshot, members, selectedMemberId, onOpenMember } = props;
-  const runningMembers = members.filter((member) => member.status === "running").length;
+  const { room, snapshot, members, selectedMemberId, activeRouteSummaryByMemberId, onOpenMember } = props;
+  const roleGroups = useMemo(() => groupMembersByRole(members), [members]);
+  const [collapsedRoleIds, setCollapsedRoleIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setCollapsedRoleIds([]);
+  }, [room.id]);
+
+  const toggleRoleGroup = (roleId: string): void => {
+    setCollapsedRoleIds((current) => (current.includes(roleId) ? current.filter((value) => value !== roleId) : [...current, roleId]));
+  };
 
   return (
     <aside className="absolute inset-y-0 right-0 z-20 w-[min(23rem,84vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
@@ -662,68 +718,80 @@ function RoomMembersSidebar(props: {
                 <Users size={18} />
                 Members
               </p>
-              <div className="flex items-center gap-2">
-                <PresenceBadge
-                  active={runningMembers > 0}
-                  activeLabel={runningMembers > 1 ? `${runningMembers} live` : "Live"}
-                  idleLabel="Ready"
-                />
-                <Badge variant="outline">{members.length}</Badge>
-              </div>
+              <Badge variant="outline">{members.length}</Badge>
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
             <div className="flex flex-col gap-2.5">
-              {members.map((member) => {
-                const activity = getMemberActivitySummary(snapshot, member);
-                const watcher = getWatcherForMember(room, snapshot, member.id);
-                const roleLabel = getMemberRoleLabel(member.handle);
-                const rolePalette = getMemberRolePalette(member.handle);
-                const latestPreview = activity.latestContentPreview ?? "No recent visible update.";
+              {roleGroups.map((group: RoomRoleGroup) => {
+                const collapsed = collapsedRoleIds.includes(group.roleId);
+                const leadMember = group.members[0];
+                if (!leadMember) {
+                  return null;
+                }
 
                 return (
-                  <MemberHoverPreview key={member.id} member={member} watcher={watcher}>
+                  <div key={group.roleId} className="rounded-2xl border border-border/70 bg-card/35 p-2">
                     <button
-                      aria-label={`Open ${roleLabel} session panel`}
-                      className={cn(
-                        "w-full rounded-2xl border border-border bg-card px-3.5 py-3 text-left shadow-sm transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                        member.id === selectedMemberId && "border-ring bg-accent/10 shadow-md",
-                        member.status === "running" &&
-                          "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)]/95 shadow-[0_18px_36px_-32px_rgba(62,118,255,0.95)]",
-                      )}
-                      onClick={() => onOpenMember(member.id)}
                       type="button"
+                      className="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-2 text-left"
+                      onClick={() => toggleRoleGroup(group.roleId)}
                     >
-                      <div className="flex items-start gap-3">
-                        <MemberAvatar member={member} compact active={member.id === selectedMemberId} showRunningDot />
-                        <div className="min-w-0 flex-1 space-y-3">
-                          <div className="space-y-1">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <p className="m-0 truncate text-base font-semibold tracking-tight" style={{ color: rolePalette.background }}>
-                                {roleLabel}
-                              </p>
-                              <span className="truncate text-sm text-muted-foreground">{member.name}</span>
-                              {member.observeAllRoomMessages ? (
-                                <span
-                                  className="inline-flex size-2 shrink-0 rounded-full bg-[color:var(--tone-blueprint-foreground)]"
-                                  aria-label="monitoring room"
-                                />
-                              ) : null}
-                            </div>
-                            <p className="m-0 truncate text-sm text-muted-foreground">{latestPreview}</p>
-                          </div>
-                          <div className="flex min-w-0 items-center gap-2 border-t border-border/70 pt-3">
-                            <div className="flex min-w-0 flex-1 items-center gap-2">
-                              <MemberStatusBadge status={member.status} />
-                              {member.isEntryMember ? <Badge variant="outline">Entry</Badge> : null}
-                              {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
-                              <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{activity.statusLine}</p>
-                            </div>
-                          </div>
-                        </div>
+                      <div className="min-w-0">
+                        <p className="m-0 truncate text-sm font-semibold tracking-tight">{group.roleName}</p>
+                        <p className="m-0 text-xs text-muted-foreground">{group.members.length} staff</p>
                       </div>
+                      {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
                     </button>
-                  </MemberHoverPreview>
+                    {!collapsed ? (
+                      <div className="mt-2 flex flex-col gap-2.5">
+                        {group.members.map((member: TeamMember) => {
+                          const roleLabel = getMemberRoleLabel(member.handle);
+                          const summary = summarizePrompt((member.note?.trim() || member.summary || "").trim(), 140);
+                          const activity = getMemberActivitySummary(snapshot, member);
+                          const badges = buildMemberCardBadges(member, room, snapshot);
+                          const latestPreview = activeRouteSummaryByMemberId[member.id]
+                            ?? (activity.latestMessage ? summarizePrompt(activity.latestMessage.content, 120) : undefined)
+                            ?? activity.latestContentPreview
+                            ?? "No recent visible update.";
+
+                          return (
+                            <MemberHoverPreview key={member.id} member={member} watcher={undefined}>
+                              <button
+                                aria-label={`Open ${roleLabel} session panel`}
+                                className={cn(
+                                  "w-full rounded-2xl border border-border bg-card px-3.5 py-3 text-left shadow-sm transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                                  member.id === selectedMemberId && "border-ring bg-accent/10 shadow-md",
+                                  member.status === "running" &&
+                                    "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)]/95 shadow-[0_18px_36px_-32px_rgba(62,118,255,0.95)]",
+                                )}
+                                onClick={() => onOpenMember(member.id)}
+                                type="button"
+                              >
+                                <div className="flex items-start gap-3">
+                                  <MemberAvatar member={member} compact active={member.id === selectedMemberId} showRunningDot />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="m-0 truncate text-base font-semibold tracking-tight">@{member.handle}</p>
+                                    {summary ? <p className="mt-1 m-0 line-clamp-2 text-sm text-muted-foreground">{summary}</p> : null}
+                                    <p className="mt-2 truncate text-sm text-foreground/85">{latestPreview}</p>
+                                    <div className="mt-3 border-t border-border/70 pt-3">
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {badges.map((badge) => (
+                                          <Badge key={badge} variant="outline">
+                                            {badge}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </button>
+                            </MemberHoverPreview>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>

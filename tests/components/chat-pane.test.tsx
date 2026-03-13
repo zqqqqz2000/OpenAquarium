@@ -185,6 +185,81 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("Lead Koi").length).toBeGreaterThan(0);
   });
 
+  it("shows summary plus a one-line latest message preview without restoring duplicate tool status blocks", () => {
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "lead");
+    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
+    if (!lead || !builder) {
+      throw new Error("Expected lead and builder members in seeded room");
+    }
+
+    const context = createRuntimeContext(605, "2026-03-09T09:35:00.000Z");
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>builder 收一下 sidebar 卡片的实时状态摘要",
+        mentionedMemberIds: [builder.id],
+      },
+      context,
+    );
+    const activeBuilder = snapshot.members[builder.id];
+    if (!activeBuilder?.activeTaskId) {
+      throw new Error("Expected builder to have an active task");
+    }
+
+    const liveUpdate = "这个字符串只该出现在中间消息区，不该在右侧 members card 重复。";
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        memberId: activeBuilder.id,
+        taskId: activeBuilder.activeTaskId,
+        content: liveUpdate,
+      },
+      context,
+    );
+
+    const nextRoom = snapshot.rooms[room.id];
+    const roomTeam = resolveRoomTeamSummary(snapshot, nextRoom);
+    const members = nextRoom.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={nextRoom}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={nextRoom.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const leadCard = screen.getByRole("button", { name: "Open @lead session panel" });
+    const builderCard = screen.getByRole("button", { name: "Open @builder session panel" });
+
+    expect(within(leadCard).queryByText(/Ready/i)).not.toBeInTheDocument();
+    expect(within(builderCard).queryByText(/Running/i)).not.toBeInTheDocument();
+    expect(within(builderCard).queryByText(/Direct inbox/i)).not.toBeInTheDocument();
+    expect(within(builderCard).getByText(liveUpdate)).toBeInTheDocument();
+    expect(within(leadCard).getByText(lead.summary)).toBeInTheDocument();
+    expect(within(leadCard).getByText("Entry")).toBeInTheDocument();
+    expect(within(leadCard).getByText("Codex ACP")).toBeInTheDocument();
+    expect(within(leadCard).getByText("Direct messages")).toBeInTheDocument();
+    expect(within(builderCard).getByText("Codex ACP")).toBeInTheDocument();
+    expect(within(builderCard).getByText("Direct messages")).toBeInTheDocument();
+    expect(within(leadCard).queryByText("Monitor")).not.toBeInTheDocument();
+  });
+
   it("makes running members more prominent in the right sidebar", () => {
     let snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
@@ -219,8 +294,7 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getAllByText(/live/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Running|live/i).length).toBeGreaterThan(0);
   });
 
   it("shows static green dots on running member avatars in the transcript and sidebar only", () => {
@@ -286,7 +360,9 @@ describe("ChatPane", () => {
     );
 
     const runningDots = container.querySelectorAll("[data-slot='avatar-badge']");
-    const bubble = screen.getByText(builderMessageContent).closest("[data-message-kind='member']");
+    const bubble = screen.getAllByText(builderMessageContent)
+      .find((element) => element.closest("[data-message-kind='member']"))
+      ?.closest("[data-message-kind='member']");
     if (!(bubble instanceof HTMLElement)) {
       throw new Error("Expected builder message to render inside a member bubble");
     }
