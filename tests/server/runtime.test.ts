@@ -508,6 +508,7 @@ describe("WorkspaceRuntime", () => {
       persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
       workspaceRoot,
       taskExecutionInactivityTimeoutMs: 40,
+      taskExecutionMaxRetries: 0,
       executorFactory: ({ member }) =>
         new FakeExecutor(async (_request, callbacks) => {
           if (member.handle === "lead") {
@@ -558,12 +559,165 @@ describe("WorkspaceRuntime", () => {
     ).toBe(true);
   });
 
-  it("keeps long-running tasks active when no inactivity timeout is configured", async () => {
+  it("retries a timed out task and succeeds on a later attempt", async () => {
+    vi.useRealTimers();
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-timeout-retry-success-"));
+    let leadAttemptCount = 0;
+    let releaseCurrentAttempt: (() => void) | undefined;
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      taskExecutionInactivityTimeoutMs: 40,
+      taskExecutionMaxRetries: 2,
+      executorFactory: ({ member }) =>
+        ({
+          execute: async (_request, callbacks) => {
+            if (member.handle === "lead") {
+              leadAttemptCount += 1;
+              if (leadAttemptCount < 3) {
+                await callbacks.onDraft(`尝试 ${leadAttemptCount}`);
+                await new Promise<void>((resolve) => {
+                  releaseCurrentAttempt = resolve;
+                });
+                return;
+              }
+
+              await callbacks.onComplete("第三次成功", "end_turn");
+              return;
+            }
+
+            await callbacks.onComplete(`${member.handle} done`, "end_turn");
+          },
+          cancel: () => {
+            releaseCurrentAttempt?.();
+            releaseCurrentAttempt = undefined;
+            return Promise.resolve();
+          },
+          dispose: () => Promise.resolve(),
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Retry Success",
+      templateId: "template-product-pod",
+    });
+
+    const completionPromise = runtime.streamUserMessage(
+      {
+        roomId: created.roomId,
+        content: "@lead 请处理并重试",
+      },
+      {},
+    );
+
+    await waitFor(() => {
+      const snapshot = runtime.getSnapshot();
+      expect(Object.values(snapshot.tasks).some((task) => task.roomId === created.roomId && task.status === "running")).toBe(false);
+    }, 1_000);
+    await completionPromise;
+
+    const snapshot = runtime.getSnapshot();
+    const lead = snapshot.rooms[created.roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead")!;
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === created.roomId && task.memberId === lead.id)!;
+    const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map((traceId) => snapshot.taskTraces[traceId]);
+
+    expect(leadAttemptCount).toBe(3);
+    expect(leadTask.status).toBe("completed");
+    expect(leadTraceEntries.filter((entry) => entry?.title === "Task retry scheduled")).toHaveLength(2);
+    expect(leadTraceEntries.some((entry) => entry?.kind === "completed" && entry.content === "第三次成功")).toBe(true);
+  });
+
+  it("fails a task after exhausting timeout retries", async () => {
+    vi.useRealTimers();
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-timeout-retry-fail-"));
+    let leadAttemptCount = 0;
+    let releaseCurrentAttempt: (() => void) | undefined;
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      taskExecutionInactivityTimeoutMs: 40,
+      taskExecutionMaxRetries: 2,
+      executorFactory: ({ member }) =>
+        ({
+          execute: async (_request, callbacks) => {
+            if (member.handle === "lead") {
+              leadAttemptCount += 1;
+              await callbacks.onDraft(`尝试 ${leadAttemptCount}`);
+              await new Promise<void>((resolve) => {
+                releaseCurrentAttempt = resolve;
+              });
+              return;
+            }
+
+            await callbacks.onComplete(`${member.handle} done`, "end_turn");
+          },
+          cancel: () => {
+            releaseCurrentAttempt?.();
+            releaseCurrentAttempt = undefined;
+            return Promise.resolve();
+          },
+          dispose: () => Promise.resolve(),
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Retry Fail",
+      templateId: "template-product-pod",
+    });
+
+    const observedErrors: string[] = [];
+    const completionPromise = runtime.streamUserMessage(
+      {
+        roomId: created.roomId,
+        content: "@lead 请处理并持续卡住",
+      },
+      {
+        onError(route) {
+          observedErrors.push(route.message);
+        },
+      },
+    );
+
+    await waitFor(() => {
+      const snapshot = runtime.getSnapshot();
+      expect(Object.values(snapshot.tasks).some((task) => task.roomId === created.roomId && task.status === "running")).toBe(false);
+    }, 1_000);
+    await completionPromise;
+
+    const snapshot = runtime.getSnapshot();
+    const lead = snapshot.rooms[created.roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead")!;
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.roomId === created.roomId && task.memberId === lead.id)!;
+    const leadTraceEntries = (snapshot.taskTraceOrderByTask[leadTask.id] ?? []).map((traceId) => snapshot.taskTraces[traceId]);
+
+    expect(leadAttemptCount).toBe(3);
+    expect(leadTask.status).toBe("completed");
+    expect(observedErrors).toHaveLength(1);
+    expect(observedErrors[0]).toContain("没有新的进度或完成信号");
+    expect(leadTraceEntries.filter((entry) => entry?.title === "Task retry scheduled")).toHaveLength(2);
+    expect(
+      leadTraceEntries.some(
+        (entry) => entry?.kind === "error"
+          && entry.title === "Task timed out waiting for executor progress"
+          && entry.content.includes("没有新的进度或完成信号"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps long-running tasks active when inactivity timeout is explicitly disabled", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-no-default-timeout-"));
     const runtime = new WorkspaceRuntime({
       initialSnapshot: createEmptyRuntimeSnapshot(),
       persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
       workspaceRoot,
+      taskExecutionInactivityTimeoutMs: 0,
       executorFactory: ({ member }) =>
         new FakeExecutor(async (_request, callbacks) => {
           if (member.handle === "lead") {
