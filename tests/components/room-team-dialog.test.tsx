@@ -73,7 +73,7 @@ describe("RoomTeamDialog", () => {
     expect(screen.getByRole("textbox", { name: "Role" })).toHaveDisplayValue(/Role \d+/);
     expect(screen.queryByRole("textbox", { name: "Handle" })).not.toBeInTheDocument();
     expect(screen.getAllByText(`${initialMemberCount + 2} members`).length).toBeGreaterThan(0);
-    expect(screen.getByText("这个员工继承岗位模板的 prompt、skills、provider 和 watcher 配置；本阶段只开放名字和备注。")).toBeInTheDocument();
+    expect(screen.getByText("这个员工继承岗位模板的 prompt、allowedSkillIds、provider 和 watcher 配置；本阶段只开放名字和备注。")).toBeInTheDocument();
   });
 
   it("keeps new role and employee drafts visible while the backing snapshot changes", async () => {

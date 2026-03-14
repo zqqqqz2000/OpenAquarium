@@ -1,13 +1,13 @@
 import { useState } from "react";
 
-import { Clock3, Plus, Settings2, Star, Trash2 } from "lucide-react";
+import { Clock3, Settings2, Star } from "lucide-react";
 
 import type { GlobalWorkspaceConfig, Room, TeamMember, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
 import { buildMemberCliCommands } from "@/domain/tooling";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { MemberSessionPane } from "@/components/members/member-session-pane";
+import { AllowedSkillSelector } from "@/components/skills/allowed-skill-selector";
 import {
-  addEmptySkillDraft,
   buildMemberConfigInput,
   buildWatcherConfigInput,
   createMemberConfigDraft,
@@ -124,6 +124,7 @@ export function MemberStudioDialog(props: {
   const watcherDraft = watcherDrafts[member.id] ?? createWatcherDraft(watcher);
   const memberError = errorByMember[member.id];
   const memberToneBadge = badgeToneProps(member.accentTone);
+  const skillCount = member.allowedSkillIds?.length ?? 0;
   const isSessionTab = activeTab === "session";
   const activeModelProfileName =
     globalConfig.modelProfiles.find((profile) => profile.id === (configDraft.modelProfileId ?? member.modelProfileId))?.name
@@ -218,7 +219,7 @@ export function MemberStudioDialog(props: {
                   <Badge variant={memberToneBadge.variant} className={memberToneBadge.className}>
                     {activeModelProfileName}
                   </Badge>
-                  <Badge variant="secondary">{member.skills.length} skills</Badge>
+                  <Badge variant="secondary">{skillCount} skills</Badge>
                   {member.isEntryMember ? <Badge variant="outline">Entry member</Badge> : null}
                   {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
                 </div>
@@ -400,71 +401,13 @@ export function MemberStudioDialog(props: {
                       </div>
                     ) : null}
 
-                    <div className="space-y-3 border-t border-border pt-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="m-0 text-lg font-semibold tracking-tight">Skill commands</p>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => patchConfigDraft({ skills: addEmptySkillDraft(configDraft.skills) })}
-                        >
-                          <Plus size={16} />
-                          Add skill
-                        </Button>
-                      </div>
-                      {configDraft.skills.map((skill, index) => (
-                        <div key={skill.id} className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-3">
-                          <div className="flex justify-between gap-3">
-                            <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Skill {index + 1}</p>
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              type="button"
-                              onClick={() =>
-                                patchConfigDraft({
-                                  skills: configDraft.skills.filter((candidate) => candidate.id !== skill.id),
-                                })
-                              }
-                            >
-                              <Trash2 size={16} />
-                            </Button>
-                          </div>
-                          <Input
-                            value={skill.name}
-                            onChange={(event) =>
-                              patchConfigDraft({
-                                skills: configDraft.skills.map((candidate) =>
-                                  candidate.id === skill.id ? { ...candidate, name: event.currentTarget.value } : candidate,
-                                ),
-                              })
-                            }
-                            placeholder="Skill name"
-                          />
-                          <Input
-                            value={skill.description}
-                            onChange={(event) =>
-                              patchConfigDraft({
-                                skills: configDraft.skills.map((candidate) =>
-                                  candidate.id === skill.id ? { ...candidate, description: event.currentTarget.value } : candidate,
-                                ),
-                              })
-                            }
-                            placeholder="What this skill is for"
-                          />
-                          <Textarea
-                            className="min-h-20"
-                            value={skill.command}
-                            onChange={(event) =>
-                              patchConfigDraft({
-                                skills: configDraft.skills.map((candidate) =>
-                                  candidate.id === skill.id ? { ...candidate, command: event.currentTarget.value } : candidate,
-                                ),
-                              })
-                            }
-                            placeholder="./bin/oa-room-send --scope group"
-                          />
-                        </div>
-                      ))}
+                    <div className="border-t border-border pt-4">
+                      <p className="m-0 mb-2 text-lg font-semibold tracking-tight">Allowed skill ids</p>
+                      <AllowedSkillSelector
+                        valueText={configDraft.allowedSkillIdsText}
+                        onChangeText={(allowedSkillIdsText) => patchConfigDraft({ allowedSkillIdsText })}
+                        description="通过下拉选择成员可用 skill；运行时只暴露 skill id 和 `skills/<skill-id>/SKILL.md` 入口。"
+                      />
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">

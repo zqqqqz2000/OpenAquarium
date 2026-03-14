@@ -18,13 +18,6 @@ export type AccentTone = "paper" | "postit" | "blueprint" | "correction";
 export type TaskTraceKind = "task-started" | "task-prompt" | "draft" | "status" | "completed" | "error" | "interrupted";
 export type CodexThinkingDepth = "low" | "mid" | "high" | "extra-high";
 
-export interface SkillDefinition {
-  id: string;
-  name: string;
-  description: string;
-  command: string;
-}
-
 export interface TemplateStudioChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -64,7 +57,7 @@ export interface TeamMemberBlueprint {
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
   modelId?: string;
-  skills: SkillDefinition[];
+  allowedSkillIds: string[];
   provider: ProviderBinding;
   isEntryMember?: boolean;
   acceptsDirectMessages?: boolean;
@@ -123,7 +116,7 @@ export interface TeamMember {
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
   modelId?: string;
-  skills: SkillDefinition[];
+  allowedSkillIds: string[];
   provider: ProviderBinding;
   acceptsDirectMessages: boolean;
   isEntryMember: boolean;
@@ -266,7 +259,7 @@ export interface UpdateMemberConfigInput {
   modelId?: string;
   acceptsDirectMessages: boolean;
   codexThinkingDepth?: CodexThinkingDepth;
-  skills: SkillDefinition[];
+  allowedSkillIds: string[];
   provider: ProviderBinding;
 }
 
@@ -298,7 +291,7 @@ export interface RoomTeamMemberInput {
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
   modelId?: string;
-  skills: SkillDefinition[];
+  allowedSkillIds: string[];
   provider: ProviderBinding;
   isEntryMember?: boolean;
   acceptsDirectMessages?: boolean;

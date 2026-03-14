@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle, Plus, Save, Settings2, Star, Trash2, Users } from "lucide-react";
 
 import type { GlobalWorkspaceConfig, Room, TeamMember, UpdateRoomTeamInput, WorkspaceSnapshot } from "@/domain/model";
-import { addEmptySkillDraft, type SkillDraft } from "@/lib/member-config-draft";
+import { AllowedSkillSelector } from "@/components/skills/allowed-skill-selector";
 import {
   addEmptyRoomTeamMemberDraft,
   buildRoomTeamInput,
@@ -112,38 +112,6 @@ function RoomMemberDeleteTrigger(props: {
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  );
-}
-
-function SkillEditor(props: {
-  skill: SkillDraft;
-  index: number;
-  onChange: (nextSkill: SkillDraft) => void;
-  onRemove: () => void;
-}) {
-  const { skill, index, onChange, onRemove } = props;
-
-  return (
-    <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/35 px-3 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Skill {index + 1}</p>
-        <Button variant="ghost" size="icon-sm" type="button" onClick={onRemove}>
-          <Trash2 size={16} />
-        </Button>
-      </div>
-      <Input value={skill.name} onChange={(event) => onChange({ ...skill, name: event.currentTarget.value })} placeholder="Skill name" />
-      <Input
-        value={skill.description}
-        onChange={(event) => onChange({ ...skill, description: event.currentTarget.value })}
-        placeholder="What this skill is for"
-      />
-      <Textarea
-        className="min-h-20"
-        value={skill.command}
-        onChange={(event) => onChange({ ...skill, command: event.currentTarget.value })}
-        placeholder="./bin/oa-room-send --scope group"
-      />
-    </div>
   );
 }
 
@@ -547,7 +515,7 @@ export function RoomTeamDialog(props: {
                         </>
                       ) : (
                         <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
-                          这个员工继承岗位模板的 prompt、skills、provider 和 watcher 配置；本阶段只开放名字和备注。
+                          这个员工继承岗位模板的 prompt、allowedSkillIds、provider 和 watcher 配置；本阶段只开放名字和备注。
                         </div>
                       )}
 
@@ -635,39 +603,16 @@ export function RoomTeamDialog(props: {
                             开启 Persistent watch 后，不会立刻触发；要等第一个 interval 到达。之后即使没有新消息，也会生成 heartbeat digest；如果有新消息或成员状态变化，digest 会带上新增内容。
                           </div>
 
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="m-0 text-sm font-medium">Skills</p>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                type="button"
-                                onClick={() =>
-                                  patchMemberDraft(activeMember.id, {
-                                    skills: addEmptySkillDraft(activeMember.skills),
-                                  })}
-                              >
-                                <Plus size={16} />
-                                Add skill
-                              </Button>
-                            </div>
-                            <div className="flex flex-col gap-3">
-                              {activeMember.skills.map((skill, index) => (
-                                <SkillEditor
-                                  key={skill.id}
-                                  skill={skill}
-                                  index={index}
-                                  onChange={(nextSkill) =>
-                                    patchMemberDraft(activeMember.id, {
-                                      skills: activeMember.skills.map((candidate) => (candidate.id === skill.id ? nextSkill : candidate)),
-                                    })}
-                                  onRemove={() =>
-                                    patchMemberDraft(activeMember.id, {
-                                      skills: activeMember.skills.filter((candidate) => candidate.id !== skill.id),
-                                    })}
-                                />
-                              ))}
-                            </div>
+                          <div className="flex flex-col gap-2">
+                            <span className="text-sm font-medium">Allowed skill ids</span>
+                            <AllowedSkillSelector
+                              valueText={activeMember.allowedSkillIdsText}
+                              onChangeText={(allowedSkillIdsText) =>
+                                patchMemberDraft(activeMember.id, {
+                                  allowedSkillIdsText,
+                                })}
+                              description="通过下拉选择成员可用 skill；运行时只暴露 skill id 和 `skills/<skill-id>/SKILL.md` 入口。"
+                            />
                           </div>
                         </>
                       ) : null}

@@ -75,7 +75,7 @@ describe("AcpTemplateGenerationTransport", () => {
             },
             isEntryMember: true,
             acceptsDirectMessages: true,
-            skills: [
+            allowedSkillIds: [
               {
                 id: "state",
                 name: "state",
@@ -100,7 +100,7 @@ describe("AcpTemplateGenerationTransport", () => {
               capabilities: ["prompt", "cancel", "loadSession"],
             },
             acceptsDirectMessages: true,
-            skills: [
+            allowedSkillIds: [
               {
                 id: "send",
                 name: "send",

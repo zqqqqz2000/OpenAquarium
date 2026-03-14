@@ -43,6 +43,55 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain(`prompt: ${member.prompt}`);
   });
 
+  it("adds persistent watch pause rules when the member has an enabled persistent watcher", () => {
+    const context = createRuntimeContext();
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const member = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "scribe");
+
+    if (!member) {
+      throw new Error("Expected the scribe member");
+    }
+
+    const watcherId = room.watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === member.id);
+    if (!watcherId) {
+      throw new Error("Expected watcher id");
+    }
+
+    snapshot = {
+      ...snapshot,
+      watchers: {
+        ...snapshot.watchers,
+        [watcherId]: {
+          ...snapshot.watchers[watcherId],
+          enabled: true,
+          persistent: true,
+        },
+      },
+    };
+    snapshot = runWatcher(snapshot, watcherId, context);
+
+    const nextTaskId = snapshot.members[member.id].activeTaskId;
+    if (!nextTaskId) {
+      throw new Error("Expected watcher-triggered task");
+    }
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room,
+      member: snapshot.members[member.id],
+      task: snapshot.tasks[nextTaskId],
+      snapshot,
+    });
+
+    expect(prompt).toContain("[Persistent Watch Rules]");
+    expect(prompt).toContain("proactively pause your persistent watch");
+    expect(prompt).toContain("resumes automatically");
+    expect(prompt).toContain(`oa-room-watch --watcher ${watcherId} --pause-until-activity`);
+  });
+
   it("switches to a delta prompt after the first persisted member turn", () => {
     const context = createRuntimeContext(500, "2026-03-10T12:00:00.000Z");
     let snapshot = createSeedWorkspace();
@@ -130,7 +179,9 @@ describe("buildTaskPrompt", () => {
 
     expect(prompt).toContain(`project path: ${project.path}`);
     expect(prompt).toContain(`project working directory: ${project.path}`);
-    expect(prompt).toContain(`${process.cwd()}/bin/oa-room-send --scope group`);
+    expect(prompt).toContain(`${process.cwd()}/bin/oa-room-send --room ${room.id} --member ${member.id} --scope group`);
+    expect(prompt).toContain("[Available Skills]");
+    expect(prompt).toContain(`${process.cwd()}/skills/room-send-group/SKILL.md`);
   });
 
   it("includes private unseen watcher context without treating it as a room message", () => {

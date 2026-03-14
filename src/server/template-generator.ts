@@ -4,7 +4,6 @@ import { generateText } from "ai";
 import * as z from "zod";
 
 import type {
-  SkillDefinition,
   TeamMemberBlueprint,
   TeamTemplate,
 } from "../domain/model";
@@ -25,13 +24,6 @@ import { getErrorMessage, type RuntimeError } from "./error-utils";
 const accentToneSchema = z.enum(["paper", "postit", "blueprint", "correction"]);
 const codexThinkingDepthSchema = z.enum(["low", "mid", "high", "extra-high"]);
 
-const skillSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string().min(1),
-  command: z.string().min(1),
-});
-
 const providerSchema = z.object({
   kind: z.enum(["codex-acp", "generic-acp"]),
   label: z.string().min(1),
@@ -40,6 +32,13 @@ const providerSchema = z.object({
   env: z.record(z.string(), z.string()).default({}),
   workingDirectory: z.string().optional(),
   capabilities: z.array(z.string().min(1)).default(["prompt", "cancel"]),
+});
+
+const legacySkillSchema = z.object({
+  id: z.string().min(1).optional(),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  command: z.string().min(1),
 });
 
 const memberBlueprintSchema = z.object({
@@ -53,7 +52,11 @@ const memberBlueprintSchema = z.object({
   isEntryMember: z.boolean().default(false),
   acceptsDirectMessages: z.boolean().default(true),
   codexThinkingDepth: codexThinkingDepthSchema.optional(),
-  skills: z.array(skillSchema).min(1).max(8),
+  allowedSkillIds: z
+    .array(z.union([z.string().min(1), legacySkillSchema]))
+    .max(8)
+    .default([]),
+  skills: z.array(legacySkillSchema).max(8).default([]),
   watch: z
     .object({
       intervalMinutes: z
@@ -110,10 +113,7 @@ function summarizeReferenceTemplates(templates: TeamTemplate[]): string {
         hasWatcher: Boolean(member.watch),
         providerKind: member.provider.kind,
         providerCommand: member.provider.command,
-        skills: member.skills.map((skill) => ({
-          name: skill.name,
-          command: skill.command,
-        })),
+        allowedSkillIds: member.allowedSkillIds,
       })),
     })),
     null,
@@ -132,7 +132,7 @@ function buildTemplateGenerationPrompt(
     "",
     "[Goal]",
     "Produce a configurable agent-team template for an IM-style multi-member workspace.",
-    "Member responsibility must come from prompt + skills + provider, not from a hard-coded role system.",
+    "Member responsibility must come from prompt + allowedSkillIds + provider, not from a hard-coded role system.",
     "",
     "[Hard Constraints]",
     "1. Output valid JSON only. No markdown fences.",
@@ -140,7 +140,7 @@ function buildTemplateGenerationPrompt(
     "3. Members count must be between 2 and 6.",
     "4. Exactly one member must have isEntryMember=true.",
     "5. Each handle must be unique, lowercase, and suitable for @mentions.",
-    "6. Skills must be concrete shell commands the member can run.",
+    "6. allowedSkillIds must list skill ids only. Do not inline skill internals.",
     "7. Use ACP providers only: kind must be codex-acp or generic-acp.",
     "8. Prefer codex-acp for coding-oriented members. Use generic-acp for other ACP agents such as claude-code, clerk-acp, research-acp.",
     "9. Only add watch when a member should periodically consume room deltas.",
@@ -159,7 +159,7 @@ function buildTemplateGenerationPrompt(
     "- In generated prompts, teach that @handle is only a passive reference and @>handle is the real active assignment syntax.",
     "- In generated prompts, treat `/role-add`, `/role-remove`, and `/role-rename` as shared capabilities that exist globally, but only authorize them for a member when the prompt explicitly says `允许使用岗位员工命令`; otherwise add `不允许使用岗位员工命令`.",
     "- Use a mix of entry, implementation, research, QA, recorder, incident, or data roles as appropriate to the brief.",
-    "- Make skills complementary; do not duplicate every member.",
+    "- Make allowedSkillIds complementary; do not duplicate every member.",
     "- Prefer 3 to 5 members unless the brief is clearly small or clearly broad.",
     "",
     "[Reference Templates]",
@@ -195,17 +195,17 @@ function dedupeStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
-function normalizeSkill(
-  skill: z.infer<typeof skillSchema>,
-  index: number,
-): SkillDefinition {
-  const slug = slugify(skill.id) || slugify(skill.name) || `skill-${index + 1}`;
-  return {
-    id: slug,
-    name: skill.name.trim(),
-    description: skill.description.trim(),
-    command: skill.command.trim(),
-  };
+function normalizeAllowedSkillIds(
+  member: z.infer<typeof memberBlueprintSchema>,
+): string[] {
+  const inlineAllowedSkillIds = member.allowedSkillIds.map((skill) =>
+    typeof skill === "string" ? skill : skill.id ?? skill.name,
+  );
+  const legacySkillIds = member.skills.map((skill) => skill.id ?? skill.name);
+
+  return dedupeStrings([...inlineAllowedSkillIds, ...legacySkillIds]).map(
+    (skillId, skillIndex) => slugify(skillId) || `skill-${skillIndex + 1}`,
+  );
 }
 
 function normalizeMember(
@@ -265,7 +265,7 @@ function normalizeMember(
     isEntryMember: member.isEntryMember,
     acceptsDirectMessages: member.acceptsDirectMessages,
     codexThinkingDepth: member.codexThinkingDepth,
-    skills: member.skills.map(normalizeSkill),
+    allowedSkillIds: normalizeAllowedSkillIds(member),
     watch: member.watch
       ? {
           intervalMinutes: Math.max(

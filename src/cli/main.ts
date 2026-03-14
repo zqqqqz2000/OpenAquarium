@@ -11,6 +11,10 @@ function readFlag(flag: string): string | undefined {
   return process.argv[index + 1];
 }
 
+function hasFlag(flag: string): boolean {
+  return process.argv.includes(flag);
+}
+
 async function sendMemberMessage(): Promise<void> {
   const roomId = readFlag("--room");
   const memberId = readFlag("--member");
@@ -46,7 +50,11 @@ async function runWatcherCommand(): Promise<void> {
     throw new Error("room-watch requires --watcher");
   }
 
-  const response = await fetch(`${serverUrl}/api/watchers/${watcherId}/run`, {
+  const pathname = hasFlag("--pause-until-activity")
+    ? `/api/watchers/${watcherId}/pause-until-activity`
+    : `/api/watchers/${watcherId}/run`;
+
+  const response = await fetch(`${serverUrl}${pathname}`, {
     method: "POST",
   });
 

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import { TemplateStudioDialog } from "@/components/templates/template-studio-dialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceSnapshot } from "@/domain/model";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
@@ -188,7 +189,7 @@ function getMessageTexts(messages: TemplateStudioUIMessage[]): string[] {
 }
 
 function renderTemplateStudio(element: ReactElement) {
-  return render(element);
+  return render(<TooltipProvider>{element}</TooltipProvider>);
 }
 
 afterEach(() => {

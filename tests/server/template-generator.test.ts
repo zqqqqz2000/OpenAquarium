@@ -52,7 +52,7 @@ describe("template generator", () => {
               },
               isEntryMember: true,
               acceptsDirectMessages: true,
-              skills: [
+              allowedSkillIds: [
                 {
                   id: "send",
                   name: "发送消息",
@@ -78,7 +78,7 @@ describe("template generator", () => {
               },
               isEntryMember: true,
               acceptsDirectMessages: true,
-              skills: [
+              allowedSkillIds: [
                 {
                   id: "inspect",
                   name: "检查状态",
@@ -97,6 +97,68 @@ describe("template generator", () => {
     expect(template.members.filter((member) => member.isEntryMember)).toHaveLength(1);
     expect(template.members[1]?.handle).toBe("lead-2");
     expect(template.members[1]?.provider.command).toBe("claude-code");
+    expect(template.members[0]?.allowedSkillIds).toEqual(["send"]);
+    expect(template.members[1]?.allowedSkillIds).toEqual(["inspect"]);
+  });
+
+  it("accepts legacy skills arrays when allowedSkillIds is omitted", async () => {
+    const template = await generateTemplateFromBrief("legacy pod", {
+      workspaceRoot: process.cwd(),
+      transport: new StaticTransport(
+        JSON.stringify({
+          name: "Legacy Pod",
+          description: "兼容旧 skill 格式",
+          accentTone: "paper",
+          members: [
+            {
+              id: "lead",
+              name: "Lead",
+              handle: "lead",
+              summary: "summary",
+              prompt: "prompt",
+              accentTone: "paper",
+              provider: {
+                kind: "codex-acp",
+                label: "Codex ACP",
+                command: CODEX_ACP_NPX_COMMAND,
+                args: CODEX_ACP_NPX_ARGS,
+                env: {},
+                capabilities: ["prompt", "cancel", "loadSession"],
+              },
+              isEntryMember: true,
+              skills: [
+                {
+                  id: "room-state",
+                  name: "Room State",
+                  description: "Inspect room state",
+                  command: "./bin/oa-room-state --room \"$ROOM\"",
+                },
+              ],
+            },
+            {
+              id: "builder",
+              name: "Builder",
+              handle: "builder",
+              summary: "summary",
+              prompt: "prompt",
+              accentTone: "postit",
+              provider: {
+                kind: "generic-acp",
+                label: "Claude Code",
+                command: "claude-code",
+                args: ["--stdio"],
+                env: {},
+                capabilities: ["prompt", "cancel"],
+              },
+              skills: [],
+            },
+          ],
+        }),
+      ),
+    });
+
+    expect(template.members[0]?.allowedSkillIds).toEqual(["room-state"]);
+    expect(template.members[1]?.allowedSkillIds).toEqual([]);
   });
 
   it("fails when ACP output is invalid", async () => {

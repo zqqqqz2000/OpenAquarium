@@ -18,10 +18,6 @@ const persistedSkillSchema = z.object({
   command: z.string().min(1),
 });
 
-const skillSchema = persistedSkillSchema.extend({
-  id: z.string().min(1),
-});
-
 const providerBindingSchema = z.object({
   kind: z.enum(["codex-acp", "generic-acp"]),
   label: z.string().min(1),
@@ -48,7 +44,8 @@ const persistedTeamMemberBlueprintSchema = z.object({
   observeAllRoomMessages: z.boolean().optional(),
   acceptsDirectMessages: z.boolean().optional(),
   codexThinkingDepth: codexThinkingDepthSchema.optional(),
-  skills: z.array(persistedSkillSchema),
+  allowedSkillIds: z.array(z.string().min(1)).optional(),
+  skills: z.array(persistedSkillSchema).optional(),
   watch: z
     .object({
       intervalMinutes: z.number().int().positive(),
@@ -59,7 +56,7 @@ const persistedTeamMemberBlueprintSchema = z.object({
 });
 
 const teamMemberBlueprintSchema = persistedTeamMemberBlueprintSchema.extend({
-  skills: z.array(skillSchema),
+  allowedSkillIds: z.array(z.string().min(1)),
 });
 
 const persistedTeamTemplateSchema = z.object({
@@ -125,7 +122,7 @@ const TEMPLATE_JSON_SCHEMA = {
             "prompt",
             "accentTone",
             "provider",
-            "skills",
+            "allowedSkillIds",
           ],
           properties: {
             id: { type: "string" },
@@ -155,19 +152,7 @@ const TEMPLATE_JSON_SCHEMA = {
                 capabilities: { type: "array", items: { type: "string" } },
               },
             },
-            skills: {
-              type: "array",
-              items: {
-                type: "object",
-                required: ["id", "name", "description", "command"],
-                properties: {
-                  id: { type: "string" },
-                  name: { type: "string" },
-                  description: { type: "string" },
-                  command: { type: "string" },
-                },
-              },
-            },
+            allowedSkillIds: { type: "array", items: { type: "string" } },
             watch: {
               type: "object",
               required: ["intervalMinutes", "enabledByDefault"],
@@ -191,9 +176,13 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/gu, "");
 }
 
-function normalizeSkills(
-  skills: z.infer<typeof persistedSkillSchema>[],
-): z.infer<typeof skillSchema>[] {
+function normalizeAllowedSkillIds(member: z.infer<typeof persistedTeamMemberBlueprintSchema>): string[] {
+  const explicitIds = member.allowedSkillIds?.map((skillId) => skillId.trim()).filter(Boolean) ?? [];
+  if (explicitIds.length > 0) {
+    return [...new Set(explicitIds)];
+  }
+
+  const skills = member.skills ?? [];
   const usedIds = new Set<string>();
   return skills.map((skill, index) => {
     const baseId = slugify(skill.id ?? "") || slugify(skill.name) || `skill-${index + 1}`;
@@ -205,12 +194,7 @@ function normalizeSkills(
     }
     usedIds.add(id);
 
-    return {
-      id,
-      name: skill.name.trim(),
-      description: skill.description.trim(),
-      command: skill.command.trim(),
-    };
+    return id;
   });
 }
 
@@ -247,7 +231,7 @@ function normalizePersistedTemplates(
       isEntryMember: member.isEntryMember,
       acceptsDirectMessages: member.acceptsDirectMessages,
       codexThinkingDepth: member.codexThinkingDepth,
-      skills: normalizeSkills(member.skills),
+      allowedSkillIds: normalizeAllowedSkillIds(member),
       provider: {
         ...member.provider,
         label: member.provider.label.trim(),

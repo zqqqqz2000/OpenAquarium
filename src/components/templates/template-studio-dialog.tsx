@@ -14,8 +14,8 @@ import type {
   UpdateTemplateInput,
 } from "@/domain/model";
 import { addEmptyModelProfileDraft, buildGlobalConfigInput, createGlobalConfigDraft, type ModelProfileDraft } from "@/lib/global-config-draft";
-import { addEmptySkillDraft, type SkillDraft } from "@/lib/member-config-draft";
 import { WorkspaceRuntimeClient, resolveWorkspaceRuntimeBaseUrl } from "@/lib/runtime-client";
+import { AllowedSkillSelector } from "@/components/skills/allowed-skill-selector";
 import {
   addEmptyTemplateMemberDraft,
   buildTemplateConfigInput,
@@ -173,44 +173,6 @@ function MemberDeleteTrigger(props: {
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  );
-}
-
-function SkillEditor(props: {
-  skill: SkillDraft;
-  index: number;
-  onChange: (nextSkill: SkillDraft) => void;
-  onRemove: () => void;
-}) {
-  const { skill, index, onChange, onRemove } = props;
-
-  return (
-    <Card size="sm" className="border-dashed bg-muted/40 shadow-none">
-      <CardHeader className="grid-cols-[1fr_auto] items-center gap-3">
-        <CardTitle className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-          Skill {index + 1}
-        </CardTitle>
-        <CardAction>
-          <Button variant="ghost" size="icon-sm" type="button" onClick={onRemove}>
-            <Trash2 size={16} />
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        <Input value={skill.name} onChange={(event) => onChange({ ...skill, name: event.currentTarget.value })} placeholder="Skill name" />
-        <Input
-          value={skill.description}
-          onChange={(event) => onChange({ ...skill, description: event.currentTarget.value })}
-          placeholder="What this skill is for"
-        />
-        <Textarea
-          className="min-h-20"
-          value={skill.command}
-          onChange={(event) => onChange({ ...skill, command: event.currentTarget.value })}
-          placeholder="./bin/oa-room-send --scope group"
-        />
-      </CardContent>
-    </Card>
   );
 }
 
@@ -1369,39 +1331,16 @@ export function TemplateStudioDialog(props: {
                               </label>
                             </div>
 
-                            <div className="space-y-3">
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="m-0 text-sm font-medium">Skills</p>
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  type="button"
-                                  onClick={() =>
-                                    patchMemberDraft(selectedTemplate.id, activeMember.id, {
-                                      skills: addEmptySkillDraft(activeMember.skills),
-                                    })}
-                                >
-                                  <Plus size={16} />
-                                  Add skill
-                                </Button>
-                              </div>
-                              <div className="flex flex-col gap-3">
-                                {activeMember.skills.map((skill, index) => (
-                                  <SkillEditor
-                                    key={skill.id}
-                                    skill={skill}
-                                    index={index}
-                                    onChange={(nextSkill) =>
-                                      patchMemberDraft(selectedTemplate.id, activeMember.id, {
-                                        skills: activeMember.skills.map((candidate) => (candidate.id === skill.id ? nextSkill : candidate)),
-                                      })}
-                                    onRemove={() =>
-                                      patchMemberDraft(selectedTemplate.id, activeMember.id, {
-                                        skills: activeMember.skills.filter((candidate) => candidate.id !== skill.id),
-                                      })}
-                                  />
-                                ))}
-                              </div>
+                            <div className="flex flex-col gap-2">
+                              <span className="text-sm font-medium">Allowed skill ids</span>
+                              <AllowedSkillSelector
+                                valueText={activeMember.allowedSkillIdsText}
+                                onChangeText={(allowedSkillIdsText) =>
+                                  patchMemberDraft(selectedTemplate.id, activeMember.id, {
+                                    allowedSkillIdsText,
+                                  })}
+                                description="通过下拉选择成员可用 skill；运行时只暴露 skill id 和 `skills/<skill-id>/SKILL.md` 入口。"
+                              />
                             </div>
                           </div>
                         </section>

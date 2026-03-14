@@ -13,6 +13,7 @@ import {
   postMemberDraft,
   postMemberMessage,
   postUserMessage,
+  pauseWatcherUntilActivity,
   runWatcher,
   setEntryMember,
   upsertTaskTrace,
@@ -22,6 +23,7 @@ import {
   updateMemberConfig,
   upsertMemberWatcher,
   syncUnreadStateForMessage,
+  toggleWatcher,
 } from "@/domain/workspace";
 import { formatTime } from "@/lib/time";
 import { defaultTemplates } from "@/lib/sample-data/templates";
@@ -82,7 +84,7 @@ function cloneRoomTeamForRoleRouting(
           prompt: member.prompt,
           accentTone: member.accentTone,
           modelProfileId: member.modelProfileId,
-          skills: member.skills,
+          allowedSkillIds: member.allowedSkillIds,
           provider: member.provider,
           isEntryMember: member.isEntryMember,
           acceptsDirectMessages: member.acceptsDirectMessages,
@@ -106,7 +108,7 @@ function cloneRoomTeamForRoleRouting(
       prompt: builder.prompt,
       accentTone: builder.accentTone,
       modelProfileId: builder.modelProfileId,
-      skills: builder.skills,
+      allowedSkillIds: builder.allowedSkillIds,
       provider: builder.provider,
       isEntryMember: false,
       acceptsDirectMessages: builder.acceptsDirectMessages,
@@ -574,7 +576,7 @@ describe("workspace domain", () => {
       modelProfileId: builder.modelProfileId,
       acceptsDirectMessages: builder.acceptsDirectMessages,
       codexThinkingDepth: builder.codexThinkingDepth,
-      skills: builder.skills,
+      allowedSkillIds: builder.allowedSkillIds,
       provider: builder.provider,
     });
 
@@ -615,7 +617,7 @@ describe("workspace domain", () => {
       modelProfileId: builder.modelProfileId,
       acceptsDirectMessages: builder.acceptsDirectMessages,
       codexThinkingDepth: builder.codexThinkingDepth,
-      skills: builder.skills,
+      allowedSkillIds: builder.allowedSkillIds,
       provider: builder.provider,
     });
 
@@ -633,7 +635,7 @@ describe("workspace domain", () => {
     ).toThrow("Role members cannot enable Watch.");
   });
 
-  it("lets member-issued role staffing commands depend on prompt authorization", () => {
+  it("lets member-issued role staffing commands run without prompt authorization", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);
     const roomId = snapshot.selection.roomId!;
@@ -653,11 +655,11 @@ describe("workspace domain", () => {
       modelProfileId: builder.modelProfileId,
       acceptsDirectMessages: builder.acceptsDirectMessages,
       codexThinkingDepth: builder.codexThinkingDepth,
-      skills: builder.skills,
+      allowedSkillIds: builder.allowedSkillIds,
       provider: builder.provider,
     });
 
-    const unauthorized = postMemberMessage(
+    const updated = postMemberMessage(
       snapshot,
       {
         roomId,
@@ -667,36 +669,12 @@ describe("workspace domain", () => {
       context,
     );
 
-    const unauthorizedNotice = (unauthorized.messageOrderByRoom[roomId] ?? [])
-      .map((messageId) => unauthorized.messages[messageId])
+    const latestNotice = (updated.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => updated.messages[messageId])
       .at(-1);
 
-    expect(unauthorizedNotice?.content).toBe("岗位成员命令未执行：当前 prompt 未授权使用 /role-add、/role-remove、/role-rename。");
-    expect(unauthorized.rooms[roomId]?.memberIds.map((memberId) => unauthorized.members[memberId]?.handle)).not.toContain("builder-7");
-
-    const authorizedSnapshot = updateMemberConfig(snapshot, {
-      memberId: builder.id,
-      isRole: true,
-      summary: builder.summary,
-      prompt: `${builder.prompt} 允许使用岗位员工命令。`,
-      modelProfileId: builder.modelProfileId,
-      acceptsDirectMessages: builder.acceptsDirectMessages,
-      codexThinkingDepth: builder.codexThinkingDepth,
-      skills: builder.skills,
-      provider: builder.provider,
-    });
-
-    const authorized = postMemberMessage(
-      authorizedSnapshot,
-      {
-        roomId,
-        memberId: builder.id,
-        content: "/role-add builder builder-7",
-      },
-      context,
-    );
-
-    expect(authorized.rooms[roomId]?.memberIds.map((memberId) => authorized.members[memberId]?.handle)).toContain("builder-7");
+    expect(latestNotice?.content).toBe("@builder-7（岗位：builder）被 Forge Crab 加入群组。");
+    expect(updated.rooms[roomId]?.memberIds.map((memberId) => updated.members[memberId]?.handle)).toContain("builder-7");
   });
 
   it("copies template default visible members into new rooms", () => {
@@ -961,6 +939,53 @@ describe("workspace domain", () => {
     expect(digestMessages[0].content).toContain("No new room messages or member state changes");
   });
 
+  it("keeps toggle as pure enable/disable for persistent watchers", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const watcherId = snapshot.rooms[roomId].watcherIds[0];
+    snapshot.watchers[watcherId] = {
+      ...snapshot.watchers[watcherId],
+      persistent: true,
+      enabled: true,
+      pausedUntilActivity: true,
+    };
+
+    snapshot = toggleWatcher(snapshot, watcherId);
+    expect(snapshot.watchers[watcherId].enabled).toBe(false);
+    expect(snapshot.watchers[watcherId].pausedUntilActivity).toBe(false);
+
+    snapshot = toggleWatcher(snapshot, watcherId);
+    expect(snapshot.watchers[watcherId].enabled).toBe(true);
+    expect(snapshot.watchers[watcherId].pausedUntilActivity).toBe(false);
+  });
+
+  it("resumes a paused persistent watcher on new activity and consumes that activity immediately", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const watcherId = snapshot.rooms[roomId].watcherIds[0];
+    snapshot.watchers[watcherId] = {
+      ...snapshot.watchers[watcherId],
+      persistent: true,
+    };
+
+    snapshot = runWatcher(snapshot, watcherId, context);
+    snapshot = pauseWatcherUntilActivity(snapshot, watcherId);
+    snapshot = postUserMessage(snapshot, { roomId, content: "pause 后的新消息" }, context);
+    snapshot = runWatcher(snapshot, watcherId, context);
+
+    const digestMessages = (snapshot.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => snapshot.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(snapshot.watchers[watcherId].pausedUntilActivity).toBe(false);
+    expect(digestMessages).toHaveLength(1);
+    expect(digestMessages[0].content).toContain("pause 后的新消息");
+  });
+
   it("triggers a watcher when member state changes even without a new room message", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);
@@ -1196,14 +1221,7 @@ describe("workspace domain", () => {
       prompt: "新的 builder prompt",
       modelProfileId: "model-codex-acp-default",
       acceptsDirectMessages: false,
-      skills: [
-        {
-          id: "ship",
-          name: "Ship code",
-          description: "提交改动",
-          command: "./bin/oa-room-send --scope group --text \"已提交\"",
-        },
-      ],
+      allowedSkillIds: ["room-send-group"],
       provider: {
         ...builder.provider,
         command: "claude-code",
@@ -1234,7 +1252,7 @@ describe("workspace domain", () => {
 
     expect(snapshot.members[builder.id].provider.command).toBe(builder.provider.command);
     expect(snapshot.members[builder.id].modelProfileId).toBe("model-codex-acp-default");
-    expect(snapshot.members[builder.id].skills).toHaveLength(1);
+    expect(snapshot.members[builder.id].allowedSkillIds).toHaveLength(1);
     expect(snapshot.rooms[roomId].entryMemberId).toBe(builder.id);
     expect(snapshot.members[builder.id].isEntryMember).toBe(true);
     expect(snapshot.rooms[roomId].watcherIds.some((watcherId) => snapshot.watchers[watcherId]?.memberId === builder.id)).toBe(true);
@@ -1327,7 +1345,7 @@ describe("workspace domain", () => {
             prompt: lead.prompt,
             accentTone: lead.accentTone,
             modelProfileId: lead.modelProfileId,
-            skills: lead.skills,
+            allowedSkillIds: lead.allowedSkillIds,
             provider: lead.provider,
             isEntryMember: true,
             acceptsDirectMessages: lead.acceptsDirectMessages,
@@ -1343,7 +1361,7 @@ describe("workspace domain", () => {
             prompt: builder.prompt,
             accentTone: builder.accentTone,
             modelProfileId: builder.modelProfileId,
-            skills: builder.skills,
+            allowedSkillIds: builder.allowedSkillIds,
             provider: builder.provider,
             acceptsDirectMessages: builder.acceptsDirectMessages,
             watch: {
@@ -1362,7 +1380,7 @@ describe("workspace domain", () => {
             prompt: builder.prompt,
             accentTone: builder.accentTone,
             modelProfileId: builder.modelProfileId,
-            skills: builder.skills,
+            allowedSkillIds: builder.allowedSkillIds,
             provider: builder.provider,
             acceptsDirectMessages: builder.acceptsDirectMessages,
           },

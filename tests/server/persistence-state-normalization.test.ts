@@ -146,7 +146,7 @@ describe("workspace persistence state normalization", () => {
               summary: "summary",
               prompt: "prompt",
               accentTone: "paper",
-              skills: [],
+              allowedSkillIds: [],
               provider: {
                 kind: "generic-acp",
                 label: "Clerk ACP",
@@ -174,7 +174,7 @@ describe("workspace persistence state normalization", () => {
           summary: "summary",
           prompt: "prompt",
           accentTone: "paper",
-          skills: [],
+          allowedSkillIds: [],
           provider: {
             kind: "generic-acp",
             label: "Research ACP",
@@ -226,6 +226,104 @@ describe("workspace persistence state normalization", () => {
     });
   });
 
+  it("fills missing allowedSkillIds with an empty array on load", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-persistence-skills-normalize-"));
+    const filePath = path.join(directory, "state.json");
+
+    const snapshot = {
+      projects: {},
+      projectOrder: [],
+      rooms: {
+        room_a: {
+          id: "room_a",
+          projectId: "project_a",
+          name: "A",
+          topic: "topic a",
+          templateId: "template_a",
+          memberIds: ["member_a"],
+          watcherIds: [],
+          entryMemberId: "member_a",
+          createdAt: "2026-03-10T10:00:00.000Z",
+        },
+      },
+      roomOrderByProject: {},
+      templates: {
+        template_a: {
+          id: "template_a",
+          name: "Template A",
+          description: "desc",
+          accentTone: "paper",
+          members: [
+            {
+              id: "blueprint_a",
+              name: "Member A",
+              handle: "member-a",
+              summary: "summary",
+              prompt: "prompt",
+              accentTone: "paper",
+              provider: {
+                kind: "generic-acp",
+                label: "Generic ACP",
+                command: "agent",
+                args: ["--stdio"],
+                env: {},
+                capabilities: ["prompt"],
+              },
+              allowedSkillIds: [],
+            },
+          ],
+        },
+      },
+      templateOrder: ["template_a"],
+      members: {
+        member_a: {
+          id: "member_a",
+          roomId: "room_a",
+          blueprintId: "blueprint_a",
+          roleId: "blueprint_a",
+          roleName: "member-a",
+          name: "Member A",
+          handle: "member-a",
+          summary: "summary",
+          prompt: "prompt",
+          accentTone: "paper",
+          provider: {
+            kind: "generic-acp",
+            label: "Generic ACP",
+            command: "agent",
+            args: ["--stdio"],
+            env: {},
+            capabilities: ["prompt"],
+          },
+          allowedSkillIds: [],
+          acceptsDirectMessages: true,
+          isEntryMember: true,
+          status: "idle",
+        },
+      },
+      messages: {},
+      messageOrderByRoom: {
+        room_a: [],
+      },
+      tasks: {},
+      taskTraces: {},
+      taskTraceOrderByTask: {},
+      watchers: {},
+      selection: {
+        roomId: "room_a",
+      },
+      currentUserName: "You",
+    } satisfies WorkspaceSnapshot;
+
+    await writeFile(filePath, JSON.stringify({ savedAt: "2026-03-10T10:00:04.000Z", snapshot }, null, 2), "utf8");
+
+    const persistence = new WorkspacePersistence(filePath);
+    const loaded = await persistence.load();
+
+    expect(loaded?.templates.template_a.members[0]?.allowedSkillIds).toEqual([]);
+    expect(loaded?.members.member_a.allowedSkillIds).toEqual([]);
+  });
+
   it("hides legacy public watcher digests on load", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "oa-persistence-watch-visibility-"));
     const filePath = path.join(directory, "state.json");
@@ -261,7 +359,7 @@ describe("workspace persistence state normalization", () => {
           summary: "summary",
           prompt: "prompt",
           accentTone: "paper",
-          skills: [],
+          allowedSkillIds: [],
           provider: {
             kind: "codex-acp",
             label: "Codex ACP",

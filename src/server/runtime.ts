@@ -24,6 +24,7 @@ import {
   postMemberMessage,
   postMemberDraft,
   postUserMessage,
+  pauseWatcherUntilActivity as pauseWatcherUntilActivityInWorkspace,
   runWatcher,
   setEntryMember,
   toggleWatcher,
@@ -66,6 +67,7 @@ import { resolveDirectTarget } from "../lib/direct-target";
 import { CODEX_ACP_THINKING_DEPTH_ENV_KEY } from "../lib/acp/providers/codex-session";
 import { createDefaultGlobalWorkspaceConfig, findProviderModelProfile, resolveProviderBindingFromProfile } from "../lib/provider-model-profiles";
 import { resolveRoomTeamSummary } from "../lib/room-team";
+import { loadSkillCatalog, type SkillCatalogEntry } from "./skills";
 import type { TemplateStudioUIMessage } from "../lib/template-studio-ui-message";
 
 type SnapshotListener = (snapshot: WorkspaceSnapshot) => void;
@@ -929,6 +931,13 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
+  async pauseWatcherUntilActivity(watcherId: string): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    const next = pauseWatcherUntilActivityInWorkspace(previous, watcherId);
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
   async runWatcherNow(watcherId: string): Promise<WorkspaceSnapshot> {
     const watcher = this.snapshot.watchers[watcherId];
     if (!watcher || !watcher.enabled) {
@@ -947,6 +956,10 @@ export class WorkspaceRuntime {
     const next = runWatcher(previous, watcherId, this.context);
     await this.applySnapshot(previous, next);
     return this.snapshot;
+  }
+
+  async listSkillCatalog(): Promise<SkillCatalogEntry[]> {
+    return loadSkillCatalog(this.workspaceRoot);
   }
 
   async generateTemplate(brief: string): Promise<TeamTemplate> {

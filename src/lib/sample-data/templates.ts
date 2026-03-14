@@ -37,20 +37,7 @@ export const defaultTemplates: TeamTemplate[] = [
         modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
         isEntryMember: true,
-        skills: [
-          {
-            id: "send-group",
-            name: "群消息发送",
-            description: "向当前 room 发送群消息。",
-            command: "./bin/oa-room-send --scope group",
-          },
-          {
-            id: "delegate",
-            name: "委派成员",
-            description: "通过 @>handle 委派给其他成员。",
-            command: "./bin/oa-room-send --scope group --text \"@>builder 请实现这个方案\"",
-          },
-        ],
+        allowedSkillIds: ["room-send-group", "delegate-member"],
       },
       {
         id: "researcher",
@@ -61,14 +48,7 @@ export const defaultTemplates: TeamTemplate[] = [
         accentTone: "blueprint",
         modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
-        skills: [
-          {
-            id: "search",
-            name: "搜索资料",
-            description: "搜索外部资料或内部文档。",
-            command: "./bin/oa-room-state --room \"$ROOM\"",
-          },
-        ],
+        allowedSkillIds: ["room-state"],
         watch: {
           intervalMinutes: 15,
           enabledByDefault: true,
@@ -83,20 +63,7 @@ export const defaultTemplates: TeamTemplate[] = [
         accentTone: "paper",
         modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
-        skills: [
-          {
-            id: "exec",
-            name: "执行命令",
-            description: "在项目里执行工具命令。",
-            command: "pwd",
-          },
-          {
-            id: "patch",
-            name: "提交补丁",
-            description: "生成代码补丁。",
-            command: "./bin/oa-room-send --scope group",
-          },
-        ],
+        allowedSkillIds: ["project-shell", "room-send-group"],
       },
       {
         id: "scribe",
@@ -107,14 +74,7 @@ export const defaultTemplates: TeamTemplate[] = [
         accentTone: "correction",
         modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
-        skills: [
-          {
-            id: "digest",
-            name: "汇总变更",
-            description: "生成自上次消费以来的 digest。",
-            command: "./bin/oa-room-watch",
-          },
-        ],
+        allowedSkillIds: ["room-watch"],
         watch: {
           intervalMinutes: 10,
           enabledByDefault: true,
@@ -139,14 +99,7 @@ export const defaultTemplates: TeamTemplate[] = [
         modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
         isEntryMember: true,
-        skills: [
-          {
-            id: "triage",
-            name: "问题分诊",
-            description: "分配排障 owner。",
-            command: "./bin/oa-room-send --scope group --text \"@investigator 开始排查\"",
-          },
-        ],
+        allowedSkillIds: ["delegate-member"],
       },
       {
         id: "investigator",
@@ -157,14 +110,7 @@ export const defaultTemplates: TeamTemplate[] = [
         accentTone: "paper",
         modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
-        skills: [
-          {
-            id: "logs",
-            name: "查看日志",
-            description: "拉取日志或调试输出。",
-            command: "pwd",
-          },
-        ],
+        allowedSkillIds: ["project-shell"],
       },
       {
         id: "recorder",
@@ -175,14 +121,7 @@ export const defaultTemplates: TeamTemplate[] = [
         accentTone: "postit",
         modelProfileId: DEFAULT_CODEX_MODEL_PROFILE_ID,
         provider: createCodexAcpProvider(),
-        skills: [
-          {
-            id: "timeline",
-            name: "时间线",
-            description: "按时间线整理房间消息。",
-            command: "./bin/oa-room-state --room \"$ROOM\"",
-          },
-        ],
+        allowedSkillIds: ["room-state"],
         watch: {
           intervalMinutes: 5,
           enabledByDefault: true,

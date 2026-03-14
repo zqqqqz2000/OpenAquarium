@@ -2,18 +2,11 @@ import type {
   CodexThinkingDepth,
   ProviderBinding,
   ProviderModelProfileId,
-  SkillDefinition,
   TeamMember,
   UpdateMemberConfigInput,
   WatchSubscription,
 } from "@/domain/model";
-
-export interface SkillDraft {
-  id: string;
-  name: string;
-  description: string;
-  command: string;
-}
+import { normalizeAllowedSkillIds } from "@/lib/skills";
 
 export interface ProviderConfigDraftFields {
   providerLabel: string;
@@ -31,7 +24,7 @@ export interface MemberConfigDraft {
   modelProfileId?: ProviderModelProfileId;
   modelId?: string;
   codexThinkingDepth?: CodexThinkingDepth;
-  skills: SkillDraft[];
+  allowedSkillIdsText: string;
 }
 
 export interface WatcherDraft {
@@ -71,28 +64,13 @@ export function parseEnvText(text: string): Record<string, string> {
   }, {});
 }
 
-export function toSkillDefinitions(skills: SkillDraft[]): SkillDefinition[] {
-  return skills
-    .map((skill) => ({
-      id: skill.id.trim(),
-      name: skill.name.trim(),
-      description: skill.description.trim(),
-      command: skill.command.trim(),
-    }))
-    .filter((skill) => skill.name.length > 0 || skill.description.length > 0 || skill.command.length > 0)
-    .map((skill, index) => {
-      if (!skill.name || !skill.command) {
-        throw new Error(`Skill #${index + 1} requires both a name and command.`);
-      }
-
-      return {
-        ...skill,
-        id: skill.id || `skill-${index + 1}`,
-      };
-    });
+export function parseAllowedSkillIdsText(text: string): string[] {
+  return normalizeAllowedSkillIds(text.split(/[,\n]/u));
 }
 
 export function createMemberConfigDraft(member: TeamMember): MemberConfigDraft {
+  const allowedSkillIds = member.allowedSkillIds ?? [];
+
   return {
     isRole: member.isRole === true,
     summary: member.summary,
@@ -100,12 +78,7 @@ export function createMemberConfigDraft(member: TeamMember): MemberConfigDraft {
     modelProfileId: member.modelProfileId,
     modelId: member.modelId,
     codexThinkingDepth: member.codexThinkingDepth,
-    skills: member.skills.map((skill) => ({
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      command: skill.command,
-    })),
+    allowedSkillIdsText: allowedSkillIds.join("\n"),
   };
 }
 
@@ -115,18 +88,6 @@ export function createWatcherDraft(watcher?: WatchSubscription): WatcherDraft {
     intervalMinutes: watcher ? String(watcher.intervalMinutes) : "15",
     persistent: watcher?.persistent ?? false,
   };
-}
-
-export function addEmptySkillDraft(skills: SkillDraft[]): SkillDraft[] {
-  return [
-    ...skills,
-    {
-      id: crypto.randomUUID(),
-      name: "",
-      description: "",
-      command: "",
-    },
-  ];
 }
 
 export function buildProviderFromDraft(existingProvider: ProviderBinding, draft: ProviderConfigDraftFields): ProviderBinding {
@@ -151,7 +112,7 @@ export function buildMemberConfigInput(member: TeamMember, draft: MemberConfigDr
     modelId: draft.modelId?.trim() || undefined,
     acceptsDirectMessages: true,
     codexThinkingDepth: draft.codexThinkingDepth,
-    skills: toSkillDefinitions(draft.skills),
+    allowedSkillIds: parseAllowedSkillIdsText(draft.allowedSkillIdsText),
     provider: member.provider,
   };
 }

@@ -17,7 +17,6 @@ import type {
   RoomId,
   Room,
   RoomTeamMemberInput,
-  SkillDefinition,
   TaskId,
   TaskTraceEntry,
   TemplateId,
@@ -33,6 +32,7 @@ import type {
   WorkspaceSnapshot,
 } from "./model";
 import type { MutationContext } from "./identity";
+import { normalizeAllowedSkillIds } from "../lib/skills";
 import { formatTime } from "../lib/time";
 import { isVisibleMainRoomMessage } from "../lib/message-visibility";
 import {
@@ -193,17 +193,6 @@ interface RoleCommandResult {
   notices?: string[];
 }
 
-const ROLE_COMMAND_ALLOW_PATTERNS = [
-  /(?<!不)(?<!默认不)允许使用岗位员工命令/u,
-  /允许使用\s*\/role-add/u,
-];
-
-const ROLE_COMMAND_DENY_PATTERNS = [
-  /不允许使用岗位员工命令/u,
-  /禁止使用岗位员工命令/u,
-  /默认不允许使用岗位员工命令/u,
-];
-
 function normalizeHandleToken(value: string): string {
   return value.trim().replace(/^[@>]+/u, "").toLowerCase();
 }
@@ -260,25 +249,6 @@ function humanizeHandle(handle: string): string {
     .filter(Boolean)
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(" ");
-}
-
-function canMemberUseRoleStaffingCommands(member: TeamMember): boolean {
-  const prompt = member.prompt.trim();
-  if (!prompt) {
-    return false;
-  }
-
-  const explicitlyAllowed = ROLE_COMMAND_ALLOW_PATTERNS.some((pattern) => pattern.test(prompt));
-  if (explicitlyAllowed) {
-    return true;
-  }
-
-  const explicitlyDenied = ROLE_COMMAND_DENY_PATTERNS.some((pattern) => pattern.test(prompt));
-  if (explicitlyDenied) {
-    return false;
-  }
-
-  return false;
 }
 
 function stripMarkdownCodeSegments(content: string): string {
@@ -387,9 +357,6 @@ function resolveRoleCommand(
   content: string,
   actorLabel: string,
   context: MutationContext,
-  options?: {
-    staffingAuthorized?: boolean;
-  },
 ): RoleCommandResult {
   const roleNoteMatch = content.match(ROLE_NOTE_COMMAND_PATTERN);
   if (roleNoteMatch) {
@@ -438,12 +405,6 @@ function resolveRoleCommand(
 
   const roleAddMatch = content.match(ROLE_ADD_COMMAND_PATTERN);
   if (roleAddMatch) {
-    if (!options?.staffingAuthorized) {
-      return {
-        handled: true,
-        notices: ["岗位成员命令未执行：当前 prompt 未授权使用 /role-add、/role-remove、/role-rename。"],
-      };
-    }
     const [, roleToken, handleToken, reasonText] = roleAddMatch;
     const roleOwner = roleToken ? resolveRoleOwner(snapshot, roomId, roleToken) : undefined;
     const employeeHandle = handleToken ? normalizeHandleToken(handleToken) : "";
@@ -508,12 +469,6 @@ function resolveRoleCommand(
 
   const roleRemoveMatch = content.match(ROLE_REMOVE_COMMAND_PATTERN);
   if (roleRemoveMatch) {
-    if (!options?.staffingAuthorized) {
-      return {
-        handled: true,
-        notices: ["岗位成员命令未执行：当前 prompt 未授权使用 /role-add、/role-remove、/role-rename。"],
-      };
-    }
     const [, roleToken, handleToken, reasonText] = roleRemoveMatch;
     const roleOwner = roleToken ? resolveRoleOwner(snapshot, roomId, roleToken) : undefined;
     const employee = handleToken ? resolveMemberByHandle(snapshot, roomId, handleToken) : undefined;
@@ -584,12 +539,6 @@ function resolveRoleCommand(
 
   const roleRenameMatch = content.match(ROLE_RENAME_COMMAND_PATTERN);
   if (roleRenameMatch) {
-    if (!options?.staffingAuthorized) {
-      return {
-        handled: true,
-        notices: ["岗位成员命令未执行：当前 prompt 未授权使用 /role-add、/role-remove、/role-rename。"],
-      };
-    }
     const [, handleToken, nameText] = roleRenameMatch;
     const member = handleToken ? resolveMemberByHandle(snapshot, roomId, handleToken) : undefined;
     const nextName = nameText?.trim();
@@ -897,7 +846,7 @@ function instantiateMember(
     accentTone: blueprint.accentTone,
     modelProfileId: blueprint.modelProfileId,
     modelId: blueprint.modelId,
-    skills: blueprint.skills,
+    allowedSkillIds: blueprint.allowedSkillIds,
     provider: blueprint.provider,
     acceptsDirectMessages: blueprint.acceptsDirectMessages ?? true,
     isEntryMember: blueprint.isEntryMember ?? false,
@@ -1195,7 +1144,7 @@ export function postUserMessage(
   setRoomReadState(snapshot, room.id, now);
   touchRoomActivity(snapshot, room.id, now);
   const roleCommand = !input.directMemberId
-    ? resolveRoleCommand(snapshot, input.roomId, trimmedContent, snapshot.currentUserName, context, { staffingAuthorized: true })
+    ? resolveRoleCommand(snapshot, input.roomId, trimmedContent, snapshot.currentUserName, context)
     : { handled: false };
   if (roleCommand.handled) {
     roleCommand.notices?.forEach((notice) => {
@@ -1263,9 +1212,7 @@ export function postMemberMessage(
     }
   }
   const roleCommand = !isDirectMessage
-    ? resolveRoleCommand(snapshot, input.roomId, content, member.name, context, {
-      staffingAuthorized: canMemberUseRoleStaffingCommands(member),
-    })
+    ? resolveRoleCommand(snapshot, input.roomId, content, member.name, context)
     : { handled: false };
   if (roleCommand.handled) {
     roleCommand.notices?.forEach((notice) => {
@@ -1378,20 +1325,8 @@ function validateProviderCapabilities(capabilities: string[]): string[] {
   return [...new Set(capabilities.map((capability) => capability.trim()).filter(Boolean))];
 }
 
-function validateSkills(skills: SkillDefinition[]): SkillDefinition[] {
-  return skills.map((skill) => {
-    if (!skill.name.trim() || !skill.command.trim()) {
-      throw new Error("Each skill requires a name and command");
-    }
-
-    return {
-      ...skill,
-      id: skill.id.trim(),
-      name: skill.name.trim(),
-      description: skill.description.trim(),
-      command: skill.command.trim(),
-    };
-  });
+function validateAllowedSkillIds(skillIds: string[]): string[] {
+  return normalizeAllowedSkillIds(skillIds);
 }
 
 function normalizeProviderBinding(provider: ProviderBinding): ProviderBinding {
@@ -1470,7 +1405,7 @@ function validateTemplateMembers(members: TeamMemberBlueprint[]): TeamMemberBlue
       modelProfileId: member.modelProfileId?.trim() || undefined,
       modelId: member.modelId?.trim() || undefined,
       codexThinkingDepth: member.codexThinkingDepth,
-      skills: validateSkills(member.skills),
+      allowedSkillIds: validateAllowedSkillIds(member.allowedSkillIds),
       provider: normalizeProviderBinding(member.provider),
       watch,
     };
@@ -1542,7 +1477,7 @@ function validateRoomTeamMembers(members: RoomTeamMemberInput[]): NormalizedRoom
       modelProfileId: member.modelProfileId?.trim() || undefined,
       modelId: member.modelId?.trim() || undefined,
       codexThinkingDepth: member.codexThinkingDepth,
-      skills: validateSkills(member.skills),
+      allowedSkillIds: validateAllowedSkillIds(member.allowedSkillIds),
       provider: normalizeProviderBinding(member.provider),
       watch,
     };
@@ -1591,7 +1526,7 @@ export function updateMemberConfig(current: WorkspaceSnapshot, input: UpdateMemb
     modelId: input.modelId?.trim() || undefined,
     acceptsDirectMessages: input.acceptsDirectMessages,
     codexThinkingDepth: input.codexThinkingDepth,
-    skills: validateSkills(input.skills),
+    allowedSkillIds: validateAllowedSkillIds(input.allowedSkillIds),
     provider: member.provider,
   };
 
@@ -1765,7 +1700,7 @@ export function updateRoomTeam(
           accentTone: memberInput.accentTone,
           modelProfileId: memberInput.modelProfileId,
           modelId: memberInput.modelId,
-          skills: memberInput.skills,
+          allowedSkillIds: memberInput.allowedSkillIds,
           provider: memberInput.provider,
           acceptsDirectMessages: memberInput.acceptsDirectMessages ?? true,
           isEntryMember: memberInput.isEntryMember === true,
@@ -1787,7 +1722,7 @@ export function updateRoomTeam(
           accentTone: memberInput.accentTone,
           modelProfileId: memberInput.modelProfileId,
           modelId: memberInput.modelId,
-          skills: memberInput.skills,
+          allowedSkillIds: memberInput.allowedSkillIds,
           provider: memberInput.provider,
           acceptsDirectMessages: memberInput.acceptsDirectMessages ?? true,
           isEntryMember: memberInput.isEntryMember === true,
@@ -2054,8 +1989,30 @@ export function toggleWatcher(current: WorkspaceSnapshot, watcherId: string): Wo
 
   snapshot.watchers[watcherId] = {
     ...watcher,
-    enabled: watcher.persistent ? true : !watcher.enabled,
-    pausedUntilActivity: watcher.persistent ? !watcher.pausedUntilActivity : false,
+    enabled: !watcher.enabled,
+    pausedUntilActivity: false,
+  };
+
+  return snapshot;
+}
+
+export function pauseWatcherUntilActivity(current: WorkspaceSnapshot, watcherId: string): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const watcher = snapshot.watchers[watcherId];
+
+  if (!watcher) {
+    throw new Error(`Unknown watcher "${watcherId}"`);
+  }
+  if (!watcher.enabled) {
+    throw new Error("Cannot pause a disabled watcher");
+  }
+  if (!watcher.persistent) {
+    throw new Error("Only persistent watchers can pause until activity");
+  }
+
+  snapshot.watchers[watcherId] = {
+    ...watcher,
+    pausedUntilActivity: true,
   };
 
   return snapshot;
@@ -2296,46 +2253,47 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
       observedMessageIds.length > 0 ? observedMessageIds[observedMessageIds.length - 1] : watcher.lastConsumedMessageId,
     lastConsumedStateAt: stateChanges[stateChanges.length - 1]?.createdAt ?? watcherWithResolvedStateCursor.lastConsumedStateAt,
   };
+  let effectiveWatcher = watcher;
 
   if (watcher.pausedUntilActivity) {
     if (!hasObservedActivity) {
       return snapshot;
     }
 
-    snapshot.watchers[watcherId] = {
+    effectiveWatcher = {
       ...watcher,
       pausedUntilActivity: false,
     };
+    snapshot.watchers[watcherId] = effectiveWatcher;
+  }
+
+  if (!hasObservedActivity && !effectiveWatcher.persistent) {
     return snapshot;
   }
 
-  if (!hasObservedActivity && !watcher.persistent) {
-    return snapshot;
-  }
-
-  if (!hasDigestActivity && !watcher.persistent) {
-    advanceWatcherCursor(snapshot, watcher, watcherId, nextCursor);
+  if (!hasDigestActivity && !effectiveWatcher.persistent) {
+    advanceWatcherCursor(snapshot, effectiveWatcher, watcherId, nextCursor);
     return snapshot;
   }
 
   const now = context.now();
   const digestMessage: ChatMessage = {
     id: context.createId("message"),
-    roomId: watcher.roomId,
+    roomId: effectiveWatcher.roomId,
     author: buildSystemAuthor("Watcher"),
-    content: buildWatcherDigestContent(snapshot, newMessageIds, stateChanges, watcher.persistent ?? false),
+    content: buildWatcherDigestContent(snapshot, newMessageIds, stateChanges, effectiveWatcher.persistent ?? false),
     createdAt: now,
     transport: "watch-digest",
     status: "sent",
     visibility: "internal",
     mentionedMemberIds: [],
     quotedMemberIds: [],
-    recipientMemberIds: [watcher.memberId],
+    recipientMemberIds: [effectiveWatcher.memberId],
   };
 
   insertMessage(snapshot, digestMessage);
-  advanceWatcherCursor(snapshot, watcher, watcherId, {
-    lastConsumedMessageId: hasObservedActivity ? digestMessage.id : watcher.lastConsumedMessageId,
+  advanceWatcherCursor(snapshot, effectiveWatcher, watcherId, {
+    lastConsumedMessageId: hasObservedActivity ? digestMessage.id : effectiveWatcher.lastConsumedMessageId,
     lastConsumedStateAt: nextCursor.lastConsumedStateAt,
   });
   routeMessage(snapshot, digestMessage, now, context.createId);

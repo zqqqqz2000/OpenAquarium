@@ -149,7 +149,7 @@ function buildSnapshot(): WorkspaceSnapshot {
         summary: "summary",
         prompt: "prompt",
         accentTone: "paper",
-        skills: [],
+        allowedSkillIds: [],
         provider: {
           kind: "codex-acp",
           label: "Codex ACP",

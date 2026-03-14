@@ -64,7 +64,7 @@ function createRequest(provider = createCodexAcpProvider()): ExecutionRequest {
       summary: "Lead member",
       prompt: "Handle the room",
       accentTone: "paper",
-      skills: [],
+      allowedSkillIds: [],
       provider,
       acceptsDirectMessages: true,
       isEntryMember: true,
@@ -535,8 +535,8 @@ describe("AcpMemberExecutor", () => {
       "acp-stream-text-delta",
       expect.objectContaining({
         taskId: "task_1",
-        delta: "transport warning",
-        accumulatedText: "transport warning",
+        deltaChars: "transport warning".length,
+        accumulatedChars: "transport warning".length,
       }),
     );
     expect(logger.info).toHaveBeenCalledWith(

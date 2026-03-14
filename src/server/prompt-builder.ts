@@ -1,5 +1,6 @@
 import type { ChatMessage, MemberTask, Project, Room, TeamMember, WorkspaceSnapshot } from "../domain/model";
 import { extractAddressedMemberIds } from "../domain/workspace";
+import { resolveAvailableSkills } from "./skills";
 import { isVisibleMainRoomMessage } from "../lib/message-visibility";
 import { formatTime } from "../lib/utils";
 import {
@@ -42,7 +43,7 @@ function summarizeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): st
 }
 
 function describeMember(member: TeamMember, workspaceRoot: string): string {
-  const skillList = member.skills.map((skill) => `${skill.name}: ${rewriteCommandForProjectContext(skill.command, workspaceRoot)}`).join(" | ");
+  const skillList = member.allowedSkillIds.join(", ");
 
   return [
     `- ${member.name} (@${member.handle})`,
@@ -50,8 +51,19 @@ function describeMember(member: TeamMember, workspaceRoot: string): string {
     `  acceptsDirectMessages: ${member.acceptsDirectMessages ? "true" : "false"}`,
     `  codexThinkingDepth: ${member.codexThinkingDepth ?? "default"}`,
     `  provider: ${member.provider.label} -> ${member.provider.command} ${member.provider.args.join(" ")}`.trim(),
-    `  skills: ${skillList || "(none)"}`,
+    `  allowedSkillIds: ${skillList || "(none)"}`,
   ].join("\n");
+}
+
+function buildAvailableSkillsSection(member: TeamMember, workspaceRoot: string): string[] {
+  const availableSkills = resolveAvailableSkills(workspaceRoot, member.allowedSkillIds)
+    .map((skill) => `- ${skill.id}\n  directory: ${skill.directoryPath}\n  entry: ${skill.entryPath}`)
+    .join("\n");
+
+  return [
+    "[Available Skills]",
+    availableSkills || "(none)",
+  ];
 }
 
 function describeMemberHandles(room: Room, snapshot: WorkspaceSnapshot): string {
@@ -134,10 +146,16 @@ function buildWatcherContextSections(sourceMessage: ChatMessage, watcherMode?: "
     "",
     "[Watcher Context]",
     watcherMode === "persistent"
-      ? "This task was triggered by a private watcher digest while persistent watch is active. Periodic watcher turns can arrive even when there is no new room activity. The unseen room activity below was not posted into the room for others. Decide yourself whether any visible room reply is actually needed."
+      ? "This task was triggered by a private watcher digest while persistent watch is active. Periodic watcher turns can arrive even when there is no new room activity. If your current巡查/检查 is finished and there is nothing actionable, proactively pause your persistent watch. When the room gets new activity such as a new message or member state change, the persistent watch resumes automatically. The unseen room activity below was not posted into the room for others. Decide yourself whether any visible room reply is actually needed."
       : "This task was triggered by a private watcher digest. The unseen room activity below was not posted into the room for others. Decide yourself whether any visible room reply is actually needed.",
     sourceMessage.content,
   ];
+}
+
+function findEnabledPersistentWatcher(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember) {
+  return Object.values(snapshot.watchers).find(
+    (watcher) => watcher.roomId === room.id && watcher.memberId === member.id && watcher.enabled && watcher.persistent,
+  );
 }
 
 function buildRoomContextFileSections(workspaceRoot: string, room: Room, snapshot: WorkspaceSnapshot, transcriptFilePath?: string): string[] {
@@ -205,6 +223,7 @@ function buildSharedSections(args: {
   const projectWorkingDirectory = resolveProjectWorkingDirectory(project, workspaceRoot);
   const roomSendScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-send"));
   const roomStateScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-state"));
+  const roomWatchScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-watch"));
   const sourceMessage = snapshot.messages[task.sourceMessageId];
   const preferredTools = [
     "oa_send_group_message: preferred for visible room replies. Sent content is rendered to the user as Markdown with code fences, Mermaid, math, and CJK support.",
@@ -212,6 +231,7 @@ function buildSharedSections(args: {
     "oa_room_state: inspect transcript and member/task state before retrying a send.",
     "oa_read_file: read transcript files or source files when you need deeper context.",
     "oa_run_room_watcher: trigger a watcher immediately when needed.",
+    `CLI pause fallback for persistent watch: ${roomWatchScript} --watcher <watcher-id> --pause-until-activity`,
     `CLI group fallback only if the dedicated tools are unavailable: ${roomSendScript} --room ${room.id} --member ${member.id} --scope group --text "your message"`,
     `CLI direct fallback only if needed: ${roomSendScript} --room ${room.id} --member ${member.id} --scope direct --target @user --text "private message"`,
     `CLI state fallback: ${roomStateScript} --room ${room.id}`,
@@ -286,6 +306,16 @@ function buildFullPrompt(args: {
     .map((message) => summarizeMessage(snapshot, message))
     .join("\n");
   const roster = room.memberIds.map((memberId) => describeMember(snapshot.members[memberId], args.workspaceRoot)).join("\n");
+  const persistentWatcher = findEnabledPersistentWatcher(snapshot, room, member);
+  const persistentWatchRules = persistentWatcher
+    ? [
+        "",
+        "[Persistent Watch Rules]",
+        "If you judge the current巡查/检查 work is finished and there is nothing actionable right now, proactively pause your persistent watch.",
+        "When the room gets new activity such as a new message or member state change, your persistent watch resumes automatically.",
+        `Pause command: oa-room-watch --watcher ${persistentWatcher.id} --pause-until-activity`,
+      ]
+    : [];
 
   return [
     ...buildSharedSections({
@@ -304,7 +334,7 @@ function buildFullPrompt(args: {
     "1. If you need to speak in the room or DM someone, prefer the dedicated ACP tools listed below instead of generic shell commands.",
     "2. `@handle` is only a passive reference for explanation. Never use plain `@handle` to assign work. It does not notify that teammate, does not route work, and does not start a task for them.",
     "3. `@>handle` is an active assignment. That teammate immediately gets the message as work and may be interrupted to act on it.",
-    "4. Do not assume hidden roles. The prompt and skills define each member's current job.",
+    "4. Do not assume hidden roles. Prompt and runtime rules define your baseline operating behavior, team boundaries, and collaboration rules; available skills are optional directory assets you may enter when useful.",
     "5. Keep room messages concise and actionable, but do not stay silent on long tasks.",
     "6. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
     "7. Prefer group messages for user-facing progress updates; use direct messages for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
@@ -317,9 +347,9 @@ function buildFullPrompt(args: {
     "14. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
     "15. Treat the shared room context directory as the durable source for room transcript and per-member histories. Read the relevant files when watcher context reports unseen messages or member state changes.",
     "16. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Send plain text when simple is enough, but use valid Markdown when structure, code, links, lists, diagrams, or formulas help. Prefer $$...$$ for formulas.",
+    ...persistentWatchRules,
     "",
-    "[Member Skills]",
-    member.skills.map((skill) => `- ${skill.name}: ${skill.description}\n  command: ${skill.command}`).join("\n") || "(none)",
+    ...buildAvailableSkillsSection(member, args.workspaceRoot),
     "",
     "[Instruction]",
     "Perform the current task. If a room or direct response is needed, actually send it using the tools. Keep the user and team updated with short progress messages while you work, and continue until the task is complete.",

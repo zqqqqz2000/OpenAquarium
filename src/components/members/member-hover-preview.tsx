@@ -13,6 +13,7 @@ export function MemberHoverPreview(props: {
   children: ReactNode;
 }) {
   const { member, watcher, children } = props;
+  const skillCount = member.allowedSkillIds?.length ?? 0;
   const toneBadge = badgeToneProps(member.accentTone);
   const roleLabel = getMemberRoleLabel(member.handle);
   const rolePalette = getMemberRolePalette(member.handle);
@@ -34,7 +35,7 @@ export function MemberHoverPreview(props: {
               <Badge variant={toneBadge.variant} className={toneBadge.className}>
                 {member.provider.label}
               </Badge>
-              <Badge variant="secondary">{member.skills.length} skills</Badge>
+              <Badge variant="secondary">{skillCount} skills</Badge>
               {member.isEntryMember ? <Badge variant="outline">Entry</Badge> : null}
               {member.acceptsDirectMessages ? <Badge variant="secondary">Direct inbox</Badge> : null}
               {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}

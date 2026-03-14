@@ -86,7 +86,7 @@ function createTemplate(): TeamTemplate {
         },
         isEntryMember: true,
         acceptsDirectMessages: true,
-        skills: [],
+        allowedSkillIds: [],
       },
     ],
   };

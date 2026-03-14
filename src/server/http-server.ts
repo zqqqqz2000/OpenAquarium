@@ -84,6 +84,13 @@ export async function handleWorkspaceJsonApiRequest(args: {
     };
   }
 
+  if (method === "GET" && pathname === "/api/skills") {
+    return {
+      statusCode: 200,
+      payload: { skills: await runtime.listSkillCatalog() },
+    };
+  }
+
   if (method === "POST" && pathname === "/api/system/project-path") {
     try {
       return {
@@ -193,7 +200,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
           summary: string;
           prompt: string;
           accentTone: "paper" | "postit" | "blueprint" | "correction";
-          skills: Array<{ id: string; name: string; description: string; command: string }>;
+          allowedSkillIds: string[];
           provider: {
             kind: "codex-acp" | "generic-acp";
             label: string;
@@ -355,7 +362,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
           prompt: string;
           accentTone: "paper" | "postit" | "blueprint" | "correction";
           modelProfileId?: string;
-          skills: Array<{ id: string; name: string; description: string; command: string }>;
+          allowedSkillIds: string[];
           provider: {
             kind: "codex-acp" | "generic-acp";
             label: string;
@@ -460,7 +467,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         modelProfileId?: string;
         acceptsDirectMessages: boolean;
         codexThinkingDepth?: "low" | "mid" | "high" | "extra-high";
-        skills: Array<{ id: string; name: string; description: string; command: string }>;
+        allowedSkillIds: string[];
         provider: {
           kind: "codex-acp" | "generic-acp";
           label: string;
@@ -524,6 +531,22 @@ export async function handleWorkspaceJsonApiRequest(args: {
       };
     }
     const snapshot = await runtime.toggleWatcher(watcherId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
+  const watcherPauseMatch = pathname.match(/^\/api\/watchers\/([^/]+)\/pause-until-activity$/u);
+  if (method === "POST" && watcherPauseMatch) {
+    const [, watcherId] = watcherPauseMatch;
+    if (!watcherId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing watcher id" },
+      };
+    }
+    const snapshot = await runtime.pauseWatcherUntilActivity(watcherId);
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -598,6 +621,11 @@ export async function startWorkspaceHttpServer(args: {
         sendJson(response, 200, await args.runtime.getTemplateStudioModelCatalog({
           modelProfileId: url.searchParams.get("modelProfileId") ?? undefined,
         }));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/skills") {
+        sendJson(response, 200, { skills: await args.runtime.listSkillCatalog() });
         return;
       }
 
@@ -771,7 +799,7 @@ export async function startWorkspaceHttpServer(args: {
             summary: string;
             prompt: string;
             accentTone: "paper" | "postit" | "blueprint" | "correction";
-            skills: Array<{ id: string; name: string; description: string; command: string }>;
+            allowedSkillIds: string[];
             provider: {
               kind: "codex-acp" | "generic-acp";
               label: string;
@@ -991,7 +1019,7 @@ export async function startWorkspaceHttpServer(args: {
             prompt: string;
             accentTone: "paper" | "postit" | "blueprint" | "correction";
             modelProfileId?: string;
-            skills: Array<{ id: string; name: string; description: string; command: string }>;
+            allowedSkillIds: string[];
             provider: {
               kind: "codex-acp" | "generic-acp";
               label: string;
@@ -1084,7 +1112,7 @@ export async function startWorkspaceHttpServer(args: {
           modelProfileId?: string;
           acceptsDirectMessages: boolean;
           codexThinkingDepth?: "low" | "mid" | "high" | "extra-high";
-          skills: Array<{ id: string; name: string; description: string; command: string }>;
+          allowedSkillIds: string[];
           provider: {
             kind: "codex-acp" | "generic-acp";
             label: string;
@@ -1141,6 +1169,18 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
         const snapshot = await args.runtime.toggleWatcher(watcherId);
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
+      const watcherPauseMatch = url.pathname.match(/^\/api\/watchers\/([^/]+)\/pause-until-activity$/u);
+      if (request.method === "POST" && watcherPauseMatch) {
+        const [, watcherId] = watcherPauseMatch;
+        if (!watcherId) {
+          sendJson(response, 400, { error: "Missing watcher id" });
+          return;
+        }
+        const snapshot = await args.runtime.pauseWatcherUntilActivity(watcherId);
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }

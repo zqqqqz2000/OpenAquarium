@@ -131,7 +131,7 @@ function buildTemplateStudioSystemPrompt(args: {
     "1. By default, edit only the selected template. If the user explicitly asks for a new template or a different template, do that.",
     "2. Keep template ids and member ids stable unless the user asks to create or rename them.",
     "3. Keep templates.json valid JSON and compatible with the schema.",
-    "4. Every skill object must include id, name, description, and command.",
+    "4. Member skills must be represented with allowedSkillIds as an array of skill id strings. Do not write legacy skills objects unless the file already uses them and you are preserving compatibility during a minimal edit.",
     "5. Do not edit config.json unless the user explicitly asks for global model changes.",
     "6. Prefer the smallest change that satisfies the request.",
     "7. For new members or templates, infer missing required fields from the closest existing template/member and keep provider/model defaults stable unless asked otherwise.",

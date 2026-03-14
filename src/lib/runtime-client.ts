@@ -51,6 +51,10 @@ export class WorkspaceRuntimeClient {
     return parseJson(await fetch(`${this.baseUrl}/api/state`));
   }
 
+  async listSkills(): Promise<{ skills: Array<{ id: string; directoryPath: string; entryPath: string; hasEntry: boolean }> }> {
+    return parseJson(await fetch(`${this.baseUrl}/api/skills`));
+  }
+
   async pickProjectPath(): Promise<string | undefined> {
     const payload = await parseJson<{ path?: string }>(
       await fetch(`${this.baseUrl}/api/system/project-path`, {
@@ -151,7 +155,7 @@ export class WorkspaceRuntimeClient {
           modelProfileId: input.modelProfileId,
           acceptsDirectMessages: input.acceptsDirectMessages,
           codexThinkingDepth: input.codexThinkingDepth,
-          skills: input.skills,
+          allowedSkillIds: input.allowedSkillIds,
           provider: input.provider,
         }),
       }),
@@ -275,6 +279,15 @@ export class WorkspaceRuntimeClient {
   async toggleWatcher(watcherId: string): Promise<WorkspaceSnapshot> {
     const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
       await fetch(`${this.baseUrl}/api/watchers/${watcherId}/toggle`, {
+        method: "POST",
+      }),
+    );
+    return payload.snapshot;
+  }
+
+  async pauseWatcherUntilActivity(watcherId: string): Promise<WorkspaceSnapshot> {
+    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+      await fetch(`${this.baseUrl}/api/watchers/${watcherId}/pause-until-activity`, {
         method: "POST",
       }),
     );

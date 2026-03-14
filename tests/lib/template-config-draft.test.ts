@@ -81,4 +81,21 @@ describe("template config draft helpers", () => {
       },
     });
   });
+
+  it("tolerates legacy members without allowedSkillIds when creating drafts", () => {
+    const snapshot = createSeedWorkspace();
+    const template = snapshot.templates[snapshot.templateOrder[0]];
+
+    const legacyTemplate = {
+      ...template,
+      members: template.members.map((member, index) =>
+        index === 0
+          ? ({ ...member, allowedSkillIds: undefined } as typeof member)
+          : member),
+    };
+
+    const draft = createTemplateConfigDraft(legacyTemplate);
+
+    expect(draft.members[0]?.allowedSkillIdsText).toBe("");
+  });
 });

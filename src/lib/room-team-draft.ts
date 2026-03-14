@@ -9,7 +9,7 @@ import type {
   UpdateRoomTeamInput,
   WorkspaceSnapshot,
 } from "@/domain/model";
-import { toSkillDefinitions, type SkillDraft } from "@/lib/member-config-draft";
+import { parseAllowedSkillIdsText } from "@/lib/member-config-draft";
 import { resolveRoomTeamSummary } from "@/lib/room-team";
 
 export interface RoomTeamMemberDraft {
@@ -32,7 +32,7 @@ export interface RoomTeamMemberDraft {
   watchEnabled: boolean;
   watchPersistent: boolean;
   watchIntervalMinutes: string;
-  skills: SkillDraft[];
+  allowedSkillIdsText: string;
 }
 
 export interface RoomTeamDraft {
@@ -90,6 +90,7 @@ function createRoomTeamMemberDraft(snapshot: WorkspaceSnapshot, room: Room, memb
   const watcher = room.watcherIds
     .map((watcherId) => snapshot.watchers[watcherId])
     .find((candidate) => candidate?.memberId === member.id);
+  const allowedSkillIds = member.allowedSkillIds ?? [];
 
   return {
     id: member.id,
@@ -111,12 +112,7 @@ function createRoomTeamMemberDraft(snapshot: WorkspaceSnapshot, room: Room, memb
     watchEnabled: watcher?.enabled ?? false,
     watchPersistent: watcher?.persistent ?? false,
     watchIntervalMinutes: watcher ? String(watcher.intervalMinutes) : "15",
-    skills: member.skills.map((skill) => ({
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      command: skill.command,
-    })),
+    allowedSkillIdsText: allowedSkillIds.join("\n"),
   };
 }
 
@@ -174,7 +170,7 @@ export function addEmptyRoomTeamMemberDraft(
       watchEnabled: isRoleTemplate ? sourceMember.watchEnabled : false,
       watchPersistent: isRoleTemplate ? sourceMember.watchPersistent : false,
       watchIntervalMinutes: sourceMember.watchIntervalMinutes,
-      skills: isRoleTemplate ? sourceMember.skills.map((skill) => ({ ...skill })) : [],
+      allowedSkillIdsText: isRoleTemplate ? sourceMember.allowedSkillIdsText : "",
     },
   ];
 }
@@ -218,7 +214,7 @@ function buildRoomTeamMemberInput(draft: RoomTeamMemberDraft): RoomTeamMemberInp
     acceptsDirectMessages: true,
     codexThinkingDepth: draft.codexThinkingDepth,
     provider: cloneProviderBinding(draft.provider),
-    skills: toSkillDefinitions(draft.skills),
+    allowedSkillIds: parseAllowedSkillIdsText(draft.allowedSkillIdsText),
     watch: draft.watchConfigured
       ? {
           enabled: draft.watchEnabled,

@@ -105,6 +105,7 @@ function normalizeWorkspaceSnapshot(
         ...member,
         modelProfileId: member.modelProfileId,
         modelId: member.modelId,
+        allowedSkillIds: member.allowedSkillIds ?? [],
         provider: normalizeProvider(member.provider),
       }),
     ),
@@ -114,6 +115,7 @@ function normalizeWorkspaceSnapshot(
     ...member,
     modelProfileId: member.modelProfileId,
     modelId: member.modelId,
+    allowedSkillIds: member.allowedSkillIds ?? [],
     provider: normalizeProvider(member.provider),
     providerSessionId: member.providerSessionId,
   });

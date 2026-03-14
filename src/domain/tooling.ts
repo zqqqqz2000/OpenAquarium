@@ -20,10 +20,5 @@ export function buildMemberCliCommands(room: Room, member: TeamMember): MemberCl
       label: "Send direct message",
       command: `${baseCommand} --scope direct --target @${member.handle} --text "Need your eyes on this thread."`,
     },
-    ...member.skills.map((skill) => ({
-      id: `${member.id}-${skill.id}`,
-      label: skill.name,
-      command: skill.command,
-    })),
   ];
 }

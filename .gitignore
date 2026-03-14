@@ -4,3 +4,9 @@ output/
 .openaquarium/
 .tmp
 *.tsbuildinfo
+.codex-output/
+.playwright-cli/
+dogfood-output/
+test-results/
+*.png
+.DS_Store

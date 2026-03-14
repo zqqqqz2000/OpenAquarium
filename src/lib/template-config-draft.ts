@@ -8,7 +8,7 @@ import type {
   UpdateTemplateInput,
   WatchBlueprint,
 } from "@/domain/model";
-import { toSkillDefinitions, type SkillDraft } from "@/lib/member-config-draft";
+import { parseAllowedSkillIdsText } from "@/lib/member-config-draft";
 import { resolveTemplateVisibleMemberBlueprintIds } from "@/lib/room-message-preferences";
 
 export interface TemplateMemberDraft {
@@ -27,7 +27,7 @@ export interface TemplateMemberDraft {
   watchEnabled: boolean;
   watchPersistent: boolean;
   watchIntervalMinutes: string;
-  skills: SkillDraft[];
+  allowedSkillIdsText: string;
 }
 
 export interface TemplateConfigDraft {
@@ -88,6 +88,8 @@ function resolveNextMemberToken(members: TemplateMemberDraft[]): string {
 }
 
 function createTemplateMemberDraft(member: TeamMemberBlueprint): TemplateMemberDraft {
+  const allowedSkillIds = member.allowedSkillIds ?? [];
+
   return {
     id: member.id,
     name: member.name,
@@ -104,12 +106,7 @@ function createTemplateMemberDraft(member: TeamMemberBlueprint): TemplateMemberD
     watchEnabled: Boolean(member.watch),
     watchPersistent: member.watch?.persistent ?? false,
     watchIntervalMinutes: member.watch ? String(member.watch.intervalMinutes) : "15",
-    skills: member.skills.map((skill) => ({
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      command: skill.command,
-    })),
+    allowedSkillIdsText: allowedSkillIds.join("\n"),
   };
 }
 
@@ -156,7 +153,7 @@ export function addEmptyTemplateMemberDraft(
       watchEnabled: false,
       watchPersistent: false,
       watchIntervalMinutes: sourceMember.watchIntervalMinutes,
-      skills: [],
+      allowedSkillIdsText: "",
     },
   ];
 }
@@ -192,7 +189,7 @@ function buildTemplateMemberBlueprint(draft: TemplateMemberDraft): TeamMemberBlu
     acceptsDirectMessages: true,
     codexThinkingDepth: draft.codexThinkingDepth,
     provider: cloneProviderBinding(draft.provider),
-    skills: toSkillDefinitions(draft.skills),
+    allowedSkillIds: parseAllowedSkillIdsText(draft.allowedSkillIdsText),
     watch: createWatchBlueprint(draft),
   };
 }
