@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { Clock3, Eye, KeyRound, Plus, Settings2, Star, Trash2 } from "lucide-react";
+import { Clock3, KeyRound, Plus, Settings2, Star, Trash2 } from "lucide-react";
 
 import type { GlobalWorkspaceConfig, Room, TeamMember, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
 import { buildMemberCliCommands } from "@/domain/tooling";
@@ -39,10 +39,13 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { getMemberHistory } from "@/lib/message-feed";
 import { badgeToneProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
+
+const CODEX_THINKING_DEPTHS = ["low", "mid", "high", "extra-high"] as const;
 
 function FactTile(props: { label: string; value: string }) {
   const { label, value } = props;
@@ -55,6 +58,25 @@ function FactTile(props: { label: string; value: string }) {
   );
 }
 
+function InlineHint(props: { content: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border px-1 text-[11px] font-semibold leading-none text-muted-foreground"
+          aria-label="Show help"
+        >
+          !!
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-72 text-sm leading-6">
+        {props.content}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function MemberStudioDialog(props: {
   snapshot: WorkspaceSnapshot;
   globalConfig?: GlobalWorkspaceConfig;
@@ -63,10 +85,9 @@ export function MemberStudioDialog(props: {
   connected?: boolean;
   error?: string;
   onClose: () => void;
-  onToggleMonitor: (memberId: string) => void | Promise<void>;
   onSaveConfig: (input: UpdateMemberConfigInput) => void | Promise<void>;
   onSetEntryMember: (memberId: string) => void | Promise<void>;
-  onSaveWatcher: (input: { memberId: string; enabled: boolean; intervalMinutes: number }) => void | Promise<void>;
+  onSaveWatcher: (input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean }) => void | Promise<void>;
   onRunWatcher: (watcherId: string) => void;
   onSendDirectMessage?: (content: string, directMemberId: string) => void | Promise<void>;
 }) {
@@ -78,7 +99,6 @@ export function MemberStudioDialog(props: {
     connected = true,
     error: runtimeError,
     onClose,
-    onToggleMonitor,
     onSaveConfig,
     onSetEntryMember,
     onSaveWatcher,
@@ -107,6 +127,8 @@ export function MemberStudioDialog(props: {
   const activeModelProfileName =
     globalConfig.modelProfiles.find((profile) => profile.id === (configDraft.modelProfileId ?? member.modelProfileId))?.name
     ?? member.provider.label;
+  const selectedModelProfile = globalConfig.modelProfiles.find((profile) => profile.id === (configDraft.modelProfileId ?? member.modelProfileId));
+  const supportsCodexThinkingDepth = (selectedModelProfile?.binding.kind ?? member.provider.kind) === "codex-acp";
 
   const patchConfigDraft = (patch: Partial<MemberConfigDraft>): void => {
     setConfigDrafts((current) => ({
@@ -126,6 +148,16 @@ export function MemberStudioDialog(props: {
         ...patch,
       },
     }));
+  };
+
+  const setRoleEnabled = (checked: boolean): void => {
+    patchConfigDraft({ isRole: checked });
+    if (checked) {
+      patchWatcherDraft({
+        enabled: false,
+        persistent: false,
+      });
+    }
   };
 
   const saveConfig = (): void => {
@@ -187,7 +219,6 @@ export function MemberStudioDialog(props: {
                   </Badge>
                   <Badge variant="secondary">{member.skills.length} skills</Badge>
                   {member.isEntryMember ? <Badge variant="outline">Entry member</Badge> : null}
-                  {member.observeAllRoomMessages ? <Badge variant="outline">Monitor all</Badge> : null}
                   {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
                 </div>
               </CardContent>
@@ -347,6 +378,26 @@ export function MemberStudioDialog(props: {
                         Provider command/env now live in Template Studio &gt; Models. Room-level config only picks a model name.
                       </p>
                     </label>
+                    {supportsCodexThinkingDepth ? (
+                      <label className="flex flex-col gap-2">
+                        <span className="text-sm font-medium">Codex thinking depth</span>
+                        <Select
+                          value={configDraft.codexThinkingDepth ?? "high"}
+                          onValueChange={(value) => patchConfigDraft({ codexThinkingDepth: value as (typeof CODEX_THINKING_DEPTHS)[number] })}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Select thinking depth" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CODEX_THINKING_DEPTHS.map((depth) => (
+                              <SelectItem key={depth} value={depth}>
+                                {depth}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </label>
+                    ) : null}
                     <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
                       <span className="flex items-center gap-2 text-sm font-medium">
                         <KeyRound size={18} />
@@ -359,16 +410,18 @@ export function MemberStudioDialog(props: {
                       />
                     </label>
                     <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
-                      <span className="flex items-center gap-2 text-sm font-medium">
-                        <Eye size={18} />
-                        Monitor all room messages
-                      </span>
+                      <span className="text-sm font-medium">Role</span>
                       <Switch
-                        aria-label="Monitor all room messages"
-                        checked={member.observeAllRoomMessages}
-                        onCheckedChange={() => void onToggleMonitor(member.id)}
+                        aria-label="Role"
+                        checked={configDraft.isRole}
+                        onCheckedChange={setRoleEnabled}
                       />
                     </label>
+                    {configDraft.isRole ? (
+                      <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
+                        Role 成员不能同时开启 Watch；保存后会移除这个成员当前 room 的 watcher 配置。
+                      </div>
+                    ) : null}
 
                     <div className="space-y-3 border-t border-border pt-4">
                       <div className="flex items-center justify-between gap-3">
@@ -457,14 +510,6 @@ export function MemberStudioDialog(props: {
                       <p className="m-0 text-lg font-semibold tracking-tight">Watcher</p>
                     </div>
                     <label className="flex flex-col gap-2">
-                      <span className="text-sm font-medium">Enable scheduled watcher</span>
-                      <Switch
-                        aria-label="Enable watcher"
-                        checked={watcherDraft.enabled}
-                        onCheckedChange={(checked) => patchWatcherDraft({ enabled: checked })}
-                      />
-                    </label>
-                    <label className="flex flex-col gap-2">
                       <span className="text-sm font-medium">Interval minutes</span>
                       <Input
                         inputMode="numeric"
@@ -472,8 +517,39 @@ export function MemberStudioDialog(props: {
                         onChange={(event) => patchWatcherDraft({ intervalMinutes: event.currentTarget.value })}
                       />
                     </label>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                        <span className="flex items-center gap-2 text-sm font-medium">
+                          <span>Watch</span>
+                          <InlineHint content="开启后，这个成员会按设定间隔执行常规 watcher 轮询。" />
+                        </span>
+                        <Switch
+                          aria-label="Watch"
+                          checked={watcherDraft.enabled}
+                          disabled={configDraft.isRole}
+                          onCheckedChange={(checked) => patchWatcherDraft({ enabled: checked, persistent: checked ? watcherDraft.persistent : false })}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                        <span className="flex items-center gap-2 text-sm font-medium">
+                          <span>Persistent watch</span>
+                          <InlineHint content="开启后，即使没有新消息或状态变化，watcher 也会按周期持续触发；直到成员主动停止。" />
+                        </span>
+                        <Switch
+                          aria-label="Persistent watch"
+                          checked={watcherDraft.persistent}
+                          disabled={configDraft.isRole || !watcherDraft.enabled}
+                          onCheckedChange={(checked) => patchWatcherDraft({ persistent: checked })}
+                        />
+                      </label>
+                    </div>
+                    <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
+                      {configDraft.isRole
+                        ? "Role 成员不允许配置 Watch。先关闭 Role，才能在当前 room 为这个成员保存 watcher。"
+                        : "Persistent watch 会等首个 interval 到达后才触发；之后即使没有新房间消息，也会产出 heartbeat digest。若期间出现新消息或成员状态变化，digest 会带上这些增量。"}
+                    </div>
                     <div className="flex flex-wrap justify-end gap-2">
-                      <Button size="sm" variant="secondary" onClick={saveWatcher}>
+                      <Button size="sm" variant="secondary" onClick={saveWatcher} disabled={configDraft.isRole}>
                         Save watcher
                       </Button>
                       {watcher ? (

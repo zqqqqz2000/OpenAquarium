@@ -61,11 +61,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { badgeToneProps } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
 
 const ACCENT_TONES = ["paper", "postit", "blueprint", "correction"] as const;
+const CODEX_THINKING_DEPTHS = ["low", "mid", "high", "extra-high"] as const;
+
+function supportsCodexThinkingDepth(args: {
+  modelProfileId?: string;
+  providerKind: string;
+  globalConfig: GlobalWorkspaceConfig;
+}): boolean {
+  return (args.globalConfig.modelProfiles.find((profile) => profile.id === args.modelProfileId)?.binding.kind ?? args.providerKind) === "codex-acp";
+}
 
 function ScopeNote(props: { directory: string }) {
   return (
@@ -213,6 +223,25 @@ function resolveProfileLabel(args: {
   }
 
   return `${args.providerLabel} (legacy)`;
+}
+
+function InlineHint(props: { content: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border px-1 text-[11px] font-semibold leading-none text-muted-foreground"
+          aria-label="Show help"
+        >
+          !!
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-72 text-sm leading-6">
+        {props.content}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function ModelProfileEditor(props: {
@@ -1157,6 +1186,30 @@ export function TemplateStudioDialog(props: {
                                 </SelectContent>
                               </Select>
                             </label>
+                            {supportsCodexThinkingDepth({
+                              modelProfileId: activeMember.modelProfileId,
+                              providerKind: activeMember.provider.kind,
+                              globalConfig,
+                            }) ? (
+                              <label className="flex flex-col gap-2">
+                                <span className="text-sm font-medium">Codex thinking depth</span>
+                                <Select
+                                  value={activeMember.codexThinkingDepth ?? "high"}
+                                  onValueChange={(value) => patchMemberDraft(selectedTemplate.id, activeMember.id, { codexThinkingDepth: value as (typeof CODEX_THINKING_DEPTHS)[number] })}
+                                >
+                                  <SelectTrigger className="w-full">
+                                    <SelectValue placeholder="Select thinking depth" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {CODEX_THINKING_DEPTHS.map((depth) => (
+                                      <SelectItem key={depth} value={depth}>
+                                        {depth}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </label>
+                            ) : null}
 
                             <div className="grid gap-3 md:grid-cols-2">
                               <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
@@ -1167,23 +1220,34 @@ export function TemplateStudioDialog(props: {
                                   onCheckedChange={(checked) => patchMemberDraft(selectedTemplate.id, activeMember.id, { acceptsDirectMessages: checked })}
                                 />
                               </label>
-                              <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
-                                <span className="text-sm font-medium">Monitor all room messages</span>
-                                <Switch
-                                  aria-label="Template monitor all room messages"
-                                  checked={activeMember.observeAllRoomMessages}
-                                  onCheckedChange={(checked) => patchMemberDraft(selectedTemplate.id, activeMember.id, { observeAllRoomMessages: checked })}
-                                />
-                              </label>
                             </div>
 
-                            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_11rem]">
+                            <div className="grid gap-3 md:grid-cols-2">
                               <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
-                                <span className="text-sm font-medium">Watcher enabled by default</span>
+                                <span className="flex items-center gap-2 text-sm font-medium">
+                                  <span>Watch</span>
+                                  <InlineHint content="新建 room 时，默认是否为这个模板成员创建常规 watcher。" />
+                                </span>
                                 <Switch
                                   aria-label="Template watcher enabled"
                                   checked={activeMember.watchEnabled}
-                                  onCheckedChange={(checked) => patchMemberDraft(selectedTemplate.id, activeMember.id, { watchEnabled: checked })}
+                                  onCheckedChange={(checked) =>
+                                    patchMemberDraft(selectedTemplate.id, activeMember.id, {
+                                      watchEnabled: checked,
+                                      watchPersistent: checked ? activeMember.watchPersistent : false,
+                                    })}
+                                />
+                              </label>
+                              <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                                <span className="flex items-center gap-2 text-sm font-medium">
+                                  <span>Persistent watch</span>
+                                  <InlineHint content="新建 room 后，即使没有新变化，这个 watcher 也会按周期持续触发。" />
+                                </span>
+                                <Switch
+                                  aria-label="Template persistent watch"
+                                  checked={activeMember.watchPersistent}
+                                  disabled={!activeMember.watchEnabled}
+                                  onCheckedChange={(checked) => patchMemberDraft(selectedTemplate.id, activeMember.id, { watchPersistent: checked })}
                                 />
                               </label>
                               <label className="flex flex-col gap-2">

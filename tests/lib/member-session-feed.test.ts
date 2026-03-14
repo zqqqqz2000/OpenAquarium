@@ -95,8 +95,8 @@ describe("member session feed", () => {
       roomId: room.id,
       memberId: lead.id,
       kind: "status",
-      title: "Tool call",
-      content: "Read message-feed.ts (called)",
+      title: "Tool call [call_1]",
+      content: "Read message-feed.ts",
       createdAt: "2026-03-09T07:30:01.200Z",
     };
     snapshot.taskTraces.trace_0203 = {
@@ -115,8 +115,8 @@ describe("member session feed", () => {
       roomId: room.id,
       memberId: lead.id,
       kind: "status",
-      title: "Tool completed",
-      content: "Read message-feed.ts (completed)",
+      title: "Tool completed [call_1]",
+      content: "Read message-feed.ts",
       createdAt: "2026-03-09T08:00:00.100Z",
     };
     snapshot.taskTraces.trace_0205 = {
@@ -147,6 +147,108 @@ describe("member session feed", () => {
       `room:${leadReply.id}`,
     ]);
     expect(activityEntry.prompt).toContain("原始上下文消息");
+  });
+
+  it("falls back to the latest pending tool call when ACP reports a generic dynamic tool completion", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "lead");
+
+    if (!lead) {
+      throw new Error("Expected a lead member");
+    }
+
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.memberId === lead.id);
+    if (!leadTask) {
+      throw new Error("Expected a lead task");
+    }
+
+    snapshot.taskTraces.trace_0210 = {
+      id: "trace_0210",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "Tool call",
+      content: "Read member-session-feed.ts",
+      createdAt: "2026-03-09T07:30:01.200Z",
+    };
+    snapshot.taskTraces.trace_0211 = {
+      id: "trace_0211",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "Tool completed",
+      content: "acp.acp_provider_agent_dynamic_tool",
+      createdAt: "2026-03-09T07:30:01.300Z",
+    };
+    snapshot.taskTraceOrderByTask[leadTask.id] = ["trace_0210", "trace_0211"];
+
+    const entries = getMemberSessionTimelineEntries(snapshot, room, lead);
+    const activityEntry = entries.find((entry) => entry.type === "activity" && entry.taskId === leadTask.id);
+
+    if (!activityEntry || activityEntry.type !== "activity") {
+      throw new Error("Expected a task activity entry");
+    }
+
+    const toolEvents = activityEntry.events.filter((event) => event.type === "tool");
+    expect(toolEvents).toHaveLength(1);
+    expect(toolEvents[0]).toMatchObject({
+      toolName: "Read member-session-feed.ts",
+      status: "completed",
+    });
+  });
+
+  it("treats legacy tool running titles as the same tool record when completion arrives", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "lead");
+
+    if (!lead) {
+      throw new Error("Expected a lead member");
+    }
+
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.memberId === lead.id);
+    if (!leadTask) {
+      throw new Error("Expected a lead task");
+    }
+
+    snapshot.taskTraces.trace_0212 = {
+      id: "trace_0212",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "Tool running",
+      content: "oa_send_group_message",
+      createdAt: "2026-03-09T07:30:01.200Z",
+    };
+    snapshot.taskTraces.trace_0213 = {
+      id: "trace_0213",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "Tool completed",
+      content: "acp.acp_provider_agent_dynamic_tool",
+      createdAt: "2026-03-09T07:30:01.300Z",
+    };
+    snapshot.taskTraceOrderByTask[leadTask.id] = ["trace_0212", "trace_0213"];
+
+    const entries = getMemberSessionTimelineEntries(snapshot, room, lead);
+    const activityEntry = entries.find((entry) => entry.type === "activity" && entry.taskId === leadTask.id);
+
+    if (!activityEntry || activityEntry.type !== "activity") {
+      throw new Error("Expected a task activity entry");
+    }
+
+    const toolEvents = activityEntry.events.filter((event) => event.type === "tool");
+    expect(toolEvents).toHaveLength(1);
+    expect(toolEvents[0]).toMatchObject({
+      toolName: "oa_send_group_message",
+      status: "completed",
+    });
   });
 
   it("merges consecutive internal replies and restarts the stream after a tool boundary", () => {

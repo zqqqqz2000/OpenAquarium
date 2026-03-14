@@ -32,6 +32,8 @@ const providerBindingSchema = z.object({
   capabilities: z.array(z.string().min(1)).default(["prompt", "cancel"]),
 });
 
+const codexThinkingDepthSchema = z.enum(["low", "mid", "high", "extra-high"]);
+
 const persistedTeamMemberBlueprintSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -44,11 +46,13 @@ const persistedTeamMemberBlueprintSchema = z.object({
   isEntryMember: z.boolean().optional(),
   observeAllRoomMessages: z.boolean().optional(),
   acceptsDirectMessages: z.boolean().optional(),
+  codexThinkingDepth: codexThinkingDepthSchema.optional(),
   skills: z.array(persistedSkillSchema),
   watch: z
     .object({
       intervalMinutes: z.number().int().positive(),
       enabledByDefault: z.boolean(),
+      persistent: z.boolean().optional(),
     })
     .optional(),
 });
@@ -131,8 +135,8 @@ const TEMPLATE_JSON_SCHEMA = {
             accentTone: { enum: ["paper", "postit", "blueprint", "correction"] },
             modelProfileId: { type: "string" },
             isEntryMember: { type: "boolean" },
-            observeAllRoomMessages: { type: "boolean" },
             acceptsDirectMessages: { type: "boolean" },
+            codexThinkingDepth: { enum: ["low", "mid", "high", "extra-high"] },
             provider: {
               type: "object",
               required: ["kind", "label", "command", "args", "env", "capabilities"],
@@ -168,6 +172,7 @@ const TEMPLATE_JSON_SCHEMA = {
               properties: {
                 intervalMinutes: { type: "integer", minimum: 1 },
                 enabledByDefault: { type: "boolean" },
+                persistent: { type: "boolean" },
               },
             },
           },
@@ -229,13 +234,16 @@ function normalizePersistedTemplates(
       return allMemberIds;
     })(),
     members: template.members.map((member) => ({
-      ...member,
       id: member.id.trim(),
       name: member.name.trim(),
       handle: member.handle.trim(),
       summary: member.summary.trim(),
       prompt: member.prompt.trim(),
+      accentTone: member.accentTone,
       modelProfileId: member.modelProfileId?.trim() || undefined,
+      isEntryMember: member.isEntryMember,
+      acceptsDirectMessages: member.acceptsDirectMessages,
+      codexThinkingDepth: member.codexThinkingDepth,
       skills: normalizeSkills(member.skills),
       provider: {
         ...member.provider,
@@ -248,6 +256,13 @@ function normalizePersistedTemplates(
         workingDirectory: member.provider.workingDirectory?.trim() || undefined,
         capabilities: member.provider.capabilities.map((capability) => capability.trim()).filter(Boolean),
       },
+      watch: member.watch
+        ? {
+            intervalMinutes: member.watch.intervalMinutes,
+            enabledByDefault: member.watch.enabledByDefault,
+            persistent: member.watch.persistent,
+          }
+        : undefined,
     })),
   }));
 }

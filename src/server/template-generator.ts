@@ -18,6 +18,7 @@ import { isCommandAvailable } from "./acp-session";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 
 const accentToneSchema = z.enum(["paper", "postit", "blueprint", "correction"]);
+const codexThinkingDepthSchema = z.enum(["low", "mid", "high", "extra-high"]);
 
 const skillSchema = z.object({
   id: z.string().min(1),
@@ -45,13 +46,14 @@ const memberBlueprintSchema = z.object({
   accentTone: accentToneSchema,
   provider: providerSchema,
   isEntryMember: z.boolean().default(false),
-  observeAllRoomMessages: z.boolean().default(false),
   acceptsDirectMessages: z.boolean().default(true),
+  codexThinkingDepth: codexThinkingDepthSchema.optional(),
   skills: z.array(skillSchema).min(1).max(8),
   watch: z
     .object({
       intervalMinutes: z.number().int().positive().max(24 * 60),
       enabledByDefault: z.boolean().default(true),
+      persistent: z.boolean().default(false),
     })
     .optional(),
 });
@@ -95,7 +97,7 @@ function summarizeReferenceTemplates(templates: TeamTemplate[]): string {
         handle: member.handle,
         summary: member.summary,
         isEntryMember: member.isEntryMember ?? false,
-        observeAllRoomMessages: member.observeAllRoomMessages ?? false,
+        codexThinkingDepth: member.codexThinkingDepth,
         hasWatcher: Boolean(member.watch),
         providerKind: member.provider.kind,
         providerCommand: member.provider.command,
@@ -130,7 +132,6 @@ function buildTemplateGenerationPrompt(brief: string, references: TeamTemplate[]
     "7. Use ACP providers only: kind must be codex-acp or generic-acp.",
     "8. Prefer codex-acp for coding-oriented members. Use generic-acp for other ACP agents such as claude-code, clerk-acp, research-acp.",
     "9. Only add watch when a member should periodically consume room deltas.",
-    "10. observeAllRoomMessages means the member can inspect the whole room history; it is not itself a separate role.",
     "",
     "[Useful Command References]",
     '- Group message: "./bin/oa-room-send --scope group --text \\"status update\\""',
@@ -144,6 +145,7 @@ function buildTemplateGenerationPrompt(brief: string, references: TeamTemplate[]
     "- Make each member prompt tell the model to publish brief visible progress updates during longer tasks so the user is not left waiting in silence.",
     "- In generated prompts, make clear that visible room replies and direct messages are rendered as Markdown for the user, including code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas.",
     "- In generated prompts, teach that @handle is only a passive reference and @>handle is the real active assignment syntax.",
+    "- In generated prompts, treat `/role-add`, `/role-remove`, and `/role-rename` as shared capabilities that exist globally, but only authorize them for a member when the prompt explicitly says `允许使用岗位员工命令`; otherwise add `不允许使用岗位员工命令`.",
     "- Use a mix of entry, implementation, research, QA, recorder, incident, or data roles as appropriate to the brief.",
     "- Make skills complementary; do not duplicate every member.",
     "- Prefer 3 to 5 members unless the brief is clearly small or clearly broad.",
@@ -239,13 +241,14 @@ function normalizeMember(
     accentTone: member.accentTone,
     provider,
     isEntryMember: member.isEntryMember,
-    observeAllRoomMessages: member.observeAllRoomMessages,
     acceptsDirectMessages: member.acceptsDirectMessages,
+    codexThinkingDepth: member.codexThinkingDepth,
     skills: member.skills.map(normalizeSkill),
     watch: member.watch
       ? {
           intervalMinutes: Math.max(1, Math.round(member.watch.intervalMinutes)),
           enabledByDefault: member.watch.enabledByDefault,
+          persistent: member.watch.persistent ?? false,
         }
       : undefined,
   };
@@ -258,7 +261,6 @@ function sanitizeDraft(draft: TemplateDraft, brief: string): TeamTemplate {
   const normalizedMembers = members.map((member, index) => ({
     ...member,
     isEntryMember: entryIndex === -1 ? index === 0 : index === entryIndex,
-    observeAllRoomMessages: index === entryIndex ? true : member.observeAllRoomMessages,
   }));
   const seed = slugify(draft.name) || slugify(brief) || "generated-pod";
 

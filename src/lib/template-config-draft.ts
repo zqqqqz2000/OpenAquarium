@@ -1,5 +1,6 @@
 import type {
   AccentTone,
+  CodexThinkingDepth,
   ProviderBinding,
   ProviderModelProfileId,
   TeamMemberBlueprint,
@@ -14,15 +15,17 @@ export interface TemplateMemberDraft {
   id: string;
   name: string;
   handle: string;
+  isRole: boolean;
   summary: string;
   prompt: string;
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
   provider: ProviderBinding;
   isEntryMember: boolean;
-  observeAllRoomMessages: boolean;
   acceptsDirectMessages: boolean;
+  codexThinkingDepth?: CodexThinkingDepth;
   watchEnabled: boolean;
+  watchPersistent: boolean;
   watchIntervalMinutes: string;
   skills: SkillDraft[];
 }
@@ -48,6 +51,7 @@ function createWatchBlueprint(draft: TemplateMemberDraft): WatchBlueprint | unde
   return {
     intervalMinutes: Math.round(intervalMinutes),
     enabledByDefault: true,
+    persistent: draft.watchPersistent,
   };
 }
 
@@ -88,15 +92,17 @@ function createTemplateMemberDraft(member: TeamMemberBlueprint): TemplateMemberD
     id: member.id,
     name: member.name,
     handle: member.handle,
+    isRole: member.isRole === true,
     summary: member.summary,
     prompt: member.prompt,
     accentTone: member.accentTone,
     modelProfileId: member.modelProfileId,
     provider: cloneProviderBinding(member.provider),
     isEntryMember: member.isEntryMember ?? false,
-    observeAllRoomMessages: member.observeAllRoomMessages ?? false,
     acceptsDirectMessages: member.acceptsDirectMessages ?? true,
+    codexThinkingDepth: member.codexThinkingDepth,
     watchEnabled: Boolean(member.watch),
+    watchPersistent: member.watch?.persistent ?? false,
     watchIntervalMinutes: member.watch ? String(member.watch.intervalMinutes) : "15",
     skills: member.skills.map((skill) => ({
       id: skill.id,
@@ -138,15 +144,17 @@ export function addEmptyTemplateMemberDraft(
       id: token,
       name: `Member ${memberNumber}`,
       handle: token,
+      isRole: false,
       summary: "New team member.",
       prompt: "Handle tasks for your role, coordinate with the team, and send short visible progress updates when work takes time.",
       accentTone: sourceMember.accentTone ?? args.templateAccentTone,
       modelProfileId: sourceMember.modelProfileId,
       provider: cloneProviderBinding(sourceMember.provider),
       isEntryMember: members.length === 0,
-      observeAllRoomMessages: members.length === 0,
       acceptsDirectMessages: sourceMember.acceptsDirectMessages,
+      codexThinkingDepth: sourceMember.codexThinkingDepth,
       watchEnabled: false,
+      watchPersistent: false,
       watchIntervalMinutes: sourceMember.watchIntervalMinutes,
       skills: [],
     },
@@ -174,13 +182,14 @@ function buildTemplateMemberBlueprint(draft: TemplateMemberDraft): TeamMemberBlu
     id: draft.id.trim(),
     name: draft.name.trim(),
     handle: draft.handle.trim().replace(/^@/u, ""),
+    isRole: draft.isRole,
     summary: draft.summary.trim(),
     prompt: draft.prompt.trim(),
     accentTone: draft.accentTone,
     modelProfileId: draft.modelProfileId?.trim() || undefined,
     isEntryMember: draft.isEntryMember,
-    observeAllRoomMessages: draft.observeAllRoomMessages,
     acceptsDirectMessages: draft.acceptsDirectMessages,
+    codexThinkingDepth: draft.codexThinkingDepth,
     provider: cloneProviderBinding(draft.provider),
     skills: toSkillDefinitions(draft.skills),
     watch: createWatchBlueprint(draft),

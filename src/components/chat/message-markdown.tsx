@@ -193,12 +193,12 @@ function splitTextNodeWithMentions(
   const nextChildren: MarkdownChildNode[] = [];
   let cursor = 0;
 
-  for (const match of value.matchAll(/@>([\p{L}\p{N}_-]+)|@([\p{L}\p{N}_-]+)/gu)) {
+  for (const match of value.matchAll(/@>([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)?)|@([\p{L}\p{N}_-]+)/gu)) {
     const matchedText = match[0];
     const matchIndex = match.index ?? 0;
     const assignmentHandle = match[1];
     const referenceHandle = match[2];
-    const handle = assignmentHandle ?? referenceHandle;
+    const handle = assignmentHandle ? assignmentHandle.split("/").at(-1) : referenceHandle;
 
     if (!matchedText || !handle) {
       continue;

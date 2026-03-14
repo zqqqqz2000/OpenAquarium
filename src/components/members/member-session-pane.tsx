@@ -590,6 +590,7 @@ export function MemberSessionPane(props: {
             onSend={(content) => onSendDirectMessage?.(content)}
             sending={member.status === "running"}
             fixedDirectMemberId={member.id}
+            draftKey={`member:${room.id}:${member.id}`}
           />
         </div>
       </CardContent>

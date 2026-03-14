@@ -1,9 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import "../helpers/mock-streamdown-plugins";
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { createRuntimeContext } from "@/domain/identity";
 import { postMemberMessage, postUserMessage } from "@/domain/workspace";
 import type { UpdateMemberConfigInput } from "@/domain/model";
@@ -11,6 +13,10 @@ import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profile
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
 describe("MemberStudioDialog", () => {
+  function renderDialog(node: ReactElement) {
+    return render(<TooltipProvider>{node}</TooltipProvider>);
+  }
+
   it("saves member configuration, supports entry-member promotion, and exposes watcher actions", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
@@ -22,14 +28,13 @@ describe("MemberStudioDialog", () => {
     const onSaveWatcher = vi.fn();
     const onRunWatcher = vi.fn();
 
-    render(
+    renderDialog(
       <MemberStudioDialog
         snapshot={snapshot}
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         room={room}
         member={builder}
         onClose={vi.fn()}
-        onToggleMonitor={vi.fn()}
         onSaveConfig={onSaveConfig}
         onSetEntryMember={onSetEntryMember}
         onSaveWatcher={onSaveWatcher}
@@ -44,28 +49,28 @@ describe("MemberStudioDialog", () => {
     await user.type(screen.getByRole("textbox", { name: /Summary/i }), "Builder summary v2");
     await user.clear(screen.getByRole("textbox", { name: /Prompt/i }));
     await user.type(screen.getByRole("textbox", { name: /Prompt/i }), "新的 builder prompt");
+    await user.click(screen.getByRole("switch", { name: "Role" }));
     await user.click(screen.getByRole("button", { name: /Save member config/i }));
     await user.click(screen.getByRole("button", { name: /Make entry member/i }));
     await user.click(screen.getByRole("tab", { name: "Watcher" }));
     await user.clear(screen.getByRole("textbox", { name: /Interval minutes/i }));
     await user.type(screen.getByRole("textbox", { name: /Interval minutes/i }), "6");
-    await user.click(screen.getByRole("button", { name: /Save watcher/i }));
 
     const savedConfig = onSaveConfig.mock.calls[0]?.[0] as UpdateMemberConfigInput | undefined;
     expect(onSaveConfig).toHaveBeenCalledTimes(1);
     expect(savedConfig).toMatchObject({
       memberId: builder.id,
+      isRole: true,
       summary: "Builder summary v2",
       prompt: "新的 builder prompt",
       modelProfileId: "model-codex-acp-default",
     });
     expect(savedConfig?.provider.command).toBe(builder.provider.command);
     expect(onSetEntryMember).toHaveBeenCalledWith(builder.id);
-    expect(onSaveWatcher).toHaveBeenCalledWith({
-      memberId: builder.id,
-      enabled: false,
-      intervalMinutes: 6,
-    });
+    expect(screen.getByRole("switch", { name: "Watch" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Persistent watch" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Save watcher/i })).toBeDisabled();
+    expect(onSaveWatcher).not.toHaveBeenCalled();
     expect(onRunWatcher).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "Config" }));
     expect(screen.getByText("这里改的是当前 room 下这个 member 的实例配置，不会同步回 team template。")).toBeInTheDocument();
@@ -111,14 +116,13 @@ describe("MemberStudioDialog", () => {
     };
     snapshot.taskTraceOrderByTask[leadTask.id] = ["trace_0001", "trace_0002"];
 
-    render(
+    renderDialog(
       <MemberStudioDialog
         snapshot={snapshot}
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         room={room}
         member={lead}
         onClose={vi.fn()}
-        onToggleMonitor={vi.fn()}
         onSaveConfig={vi.fn()}
         onSetEntryMember={vi.fn()}
         onSaveWatcher={vi.fn()}
@@ -163,14 +167,13 @@ describe("MemberStudioDialog", () => {
       content: `${sourceMessage.content}\n${"补充上下文 ".repeat(120)}`,
     };
 
-    render(
+    renderDialog(
       <MemberStudioDialog
         snapshot={snapshot}
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         room={room}
         member={lead}
         onClose={vi.fn()}
-        onToggleMonitor={vi.fn()}
         onSaveConfig={vi.fn()}
         onSetEntryMember={vi.fn()}
         onSaveWatcher={vi.fn()}
@@ -280,14 +283,13 @@ describe("MemberStudioDialog", () => {
       createRuntimeContext(901, "2026-03-09T07:31:00.000Z"),
     );
 
-    render(
+    renderDialog(
       <MemberStudioDialog
         snapshot={snapshot}
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         room={room}
         member={lead}
         onClose={vi.fn()}
-        onToggleMonitor={vi.fn()}
         onSaveConfig={vi.fn()}
         onSetEntryMember={vi.fn()}
         onSaveWatcher={vi.fn()}
@@ -344,7 +346,6 @@ describe("MemberStudioDialog", () => {
         room={room}
         member={lead}
         onClose={vi.fn()}
-        onToggleMonitor={vi.fn()}
         onSaveConfig={vi.fn()}
         onSetEntryMember={vi.fn()}
         onSaveWatcher={vi.fn()}

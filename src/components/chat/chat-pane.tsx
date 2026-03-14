@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { ArrowDown, Bot, ChevronDown, ChevronRight, FolderKanban, GitBranch, Link2, TerminalSquare, Users } from "lucide-react";
+import { ArrowDown, Bot, FolderKanban, GitBranch, Link2, TerminalSquare, Users } from "lucide-react";
 
 import type {
   ChatMessage,
@@ -17,6 +17,7 @@ import { MemberAvatar } from "@/components/members/member-avatar";
 import { MemberHoverPreview } from "@/components/members/member-hover-preview";
 import { RunningMembersHoverCard } from "@/components/members/running-members-hover-card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { getMemberActivitySummary } from "@/components/members/member-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,7 +34,7 @@ import {
   getMessageRecipientHandles,
   type MessageHandlerSummary,
 } from "@/lib/message-feed";
-import { badgeToneProps, compactBadgeClassName, memberStatusBadgeProps } from "@/lib/ui-tone";
+import { badgeToneProps, compactBadgeClassName } from "@/lib/ui-tone";
 import { cn, summarizePrompt } from "@/lib/utils";
 
 function PresenceBadge(props: { active: boolean; activeLabel: string; idleLabel: string; className?: string }) {
@@ -127,14 +128,29 @@ function buildRunningRoomMemberPreviews(args: {
 
 function groupMembersByRole(members: TeamMember[]): RoomRoleGroup[] {
   return members.reduce<RoomRoleGroup[]>((groups, member) => {
-    const existingGroup = groups.find((group) => group.roleId === member.roleId);
+    const roleId = typeof member.roleId === "string" && member.roleId.trim().length > 0 ? member.roleId.trim() : member.id;
+    const roleName = typeof member.roleName === "string" && member.roleName.trim().length > 0 ? member.roleName.trim() : member.handle;
+    const existingGroup = groups.find((group) => group.roleId === roleId);
     if (existingGroup) {
       existingGroup.members.push(member);
       return groups;
     }
 
-    return [...groups, { roleId: member.roleId, roleName: member.roleName, members: [member] }];
+    return [...groups, { roleId, roleName, members: [member] }];
   }, []);
+}
+
+function resolveMemberLatestPreview(
+  member: TeamMember,
+  snapshot: WorkspaceSnapshot,
+  activeRouteSummaryByMemberId: Record<string, string>,
+): string {
+  const activity = getMemberActivitySummary(snapshot, member);
+
+  return activeRouteSummaryByMemberId[member.id]
+    ?? (activity.latestMessage ? summarizePrompt(activity.latestMessage.content, 120) : undefined)
+    ?? activity.latestContentPreview
+    ?? "No recent visible update.";
 }
 
 export function ActiveRoomStatusBadge(props: {
@@ -187,6 +203,167 @@ function RoomMetaBadge(props: {
       <span className="text-foreground">{value}</span>
       {children}
     </Badge>
+  );
+}
+
+function SidebarMemberCard(props: {
+  member: TeamMember;
+  room: Room;
+  snapshot: WorkspaceSnapshot;
+  selectedMemberId?: string;
+  latestPreview?: string;
+  onOpenMember: (memberId: string) => void;
+}) {
+  const { member, onOpenMember, selectedMemberId, ...rest } = props;
+  const roleLabel = getMemberRoleLabel(member.handle);
+
+  return (
+    <MemberHoverPreview member={member} watcher={undefined}>
+      <button
+        aria-label={`Open ${roleLabel} session panel`}
+        className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        onClick={() => onOpenMember(member.id)}
+        type="button"
+      >
+        <SidebarMemberCardSurface
+          member={member}
+          {...rest}
+          selected={member.id === selectedMemberId}
+          className="hover:bg-muted/60"
+        />
+      </button>
+    </MemberHoverPreview>
+  );
+}
+
+function SidebarMemberCardSurface(props: {
+  member: TeamMember;
+  room: Room;
+  snapshot: WorkspaceSnapshot;
+  selected?: boolean;
+  latestPreview?: string;
+  className?: string;
+}) {
+  const { member, room, snapshot, selected = false, latestPreview, className } = props;
+  const summary = summarizePrompt((member.note?.trim() || member.summary || "").trim(), 140);
+  const badges = buildMemberCardBadges(member, room, snapshot);
+
+  return (
+    <div
+      className={cn(
+        "w-full rounded-2xl border border-border bg-card px-3.5 py-3 text-left shadow-sm transition-colors",
+        selected && "border-ring bg-accent/10 shadow-md",
+        member.status === "running"
+          && "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)]/95 shadow-[0_18px_36px_-32px_rgba(62,118,255,0.95)]",
+        className,
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <MemberAvatar member={member} compact active={selected} showRunningDot />
+        <div className="min-w-0 flex-1">
+          <p className="m-0 truncate text-base font-semibold tracking-tight">@{member.handle}</p>
+          {summary ? <p className="mt-1 m-0 line-clamp-2 text-sm text-muted-foreground">{summary}</p> : null}
+          {latestPreview ? <p className="mt-2 truncate text-sm text-foreground/85">{latestPreview}</p> : null}
+          {badges.length > 0 ? (
+            <div className="mt-3 border-t border-border/70 pt-3">
+              <div className="flex flex-wrap gap-1.5">
+                {badges.map((badge) => (
+                  <Badge key={badge} variant="outline">
+                    {badge}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoleGroupHoverPreview(props: {
+  group: RoomRoleGroup;
+  room: Room;
+  snapshot: WorkspaceSnapshot;
+  selectedMemberId?: string;
+  activeRouteSummaryByMemberId: Record<string, string>;
+  onOpenMember: (memberId: string) => void;
+}) {
+  const { group, room, snapshot, selectedMemberId, activeRouteSummaryByMemberId, onOpenMember } = props;
+  const previewMembers = group.members.slice(0, 3);
+  const groupHasSelectedMember = group.members.some((member) => member.id === selectedMemberId);
+
+  return (
+    <HoverCard openDelay={120}>
+      <HoverCardTrigger asChild>
+        <div
+          aria-label={`Role group ${group.roleName}`}
+          className="group relative h-[9.75rem] w-full"
+        >
+          {previewMembers.map((member, index) => {
+            const latestPreview = resolveMemberLatestPreview(member, snapshot, activeRouteSummaryByMemberId);
+            const isTopCard = index === 0;
+
+            return (
+              <div
+                key={member.id}
+                aria-hidden={!isTopCard}
+                data-role-group-preview-card={member.handle}
+                className={cn(
+                  "pointer-events-none absolute inset-x-0 top-0 transition-transform duration-150 ease-out group-hover:-translate-y-0.5",
+                )}
+                style={{
+                  left: `${index * 12}px`,
+                  right: `${index * -12}px`,
+                  top: `${index * 10}px`,
+                  zIndex: previewMembers.length - index,
+                }}
+              >
+                <SidebarMemberCardSurface
+                  member={member}
+                  room={room}
+                  snapshot={snapshot}
+                  selected={isTopCard ? groupHasSelectedMember : false}
+                  latestPreview={latestPreview}
+                  className={cn(
+                    "overflow-hidden bg-card",
+                    !isTopCard && "border-border/80 shadow-[0_14px_30px_-28px_rgba(15,23,42,0.55)]",
+                  )}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </HoverCardTrigger>
+      <HoverCardContent side="left" align="start" sideOffset={14} className="w-[min(88vw,320px)] p-2.5">
+        <div className="flex flex-col gap-2">
+          {group.members.map((member) => {
+            const latestPreview = resolveMemberLatestPreview(member, snapshot, activeRouteSummaryByMemberId);
+
+            return (
+              <button
+                key={member.id}
+                aria-label={`Open @${member.handle} session panel`}
+                className={cn(
+                  "w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                )}
+                onClick={() => onOpenMember(member.id)}
+                type="button"
+              >
+                <SidebarMemberCardSurface
+                  member={member}
+                  room={room}
+                  snapshot={snapshot}
+                  selected={member.id === selectedMemberId}
+                  latestPreview={latestPreview}
+                  className="hover:bg-muted/60"
+                />
+              </button>
+            );
+          })}
+        </div>
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 
@@ -246,38 +423,6 @@ function MemberVisibilityFilter(props: {
         );
       })}
     </div>
-  );
-}
-
-function MemberStatusBadge(props: { status: TeamMember["status"] }) {
-  const { status } = props;
-  const statusBadge = memberStatusBadgeProps(status);
-  const isRunning = status === "running";
-  const isInterrupted = status === "interrupted";
-  const label = isRunning ? "Running" : isInterrupted ? "Interrupted" : "Ready";
-
-  return (
-    <Badge
-      variant={statusBadge.variant}
-      className={cn(
-        "gap-1.5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]",
-        statusBadge.className,
-        isRunning && "shadow-[0_0_0_1px_rgba(120,150,255,0.08)]",
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          "size-1.5 rounded-full",
-          isRunning
-            ? "animate-oa-breathe bg-[color:var(--tone-blueprint-foreground)] shadow-[0_0_0_0.24rem_rgba(113,113,255,0.12)]"
-            : isInterrupted
-              ? "bg-[color:var(--tone-correction-foreground)]"
-              : "bg-muted-foreground/45",
-        )}
-      />
-      {label}
-    </Badge>
   );
 }
 
@@ -698,15 +843,6 @@ function RoomMembersSidebar(props: {
 }) {
   const { room, snapshot, members, selectedMemberId, activeRouteSummaryByMemberId, onOpenMember } = props;
   const roleGroups = useMemo(() => groupMembersByRole(members), [members]);
-  const [collapsedRoleIds, setCollapsedRoleIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    setCollapsedRoleIds([]);
-  }, [room.id]);
-
-  const toggleRoleGroup = (roleId: string): void => {
-    setCollapsedRoleIds((current) => (current.includes(roleId) ? current.filter((value) => value !== roleId) : [...current, roleId]));
-  };
 
   return (
     <aside className="absolute inset-y-0 right-0 z-20 w-[min(23rem,84vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
@@ -724,74 +860,37 @@ function RoomMembersSidebar(props: {
           <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
             <div className="flex flex-col gap-2.5">
               {roleGroups.map((group: RoomRoleGroup) => {
-                const collapsed = collapsedRoleIds.includes(group.roleId);
-                const leadMember = group.members[0];
-                if (!leadMember) {
+                if (group.members.length === 0) {
                   return null;
                 }
 
-                return (
-                  <div key={group.roleId} className="rounded-2xl border border-border/70 bg-card/35 p-2">
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-2 text-left"
-                      onClick={() => toggleRoleGroup(group.roleId)}
-                    >
-                      <div className="min-w-0">
-                        <p className="m-0 truncate text-sm font-semibold tracking-tight">{group.roleName}</p>
-                        <p className="m-0 text-xs text-muted-foreground">{group.members.length} staff</p>
-                      </div>
-                      {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                    </button>
-                    {!collapsed ? (
-                      <div className="mt-2 flex flex-col gap-2.5">
-                        {group.members.map((member: TeamMember) => {
-                          const roleLabel = getMemberRoleLabel(member.handle);
-                          const summary = summarizePrompt((member.note?.trim() || member.summary || "").trim(), 140);
-                          const activity = getMemberActivitySummary(snapshot, member);
-                          const badges = buildMemberCardBadges(member, room, snapshot);
-                          const latestPreview = activeRouteSummaryByMemberId[member.id]
-                            ?? (activity.latestMessage ? summarizePrompt(activity.latestMessage.content, 120) : undefined)
-                            ?? activity.latestContentPreview
-                            ?? "No recent visible update.";
+                if (group.members.length === 1) {
+                  const member = group.members[0];
+                  const latestPreview = resolveMemberLatestPreview(member, snapshot, activeRouteSummaryByMemberId);
 
-                          return (
-                            <MemberHoverPreview key={member.id} member={member} watcher={undefined}>
-                              <button
-                                aria-label={`Open ${roleLabel} session panel`}
-                                className={cn(
-                                  "w-full rounded-2xl border border-border bg-card px-3.5 py-3 text-left shadow-sm transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                                  member.id === selectedMemberId && "border-ring bg-accent/10 shadow-md",
-                                  member.status === "running" &&
-                                    "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)]/95 shadow-[0_18px_36px_-32px_rgba(62,118,255,0.95)]",
-                                )}
-                                onClick={() => onOpenMember(member.id)}
-                                type="button"
-                              >
-                                <div className="flex items-start gap-3">
-                                  <MemberAvatar member={member} compact active={member.id === selectedMemberId} showRunningDot />
-                                  <div className="min-w-0 flex-1">
-                                    <p className="m-0 truncate text-base font-semibold tracking-tight">@{member.handle}</p>
-                                    {summary ? <p className="mt-1 m-0 line-clamp-2 text-sm text-muted-foreground">{summary}</p> : null}
-                                    <p className="mt-2 truncate text-sm text-foreground/85">{latestPreview}</p>
-                                    <div className="mt-3 border-t border-border/70 pt-3">
-                                      <div className="flex flex-wrap gap-1.5">
-                                        {badges.map((badge) => (
-                                          <Badge key={badge} variant="outline">
-                                            {badge}
-                                          </Badge>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </button>
-                            </MemberHoverPreview>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
+                  return (
+                    <SidebarMemberCard
+                      key={group.roleId}
+                      member={member}
+                      room={room}
+                      snapshot={snapshot}
+                      selectedMemberId={selectedMemberId}
+                      latestPreview={latestPreview}
+                      onOpenMember={onOpenMember}
+                    />
+                  );
+                }
+
+                return (
+                  <RoleGroupHoverPreview
+                    key={group.roleId}
+                    group={group}
+                    room={room}
+                    snapshot={snapshot}
+                    selectedMemberId={selectedMemberId}
+                    activeRouteSummaryByMemberId={activeRouteSummaryByMemberId}
+                    onOpenMember={onOpenMember}
+                  />
                 );
               })}
             </div>

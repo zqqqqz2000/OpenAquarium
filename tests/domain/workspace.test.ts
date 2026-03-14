@@ -50,6 +50,82 @@ function createStartedProjectSnapshot(context: ReturnType<typeof createRuntimeCo
   return snapshot;
 }
 
+function cloneRoomTeamForRoleRouting(
+  snapshot: ReturnType<typeof createStartedProjectSnapshot>,
+  roomId: string,
+  overrides: {
+    builderHandles?: Array<{ handle: string; name: string; note?: string }>;
+  },
+  context: ReturnType<typeof createRuntimeContext>,
+) {
+  const room = snapshot.rooms[roomId];
+  const roomMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+  const builder = roomMembers.find((member) => member.handle === "builder");
+
+  if (!builder) {
+    throw new Error("Expected builder member");
+  }
+
+  const builderOverrides = overrides.builderHandles;
+  const nextMembers = roomMembers.flatMap((member) => {
+    if (member.id !== builder.id) {
+      return [
+        {
+          memberId: member.id,
+          roleId: member.roleId,
+          roleName: member.roleName,
+          isRole: member.isRole,
+          name: member.name,
+          handle: member.handle,
+          summary: member.summary,
+          note: member.note,
+          prompt: member.prompt,
+          accentTone: member.accentTone,
+          modelProfileId: member.modelProfileId,
+          skills: member.skills,
+          provider: member.provider,
+          isEntryMember: member.isEntryMember,
+          acceptsDirectMessages: member.acceptsDirectMessages,
+        },
+      ];
+    }
+
+    if (!builderOverrides || builderOverrides.length === 0) {
+      return [];
+    }
+
+    return builderOverrides.map((override, index) => ({
+      memberId: index === 0 ? builder.id : `builder-role-${index}`,
+      roleId: builder.roleId,
+      roleName: builder.roleName,
+      isRole: index === 0 ? builder.isRole : false,
+      name: override.name,
+      handle: override.handle,
+      summary: builder.summary,
+      note: override.note,
+      prompt: builder.prompt,
+      accentTone: builder.accentTone,
+      modelProfileId: builder.modelProfileId,
+      skills: builder.skills,
+      provider: builder.provider,
+      isEntryMember: false,
+      acceptsDirectMessages: builder.acceptsDirectMessages,
+    }));
+  });
+
+  return updateRoomTeam(
+    snapshot,
+    {
+      roomId,
+      teamName: room.teamName ?? "Product Pod Review Loop",
+      teamDescription: room.teamDescription ?? "Product pod",
+      teamAccentTone: room.teamAccentTone ?? "paper",
+      members: nextMembers,
+    },
+    context,
+  );
+}
+
 describe("workspace domain", () => {
   it("creates a virtual room before the first user message and initializes it from that message", () => {
     const context = createRuntimeContext();
@@ -232,6 +308,325 @@ describe("workspace domain", () => {
     const addressedHandles = addressedIds.map((memberId) => snapshot.members[memberId].handle);
 
     expect(addressedHandles).toEqual(["builder", "research"]);
+  });
+
+  it("keeps exact member handles ahead of role routing", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [
+          { handle: "builder", name: "Forge Crab" },
+          { handle: "builder-4", name: "Signal Heron", note: "补位质量检查" },
+        ],
+      },
+      context,
+    );
+
+    const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@>builder 继续实现");
+    const addressedHandles = addressedIds.map((memberId) => snapshot.members[memberId]?.handle);
+    const routed = postUserMessage(snapshot, { roomId, content: "@>builder 继续实现" }, context);
+    const systemMessages = (routed.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => routed.messages[messageId])
+      .filter((message) => message.author.kind === "system");
+
+    expect(addressedHandles).toEqual(["builder"]);
+    expect(systemMessages.some((message) => message.content.includes("岗位路由"))).toBe(false);
+    expect(Object.values(routed.tasks).some((task) => routed.members[task.memberId]?.handle === "builder")).toBe(true);
+  });
+
+  it("routes @>role to the only active employee and records a fixed system notice", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [{ handle: "builder-main", name: "Forge Crab" }],
+      },
+      context,
+    );
+
+    const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@>builder 继续实现");
+    const addressedHandles = addressedIds.map((memberId) => snapshot.members[memberId]?.handle);
+    const routed = postUserMessage(snapshot, { roomId, content: "@>builder 继续实现" }, context);
+    const latestSystemMessage = (routed.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => routed.messages[messageId])
+      .filter((message) => message.author.kind === "system")
+      .at(-1);
+
+    expect(addressedHandles).toEqual(["builder-main"]);
+    expect(latestSystemMessage?.content).toBe("岗位路由已执行：@>builder -> Forge Crab（@builder-main）。");
+    expect(Object.values(routed.tasks).some((task) => routed.members[task.memberId]?.handle === "builder-main")).toBe(true);
+  });
+
+  it("does not create member tasks when @>role is ambiguous across multiple employees", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [
+          { handle: "builder-1", name: "Forge Crab" },
+          { handle: "builder-4", name: "Signal Heron", note: "补位质量检查" },
+        ],
+      },
+      context,
+    );
+
+    const previousTaskCount = Object.keys(snapshot.tasks).length;
+    const routed = postUserMessage(snapshot, { roomId, content: "@>builder 继续实现" }, context);
+    const systemMessages = (routed.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => routed.messages[messageId])
+      .filter((message) => message.author.kind === "system");
+
+    expect(extractAddressedMemberIds(snapshot, roomId, "@>builder 继续实现")).toEqual([]);
+    expect(systemMessages.at(-1)?.content).toBe("岗位路由未执行：@>builder 对应多个活跃员工，请改用 @>builder/employee-handle。");
+    expect(Object.keys(routed.tasks)).toHaveLength(previousTaskCount);
+    expect(Object.values(routed.tasks).filter((task) => task.sourceMessageId === routed.messageOrderByRoom[roomId]?.at(-2))).toEqual(
+      [],
+    );
+  });
+
+  it("does not create member tasks when @>role has no active employees", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [],
+      },
+      context,
+    );
+
+    const previousTaskCount = Object.keys(snapshot.tasks).length;
+    const routed = postUserMessage(snapshot, { roomId, content: "@>builder 继续实现" }, context);
+    const systemMessages = (routed.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => routed.messages[messageId])
+      .filter((message) => message.author.kind === "system");
+
+    expect(extractAddressedMemberIds(snapshot, roomId, "@>builder 继续实现")).toEqual([]);
+    expect(systemMessages.at(-1)?.content).toBe("岗位路由未执行：@>builder 对应岗位当前无人可接。");
+    expect(Object.keys(routed.tasks)).toHaveLength(previousTaskCount);
+  });
+
+  it("routes @>role/employee-handle to the matching employee inside that role", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [
+          { handle: "builder-1", name: "Forge Crab" },
+          { handle: "builder-4", name: "Signal Heron", note: "补位质量检查" },
+        ],
+      },
+      context,
+    );
+
+    const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@>builder/builder-4 跟进");
+    const routed = postUserMessage(snapshot, { roomId, content: "@>builder/builder-4 跟进" }, context);
+    const latestSystemMessage = (routed.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => routed.messages[messageId])
+      .filter((message) => message.author.kind === "system")
+      .at(-1);
+
+    expect(addressedIds.map((memberId) => snapshot.members[memberId]?.handle)).toEqual(["builder-4"]);
+    expect(latestSystemMessage?.content).toBe("岗位路由已执行：@>builder/builder-4 -> Signal Heron（@builder-4）。");
+    expect(Object.values(routed.tasks).some((task) => routed.members[task.memberId]?.handle === "builder-4")).toBe(true);
+  });
+
+  it("answers /role-note and /role-notes with room-only system messages", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [
+          { handle: "builder-1", name: "Forge Crab" },
+          { handle: "builder-4", name: "Signal Heron", note: "补位质量检查" },
+        ],
+      },
+      context,
+    );
+
+    const previousTaskCount = Object.keys(snapshot.tasks).length;
+    const withSingleNote = postUserMessage(snapshot, { roomId, content: "/role-note builder-4" }, context);
+    const withRoleNotes = postUserMessage(withSingleNote, { roomId, content: "/role-notes builder" }, context);
+    const newMessages = (withRoleNotes.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => withRoleNotes.messages[messageId])
+      .slice(-4);
+
+    expect(Object.keys(withRoleNotes.tasks)).toHaveLength(previousTaskCount);
+    expect(newMessages[1]?.author.kind).toBe("system");
+    expect(newMessages[1]?.content).toBe("查询岗位备注：@builder-4（岗位：builder）备注：补位质量检查。");
+    expect(newMessages[3]?.author.kind).toBe("system");
+    expect(newMessages[3]?.content).toContain("查询岗位备注：@builder 岗位下共有 2 名员工。");
+    expect(newMessages[3]?.content).toContain("- @builder-1（岗位：builder）备注为空。");
+    expect(newMessages[3]?.content).toContain("- @builder-4（岗位：builder）备注：补位质量检查。");
+  });
+
+  it("adds, renames, and removes role employees through room-only commands", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+    const builder = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder");
+
+    if (!builder) {
+      throw new Error("Expected builder member");
+    }
+
+    snapshot = updateMemberConfig(snapshot, {
+      memberId: builder.id,
+      isRole: true,
+      summary: builder.summary,
+      prompt: builder.prompt,
+      modelProfileId: builder.modelProfileId,
+      acceptsDirectMessages: builder.acceptsDirectMessages,
+      codexThinkingDepth: builder.codexThinkingDepth,
+      skills: builder.skills,
+      provider: builder.provider,
+    });
+
+    const taskCountBefore = Object.keys(snapshot.tasks).length;
+    snapshot = postUserMessage(snapshot, { roomId, content: "/role-add builder builder-5 补位实现" }, context);
+    snapshot = postUserMessage(snapshot, { roomId, content: "/role-rename builder-5 Signal Heron" }, context);
+    snapshot = postUserMessage(snapshot, { roomId, content: "/role-remove builder builder-5" }, context);
+
+    const room = snapshot.rooms[roomId];
+    const recentMessages = (snapshot.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => snapshot.messages[messageId])
+      .slice(-6);
+
+    expect(Object.keys(snapshot.tasks)).toHaveLength(taskCountBefore);
+    expect(recentMessages[1]?.content).toBe("@builder-5（岗位：builder）被 You 加入群组，原因是：补位实现。");
+    expect(recentMessages[3]?.content).toBe("@builder-5（岗位：builder）被 You 更名为 Signal Heron。");
+    expect(recentMessages[5]?.content).toBe("@builder-5（岗位：builder）被 You 移除群组。");
+    expect(room.memberIds.map((memberId) => snapshot.members[memberId]?.handle)).not.toContain("builder-5");
+  });
+
+  it("prevents enabling Watch for role members", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+    const builder = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder");
+
+    if (!builder) {
+      throw new Error("Expected builder member");
+    }
+
+    snapshot = updateMemberConfig(snapshot, {
+      memberId: builder.id,
+      isRole: true,
+      summary: builder.summary,
+      prompt: builder.prompt,
+      modelProfileId: builder.modelProfileId,
+      acceptsDirectMessages: builder.acceptsDirectMessages,
+      codexThinkingDepth: builder.codexThinkingDepth,
+      skills: builder.skills,
+      provider: builder.provider,
+    });
+
+    expect(() =>
+      upsertMemberWatcher(
+        snapshot,
+        {
+          memberId: builder.id,
+          enabled: true,
+          intervalMinutes: 5,
+          persistent: false,
+        },
+        context,
+      ),
+    ).toThrow("Role members cannot enable Watch.");
+  });
+
+  it("lets member-issued role staffing commands depend on prompt authorization", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+    const builder = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder");
+
+    if (!builder) {
+      throw new Error("Expected builder member");
+    }
+
+    snapshot = updateMemberConfig(snapshot, {
+      memberId: builder.id,
+      isRole: true,
+      summary: builder.summary,
+      prompt: builder.prompt,
+      modelProfileId: builder.modelProfileId,
+      acceptsDirectMessages: builder.acceptsDirectMessages,
+      codexThinkingDepth: builder.codexThinkingDepth,
+      skills: builder.skills,
+      provider: builder.provider,
+    });
+
+    const unauthorized = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: builder.id,
+        content: "/role-add builder builder-7",
+      },
+      context,
+    );
+
+    const unauthorizedNotice = (unauthorized.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => unauthorized.messages[messageId])
+      .at(-1);
+
+    expect(unauthorizedNotice?.content).toBe("岗位成员命令未执行：当前 prompt 未授权使用 /role-add、/role-remove、/role-rename。");
+    expect(unauthorized.rooms[roomId]?.memberIds.map((memberId) => unauthorized.members[memberId]?.handle)).not.toContain("builder-7");
+
+    const authorizedSnapshot = updateMemberConfig(snapshot, {
+      memberId: builder.id,
+      isRole: true,
+      summary: builder.summary,
+      prompt: `${builder.prompt} 允许使用岗位员工命令。`,
+      modelProfileId: builder.modelProfileId,
+      acceptsDirectMessages: builder.acceptsDirectMessages,
+      codexThinkingDepth: builder.codexThinkingDepth,
+      skills: builder.skills,
+      provider: builder.provider,
+    });
+
+    const authorized = postMemberMessage(
+      authorizedSnapshot,
+      {
+        roomId,
+        memberId: builder.id,
+        content: "/role-add builder builder-7",
+      },
+      context,
+    );
+
+    expect(authorized.rooms[roomId]?.memberIds.map((memberId) => authorized.members[memberId]?.handle)).toContain("builder-7");
   });
 
   it("copies template default visible members into new rooms", () => {
@@ -474,6 +869,28 @@ describe("workspace domain", () => {
     expect(secondRun.watchers[watcherId].lastConsumedMessageId).toBeDefined();
   });
 
+  it("emits a heartbeat digest for persistent watch even without new activity", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const watcherId = snapshot.rooms[roomId].watcherIds[0];
+    snapshot.watchers[watcherId] = {
+      ...snapshot.watchers[watcherId],
+      persistent: true,
+    };
+
+    snapshot = runWatcher(snapshot, watcherId, context);
+    const next = runWatcher(snapshot, watcherId, context);
+    const digestMessages = (next.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => next.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(digestMessages).toHaveLength(1);
+    expect(digestMessages[0].content).toContain("[Persistent watch]");
+    expect(digestMessages[0].content).toContain("No new room messages or member state changes");
+  });
+
   it("triggers a watcher when member state changes even without a new room message", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);
@@ -627,7 +1044,7 @@ describe("workspace domain", () => {
     expect(latestDigest.content).not.toContain("本轮 watcher digest");
   });
 
-  it("does not auto-route monitor-all members when a teammate sends a normal group reply", () => {
+  it("does not auto-route unrelated members when a teammate sends a normal group reply", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);
 
@@ -635,7 +1052,6 @@ describe("workspace domain", () => {
     const scribe = Object.values(snapshot.members).find((member) => member.handle === "scribe");
     const roomId = snapshot.selection.roomId!;
     expect(lead?.activeTaskId).toBeDefined();
-    expect(scribe?.observeAllRoomMessages).toBe(true);
     expect(scribe?.activeTaskId).toBeUndefined();
 
     snapshot = postMemberMessage(
@@ -652,6 +1068,48 @@ describe("workspace domain", () => {
 
     expect(Object.values(snapshot.tasks).filter((task) => task.status === "running")).toHaveLength(0);
     expect(snapshot.members[scribe!.id].activeTaskId).toBeUndefined();
+  });
+
+  it("does not emit duplicate role notices when a teammate quotes @> syntax inside code spans", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+    const lead = Object.values(snapshot.members).find((member) => member.isEntryMember);
+
+    if (!lead?.activeTaskId) {
+      throw new Error("Expected an active entry member task");
+    }
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [],
+      },
+      context,
+    );
+
+    const routed = postUserMessage(snapshot, { roomId, content: "@>builder 继续实现" }, context);
+    const noticeCountBeforeReply = (routed.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => routed.messages[messageId])
+      .filter((message) => message.author.kind === "system" && message.content === "岗位路由未执行：@>builder 对应岗位当前无人可接。").length;
+
+    const withReply = postMemberMessage(
+      routed,
+      {
+        roomId,
+        memberId: lead.id,
+        taskId: lead.activeTaskId,
+        content: "当前阻塞点是代码样式的 ``@>builder`` 只是示例，不应再触发岗位路由。",
+      },
+      context,
+    );
+    const noticeCountAfterReply = (withReply.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => withReply.messages[messageId])
+      .filter((message) => message.author.kind === "system" && message.content === "岗位路由未执行：@>builder 对应岗位当前无人可接。").length;
+
+    expect(noticeCountBeforeReply).toBe(1);
+    expect(noticeCountAfterReply).toBe(1);
   });
 
   it("updates member config, supports entry-member reassignment, and respects direct-message opt-out", () => {
@@ -790,29 +1248,33 @@ describe("workspace domain", () => {
         members: [
           {
             memberId: lead.id,
+            roleId: lead.roleId,
+            roleName: lead.roleName,
             name: lead.name,
             handle: lead.handle,
             summary: lead.summary,
+            note: lead.note,
             prompt: lead.prompt,
             accentTone: lead.accentTone,
             modelProfileId: lead.modelProfileId,
             skills: lead.skills,
             provider: lead.provider,
             isEntryMember: true,
-            observeAllRoomMessages: lead.observeAllRoomMessages,
             acceptsDirectMessages: lead.acceptsDirectMessages,
           },
           {
             memberId: builder.id,
+            roleId: builder.roleId,
+            roleName: builder.roleName,
             name: builder.name,
             handle: builder.handle,
             summary: "Room-local builder summary",
+            note: builder.note,
             prompt: builder.prompt,
             accentTone: builder.accentTone,
             modelProfileId: builder.modelProfileId,
             skills: builder.skills,
             provider: builder.provider,
-            observeAllRoomMessages: builder.observeAllRoomMessages,
             acceptsDirectMessages: builder.acceptsDirectMessages,
             watch: {
               enabled: true,
@@ -821,16 +1283,18 @@ describe("workspace domain", () => {
           },
           {
             memberId: "qa-temp",
+            roleId: builder.roleId,
+            roleName: builder.roleName,
             name: "Signal Heron",
-            handle: "qa",
-            summary: "负责当前 room 的质量检查。",
-            prompt: "检查当前 room 里的实现和回归风险。",
-            accentTone: "blueprint",
+            handle: "builder-4",
+            summary: builder.summary,
+            note: "补位质量检查。",
+            prompt: builder.prompt,
+            accentTone: builder.accentTone,
             modelProfileId: builder.modelProfileId,
             skills: builder.skills,
             provider: builder.provider,
-            observeAllRoomMessages: false,
-            acceptsDirectMessages: true,
+            acceptsDirectMessages: builder.acceptsDirectMessages,
           },
         ],
       },
@@ -839,7 +1303,10 @@ describe("workspace domain", () => {
 
     const nextRoom = snapshot.rooms[roomId];
     const nextMembers = nextRoom.memberIds.map((memberId) => snapshot.members[memberId]);
-    const qa = nextMembers.find((member) => member.handle === "qa");
+    const qa = nextMembers.find((member) => member.handle === "builder-4");
+    const systemNotices = (snapshot.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => snapshot.messages[messageId])
+      .filter((message) => message.author.kind === "system");
 
     expect(nextRoom.teamName).toBe("Room Tiger Team");
     expect(nextRoom.teamDescription).toBe("只对当前 room 生效的本地团队配置。");
@@ -851,5 +1318,8 @@ describe("workspace domain", () => {
     expect(nextMembers.find((member) => member.id === builder.id)?.summary).toBe("Room-local builder summary");
     expect(nextRoom.watcherIds.some((watcherId) => snapshot.watchers[watcherId]?.memberId === builder.id)).toBe(true);
     expect(qa?.roomId).toBe(roomId);
+    expect(qa?.roleId).toBe(builder.roleId);
+    expect(systemNotices.some((message) => message.content.includes("Signal Heron 被 You 加入群组"))).toBe(true);
+    expect(systemNotices.some((message) => message.content.includes(`${research.name} 被 You 移除群组`))).toBe(true);
   });
 });

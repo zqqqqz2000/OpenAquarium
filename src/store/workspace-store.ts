@@ -15,7 +15,6 @@ import {
   postMemberMessage,
   postUserMessage,
   runWatcher,
-  toggleMemberMonitor,
   toggleWatcher,
   updateMemberPrompt,
 } from "@/domain/workspace";
@@ -50,7 +49,6 @@ export interface WorkspaceStoreState {
   selectMember: (memberId?: MemberId) => void;
   sendUserMessage: (content: string, directMemberId?: MemberId) => void;
   advanceMember: (memberId: MemberId) => void;
-  toggleMemberMonitoring: (memberId: MemberId) => void;
   toggleWatcherSchedule: (watcherId: string) => void;
   runWatcher: (watcherId: string) => void;
   updatePrompt: (memberId: MemberId, prompt: string) => void;
@@ -144,11 +142,6 @@ export function createWorkspaceStore(initialSnapshot = createDefaultWorkspaceSna
       );
 
       set({ snapshot: next });
-    },
-    toggleMemberMonitoring(memberId) {
-      set((state) => ({
-        snapshot: toggleMemberMonitor(state.snapshot, memberId),
-      }));
     },
     toggleWatcherSchedule(watcherId) {
       set((state) => ({

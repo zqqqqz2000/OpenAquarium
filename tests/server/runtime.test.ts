@@ -340,7 +340,6 @@ describe("WorkspaceRuntime", () => {
               capabilities: ["prompt", "cancel", "loadSession"],
             },
             isEntryMember: true,
-            observeAllRoomMessages: false,
             acceptsDirectMessages: true,
             skills: [],
           },
@@ -1326,7 +1325,6 @@ describe("WorkspaceRuntime", () => {
           skills: lead.skills,
           provider: lead.provider,
           isEntryMember: true,
-          observeAllRoomMessages: lead.observeAllRoomMessages,
           acceptsDirectMessages: lead.acceptsDirectMessages,
         },
         {
@@ -1339,7 +1337,6 @@ describe("WorkspaceRuntime", () => {
           modelProfileId: builder.modelProfileId,
           skills: builder.skills,
           provider: builder.provider,
-          observeAllRoomMessages: builder.observeAllRoomMessages,
           acceptsDirectMessages: builder.acceptsDirectMessages,
           watch: {
             enabled: true,
@@ -1356,7 +1353,6 @@ describe("WorkspaceRuntime", () => {
           modelProfileId: builder.modelProfileId,
           skills: builder.skills,
           provider: builder.provider,
-          observeAllRoomMessages: false,
           acceptsDirectMessages: true,
         },
       ],

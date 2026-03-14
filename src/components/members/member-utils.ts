@@ -43,7 +43,7 @@ export function getMemberActivitySummary(snapshot: WorkspaceSnapshot, member: Te
     return {
       latestMessage,
       latestContentPreview: latestMessage ? summarizeLastLine(latestMessage.content, 120) : undefined,
-      statusLine: member.acceptsDirectMessages ? "Direct open" : "Direct closed",
+      statusLine: latestMessage ? summarizeLastLine(latestMessage.content, 120) : "No recent visible update.",
     };
   }
 

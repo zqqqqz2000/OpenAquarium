@@ -1,4 +1,12 @@
-import type { ProviderBinding, ProviderModelProfileId, SkillDefinition, TeamMember, UpdateMemberConfigInput, WatchSubscription } from "@/domain/model";
+import type {
+  CodexThinkingDepth,
+  ProviderBinding,
+  ProviderModelProfileId,
+  SkillDefinition,
+  TeamMember,
+  UpdateMemberConfigInput,
+  WatchSubscription,
+} from "@/domain/model";
 
 export interface SkillDraft {
   id: string;
@@ -17,16 +25,19 @@ export interface ProviderConfigDraftFields {
 }
 
 export interface MemberConfigDraft {
+  isRole: boolean;
   summary: string;
   prompt: string;
   modelProfileId?: ProviderModelProfileId;
   acceptsDirectMessages: boolean;
+  codexThinkingDepth?: CodexThinkingDepth;
   skills: SkillDraft[];
 }
 
 export interface WatcherDraft {
   enabled: boolean;
   intervalMinutes: string;
+  persistent?: boolean;
 }
 
 export function splitLines(text: string): string[] {
@@ -83,10 +94,12 @@ export function toSkillDefinitions(skills: SkillDraft[]): SkillDefinition[] {
 
 export function createMemberConfigDraft(member: TeamMember): MemberConfigDraft {
   return {
+    isRole: member.isRole === true,
     summary: member.summary,
     prompt: member.prompt,
     modelProfileId: member.modelProfileId,
     acceptsDirectMessages: member.acceptsDirectMessages,
+    codexThinkingDepth: member.codexThinkingDepth,
     skills: member.skills.map((skill) => ({
       id: skill.id,
       name: skill.name,
@@ -100,6 +113,7 @@ export function createWatcherDraft(watcher?: WatchSubscription): WatcherDraft {
   return {
     enabled: watcher?.enabled ?? false,
     intervalMinutes: watcher ? String(watcher.intervalMinutes) : "15",
+    persistent: watcher?.persistent ?? false,
   };
 }
 
@@ -130,10 +144,12 @@ export function buildProviderFromDraft(existingProvider: ProviderBinding, draft:
 export function buildMemberConfigInput(member: TeamMember, draft: MemberConfigDraft): UpdateMemberConfigInput {
   return {
     memberId: member.id,
+    isRole: draft.isRole,
     summary: draft.summary.trim(),
     prompt: draft.prompt.trim(),
     modelProfileId: draft.modelProfileId?.trim() || undefined,
     acceptsDirectMessages: draft.acceptsDirectMessages,
+    codexThinkingDepth: draft.codexThinkingDepth,
     skills: toSkillDefinitions(draft.skills),
     provider: member.provider,
   };
@@ -143,6 +159,7 @@ export function buildWatcherConfigInput(memberId: string, draft: WatcherDraft): 
   memberId: string;
   enabled: boolean;
   intervalMinutes: number;
+  persistent?: boolean;
 } {
   const intervalMinutes = Number(draft.intervalMinutes);
 
@@ -154,5 +171,6 @@ export function buildWatcherConfigInput(memberId: string, draft: WatcherDraft): 
     memberId,
     enabled: draft.enabled,
     intervalMinutes: Math.round(intervalMinutes),
+    persistent: draft.persistent ?? false,
   };
 }

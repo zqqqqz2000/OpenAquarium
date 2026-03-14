@@ -15,6 +15,7 @@ import { isPathInsideRoot, resolveAcpSessionWorkingDirectory, resolveProjectWork
 import { TerminalRegistry } from "./terminal-registry";
 
 const ACP_CANCEL_TIMEOUT_MS = 5 * 1000;
+const TOOL_STATUS_PREFIX = "__oa_tool__";
 
 export interface MemberToolHost {
   sendGroupMessage(input: { roomId: RoomId; memberId: string; taskId: string; content: string }): Promise<void>;
@@ -84,6 +85,10 @@ function summarizeToolChunk(input: { toolName?: string } | object | string | num
   };
 
   return maybeToolInput.toolName?.trim() || ACP_PROVIDER_AGENT_DYNAMIC_TOOL_NAME;
+}
+
+function encodeToolStatusSummary(input: { toolCallId?: string; toolName: string; status: "running" | "completed" }): string {
+  return `${TOOL_STATUS_PREFIX}${JSON.stringify(input)}`;
 }
 
 export class AcpMemberExecutor implements MemberExecutor {
@@ -184,25 +189,32 @@ export class AcpMemberExecutor implements MemberExecutor {
                 await callbacks.onDraft(finalContent);
                 return;
               case "tool-call":
+                {
+                  const toolName = summarizeToolChunk(chunk.input as { toolName?: string } | object | string | number | boolean | null | undefined);
+                  const toolCallId = "toolCallId" in chunk && typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined;
                 this.logger?.info("acp-stream-tool-call", {
                   taskId: request.task.id,
                   memberId: request.member.id,
                   memberHandle: request.member.handle,
-                  summary: summarizeToolChunk(chunk.input as { toolName?: string } | object | string | number | boolean | null | undefined),
+                  summary: toolName,
+                  toolCallId: toolCallId ?? null,
                 });
-                await callbacks.onStatus(
-                  `${summarizeToolChunk(chunk.input as { toolName?: string } | object | string | number | boolean | null | undefined)} (called)`,
-                );
+                await callbacks.onStatus(encodeToolStatusSummary({ toolCallId, toolName, status: "running" }));
                 return;
+                }
               case "tool-result":
+                {
+                  const toolCallId = "toolCallId" in chunk && typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined;
                 this.logger?.info("acp-stream-tool-result", {
                   taskId: request.task.id,
                   memberId: request.member.id,
                   memberHandle: request.member.handle,
                   toolName: chunk.toolName,
+                  toolCallId: toolCallId ?? null,
                 });
-                await callbacks.onStatus(`${chunk.toolName} (completed)`);
+                await callbacks.onStatus(encodeToolStatusSummary({ toolCallId, toolName: chunk.toolName, status: "completed" }));
                 return;
+                }
               case "reasoning-delta":
                 if (chunk.text.trim().length > 0) {
                   this.logger?.info("acp-stream-reasoning-delta", {

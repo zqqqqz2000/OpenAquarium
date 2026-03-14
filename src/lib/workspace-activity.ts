@@ -33,6 +33,23 @@ function parseTimestamp(value: string | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function applyNewerTimestamp(
+  activity: MutableRoomActivitySummary | undefined,
+  timestamp: string | undefined,
+): void {
+  if (!activity || !timestamp) {
+    return;
+  }
+
+  const timestampMs = parseTimestamp(timestamp);
+  if (timestampMs <= activity.updatedAtMs) {
+    return;
+  }
+
+  activity.updatedAt = timestamp;
+  activity.updatedAtMs = timestampMs;
+}
+
 export function formatRelativeActivityShort(timestamp: string, referenceTimeMs = Date.now()): string {
   const updatedAtMs = parseTimestamp(timestamp);
   if (updatedAtMs <= 0) {
@@ -74,6 +91,14 @@ export function buildProjectActivitySummaries(snapshot: WorkspaceSnapshot): Proj
   ) as Record<string, MutableRoomActivitySummary>;
 
   Object.values(snapshot.tasks).forEach((task) => {
+    applyNewerTimestamp(roomActivityById[task.roomId], task.updatedAt);
+  });
+
+  Object.values(snapshot.taskTraces).forEach((trace) => {
+    applyNewerTimestamp(roomActivityById[trace.roomId], trace.createdAt);
+  });
+
+  Object.values(snapshot.tasks).forEach((task) => {
     const activity = roomActivityById[task.roomId];
     if (!activity || task.status !== "running") {
       return;
@@ -105,7 +130,10 @@ export function buildProjectActivitySummaries(snapshot: WorkspaceSnapshot): Proj
         .map((roomId) => roomActivityById[roomId])
         .filter((room): room is MutableRoomActivitySummary => Boolean(room))
         .sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.room.name.localeCompare(right.room.name));
-      const projectUpdatedAt = project.updatedAt ?? project.createdAt;
+      const projectUpdatedAtFallback = project.updatedAt ?? project.createdAt;
+      const roomUpdatedAt = rooms[0]?.updatedAt;
+      const projectUpdatedAt =
+        parseTimestamp(roomUpdatedAt) > parseTimestamp(projectUpdatedAtFallback) ? roomUpdatedAt : projectUpdatedAtFallback;
       const projectUpdatedAtMs = parseTimestamp(projectUpdatedAt);
 
       return {

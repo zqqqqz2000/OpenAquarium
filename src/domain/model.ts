@@ -16,6 +16,7 @@ export type MessageStatus = "sent" | "streaming" | "completed" | "interrupted";
 export type MessageVisibility = "public" | "internal";
 export type AccentTone = "paper" | "postit" | "blueprint" | "correction";
 export type TaskTraceKind = "task-started" | "task-prompt" | "draft" | "status" | "completed" | "error" | "interrupted";
+export type CodexThinkingDepth = "low" | "mid" | "high" | "extra-high";
 
 export interface SkillDefinition {
   id: string;
@@ -50,12 +51,14 @@ export interface ProviderModelProfile {
 export interface WatchBlueprint {
   intervalMinutes: number;
   enabledByDefault: boolean;
+  persistent?: boolean;
 }
 
 export interface TeamMemberBlueprint {
   id: string;
   name: string;
   handle: string;
+  isRole?: boolean;
   summary: string;
   prompt: string;
   accentTone: AccentTone;
@@ -63,8 +66,8 @@ export interface TeamMemberBlueprint {
   skills: SkillDefinition[];
   provider: ProviderBinding;
   isEntryMember?: boolean;
-  observeAllRoomMessages?: boolean;
   acceptsDirectMessages?: boolean;
+  codexThinkingDepth?: CodexThinkingDepth;
   watch?: WatchBlueprint;
 }
 
@@ -108,17 +111,21 @@ export interface TeamMember {
   id: MemberId;
   roomId: RoomId;
   blueprintId: string;
+  roleId: string;
+  roleName: string;
   name: string;
   handle: string;
+  isRole?: boolean;
   summary: string;
+  note?: string;
   prompt: string;
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
   skills: SkillDefinition[];
   provider: ProviderBinding;
-  observeAllRoomMessages: boolean;
   acceptsDirectMessages: boolean;
   isEntryMember: boolean;
+  codexThinkingDepth?: CodexThinkingDepth;
   status: MemberStatus;
   providerSessionId?: string;
   activeTaskId?: TaskId;
@@ -131,6 +138,8 @@ export interface WatchSubscription {
   memberId: MemberId;
   intervalMinutes: number;
   enabled: boolean;
+  persistent?: boolean;
+  pausedUntilActivity?: boolean;
   lastConsumedMessageId?: MessageId;
   lastConsumedStateAt?: string;
 }
@@ -248,10 +257,12 @@ export interface CompleteTaskInput {
 
 export interface UpdateMemberConfigInput {
   memberId: MemberId;
+  isRole?: boolean;
   summary: string;
   prompt: string;
   modelProfileId?: ProviderModelProfileId;
   acceptsDirectMessages: boolean;
+  codexThinkingDepth?: CodexThinkingDepth;
   skills: SkillDefinition[];
   provider: ProviderBinding;
 }
@@ -268,21 +279,26 @@ export interface UpdateTemplateInput {
 export interface RoomWatcherConfig {
   enabled: boolean;
   intervalMinutes: number;
+  persistent?: boolean;
 }
 
 export interface RoomTeamMemberInput {
   memberId: string;
+  roleId?: string;
+  roleName?: string;
+  isRole?: boolean;
   name: string;
   handle: string;
   summary: string;
+  note?: string;
   prompt: string;
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
   skills: SkillDefinition[];
   provider: ProviderBinding;
   isEntryMember?: boolean;
-  observeAllRoomMessages?: boolean;
   acceptsDirectMessages?: boolean;
+  codexThinkingDepth?: CodexThinkingDepth;
   watch?: RoomWatcherConfig;
 }
 
@@ -314,4 +330,5 @@ export interface UpsertWatcherInput {
   memberId: MemberId;
   enabled: boolean;
   intervalMinutes: number;
+  persistent?: boolean;
 }

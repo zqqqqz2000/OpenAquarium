@@ -9,6 +9,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { badgeToneProps } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
 
+interface ChatComposerDraftState {
+  text: string;
+  directMemberId?: string;
+}
+
+const chatComposerDraftStore = new Map<string, ChatComposerDraftState>();
+
 export function ChatComposer(props: {
   className?: string;
   contentClassName?: string;
@@ -21,6 +28,7 @@ export function ChatComposer(props: {
   fixedDirectMemberId?: string;
   preferredDirectMemberId?: string;
   focusSignal?: number;
+  draftKey?: string;
 }) {
   const {
     className,
@@ -34,9 +42,11 @@ export function ChatComposer(props: {
     fixedDirectMemberId,
     preferredDirectMemberId,
     focusSignal,
+    draftKey,
   } = props;
-  const [text, setText] = useState("");
-  const [directMemberId, setDirectMemberId] = useState<string | undefined>(fixedDirectMemberId);
+  const initialDraft = draftKey ? chatComposerDraftStore.get(draftKey) : undefined;
+  const [text, setText] = useState(initialDraft?.text ?? "");
+  const [directMemberId, setDirectMemberId] = useState<string | undefined>(fixedDirectMemberId ?? initialDraft?.directMemberId);
   const [sendError, setSendError] = useState<string | undefined>();
   const [caretPosition, setCaretPosition] = useState(0);
   const [dismissedMentionKey, setDismissedMentionKey] = useState<string | undefined>();
@@ -57,6 +67,16 @@ export function ChatComposer(props: {
   }, [fixedDirectMemberId]);
 
   useEffect(() => {
+    if (!draftKey) {
+      return;
+    }
+
+    const nextDraft = chatComposerDraftStore.get(draftKey);
+    setText(nextDraft?.text ?? "");
+    setDirectMemberId(fixedDirectMemberId ?? nextDraft?.directMemberId);
+  }, [draftKey, fixedDirectMemberId]);
+
+  useEffect(() => {
     if (fixedDirectMemberId !== undefined || preferredDirectMemberId === undefined) {
       return;
     }
@@ -75,6 +95,22 @@ export function ChatComposer(props: {
   useEffect(() => {
     setActiveMentionIndex(0);
   }, [visibleMentionMatch?.key]);
+
+  useEffect(() => {
+    if (!draftKey) {
+      return;
+    }
+
+    if (text.length === 0 && !resolvedDirectMemberId) {
+      chatComposerDraftStore.delete(draftKey);
+      return;
+    }
+
+    chatComposerDraftStore.set(draftKey, {
+      text,
+      directMemberId: allowTargetSelection ? resolvedDirectMemberId : undefined,
+    });
+  }, [allowTargetSelection, draftKey, resolvedDirectMemberId, text]);
 
   const applyMention = (member: TeamMember): void => {
     if (!visibleMentionMatch) {
@@ -113,6 +149,9 @@ export function ChatComposer(props: {
     }
     setSendError(undefined);
     setDismissedMentionKey(undefined);
+    if (draftKey) {
+      chatComposerDraftStore.delete(draftKey);
+    }
     void Promise.resolve(onSend(nextText, nextDirectMemberId)).catch((caughtError) => {
       setText(nextText);
       setCaretPosition(nextText.length);
@@ -131,6 +170,7 @@ export function ChatComposer(props: {
             ref={textareaRef}
             className={cn(
               "min-h-20 resize-none border-0 bg-transparent px-0 py-0 text-[1.05rem] leading-7 shadow-none ring-0 focus-visible:border-transparent focus-visible:ring-0",
+              "max-h-48 overflow-y-auto",
               textareaClassName,
             )}
             placeholder={directMember ? `私发给 @${directMember.handle}，发送后会打断对方当前任务。` : "在群里说点什么。输入 @ 提到成员，输入 @> 派单。"}

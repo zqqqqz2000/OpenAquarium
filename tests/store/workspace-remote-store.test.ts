@@ -32,7 +32,6 @@ function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
     sendTemplateStudioChat: () => Promise.reject(new Error("not implemented")),
     setEntryMember: () => Promise.reject(new Error("not implemented")),
     upsertWatcher: () => Promise.reject(new Error("not implemented")),
-    toggleMemberMonitoring: () => Promise.reject(new Error("not implemented")),
     toggleWatcher: () => Promise.reject(new Error("not implemented")),
     runWatcher: () => Promise.reject(new Error("not implemented")),
     generateTemplate: (brief: string) => {

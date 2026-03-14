@@ -2,6 +2,7 @@ import type { NewSessionResponse } from "@agentclientprotocol/sdk";
 import type { ACPProvider } from "@mcpc-tech/acp-ai-provider";
 
 export const CODEX_ACP_MODE_ENV_KEY = "OA_CODEX_ACP_MODE";
+export const CODEX_ACP_THINKING_DEPTH_ENV_KEY = "OA_CODEX_ACP_THINKING_DEPTH";
 export const CODEX_ACP_SUPPORTED_MODES = ["read-only", "auto", "full-access"] as const;
 export const CODEX_ACP_DEFAULT_MODE = "full-access";
 

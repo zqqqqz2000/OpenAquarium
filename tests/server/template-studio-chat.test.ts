@@ -68,7 +68,6 @@ function createTemplate(): TeamTemplate {
           capabilities: ["prompt", "cancel", "loadSession"],
         },
         isEntryMember: true,
-        observeAllRoomMessages: true,
         acceptsDirectMessages: true,
         skills: [],
       },

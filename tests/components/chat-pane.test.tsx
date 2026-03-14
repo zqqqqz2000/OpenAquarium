@@ -156,6 +156,256 @@ describe("ChatPane", () => {
     expect(onOpenMember).toHaveBeenCalledWith(research.id);
   });
 
+  it("renders multi-staff roles as one stacked hover group while keeping single staff cards unchanged", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const builder = members.find((member) => member.handle === "builder");
+    const research = members.find((member) => member.handle === "research");
+
+    if (!builder || !research) {
+      throw new Error("Expected builder and research members in seeded room");
+    }
+
+    snapshot.members[research.id] = {
+      ...research,
+      roleId: builder.roleId,
+      roleName: builder.roleName,
+    };
+
+    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={nextMembers}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Open @lead session panel" })).toBeInTheDocument();
+    const roleGroup = screen.getByLabelText(`Role group ${builder.roleName}`);
+
+    expect(within(roleGroup).getAllByText("Codex ACP").length).toBeGreaterThan(0);
+
+    await user.hover(roleGroup);
+
+    expect(await screen.findByRole("button", { name: "Open @builder session panel" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open @research session panel" })).toBeInTheDocument();
+  });
+
+  it("keeps stacked preview layers stable when a non-top member is selected", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const builder = members.find((member) => member.handle === "builder");
+    const research = members.find((member) => member.handle === "research");
+
+    if (!builder || !research) {
+      throw new Error("Expected builder and research members in seeded room");
+    }
+
+    snapshot.members[research.id] = {
+      ...research,
+      roleId: builder.roleId,
+      roleName: builder.roleName,
+    };
+
+    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={nextMembers}
+          selectedMemberId={research.id}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const roleGroup = screen.getByLabelText(`Role group ${builder.roleName}`);
+    const previewCards = roleGroup.querySelectorAll("[data-role-group-preview-card]");
+    const topCardSurface = previewCards[0]?.firstElementChild;
+    const nextCardSurface = previewCards[1]?.firstElementChild;
+
+    expect(previewCards).toHaveLength(2);
+    expect(topCardSurface).toHaveClass("border-ring");
+    expect(nextCardSurface).not.toHaveClass("border-ring");
+    expect(nextCardSurface).not.toHaveClass("bg-accent/10");
+    expect(nextCardSurface).toHaveClass("bg-card");
+  });
+
+  it("does not collapse all sidebar members into one group when legacy role ids are empty", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const builder = members.find((member) => member.handle === "builder");
+    const research = members.find((member) => member.handle === "research");
+    const lead = members.find((member) => member.handle === "lead");
+
+    if (!builder || !research || !lead) {
+      throw new Error("Expected lead, builder, and research members in seeded room");
+    }
+
+    snapshot.members[lead.id] = { ...lead, roleId: "" };
+    snapshot.members[builder.id] = { ...builder, roleId: "" };
+    snapshot.members[research.id] = { ...research, roleId: "" };
+
+    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={nextMembers}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Open @lead session panel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open @builder session panel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open @research session panel" })).toBeInTheDocument();
+
+    await user.hover(screen.getByRole("button", { name: "Open @lead session panel" }));
+
+    expect(screen.queryByLabelText(`Role group ${lead.roleName}`)).not.toBeInTheDocument();
+  });
+
+  it("falls back to member ids and handles when legacy role fields are missing", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const builder = members.find((member) => member.handle === "builder");
+    const research = members.find((member) => member.handle === "research");
+
+    if (!builder || !research) {
+      throw new Error("Expected builder and research members in seeded room");
+    }
+
+    snapshot.members[builder.id] = {
+      ...builder,
+      roleId: undefined as never,
+      roleName: undefined as never,
+    };
+    snapshot.members[research.id] = {
+      ...research,
+      roleId: undefined as never,
+      roleName: undefined as never,
+    };
+
+    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={nextMembers}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Open @builder session panel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open @research session panel" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Role group builder")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Role group research")).not.toBeInTheDocument();
+  });
+
+  it("falls back safely when legacy role fields are non-strings", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const builder = members.find((member) => member.handle === "builder");
+    const research = members.find((member) => member.handle === "research");
+
+    if (!builder || !research) {
+      throw new Error("Expected builder and research members in seeded room");
+    }
+
+    snapshot.members[builder.id] = {
+      ...builder,
+      roleId: 42 as never,
+      roleName: { label: "builder" } as never,
+    };
+    snapshot.members[research.id] = {
+      ...research,
+      roleId: false as never,
+      roleName: ["research"] as never,
+    };
+
+    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={nextMembers}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Open @builder session panel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open @research session panel" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Role group builder")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Role group research")).not.toBeInTheDocument();
+  });
+
   it("emphasizes member roles over display names in the sidebar", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];

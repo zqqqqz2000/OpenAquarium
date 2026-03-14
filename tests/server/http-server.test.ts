@@ -87,7 +87,6 @@ describe("workspace http api routing", () => {
               capabilities: ["prompt", "cancel", "loadSession"],
             },
             isEntryMember: true,
-            observeAllRoomMessages: true,
             skills: [
               {
                 id: "send",
@@ -270,7 +269,6 @@ describe("workspace http api routing", () => {
                   skills: member.skills,
                   provider: member.provider,
                   isEntryMember: member.isEntryMember,
-                  observeAllRoomMessages: member.observeAllRoomMessages,
                   acceptsDirectMessages: member.acceptsDirectMessages,
                   watch: {
                     enabled: true,
@@ -288,7 +286,6 @@ describe("workspace http api routing", () => {
                   skills: member.skills,
                   provider: member.provider,
                   isEntryMember: member.isEntryMember,
-                  observeAllRoomMessages: member.observeAllRoomMessages,
                   acceptsDirectMessages: member.acceptsDirectMessages,
                 },
           )
@@ -304,7 +301,6 @@ describe("workspace http api routing", () => {
               skills: [],
               provider: runtime.getSnapshot().members[builderId].provider,
               isEntryMember: false,
-              observeAllRoomMessages: false,
               acceptsDirectMessages: true,
             },
           ]),

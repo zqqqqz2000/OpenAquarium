@@ -45,6 +45,7 @@ export interface MemberSessionToolEvent {
   createdAt: string;
   updatedAt: string;
   toolName: string;
+  toolCallId?: string;
   status: "running" | "completed";
   callContent?: string;
   resultContent?: string;
@@ -220,7 +221,7 @@ function classifyInternalEvent(entry: MemberSessionTraceEntry): MemberSessionInt
     return "interrupted";
   }
 
-  if (/^Tool call/iu.test(entry.title)) {
+  if (/^Tool (call|running)/iu.test(entry.title)) {
     return "tool-call";
   }
 
@@ -254,7 +255,7 @@ function isReplyInternalKind(kind: MemberSessionInternalEvent["kind"]): kind is 
 function normalizeToolEventName(content: string): string {
   return content
     .replace(/^Tool:\s*/iu, "")
-    .replace(/\s+\((called|completed)\)\s*$/iu, "")
+    .replace(/\s+\((called|completed|running)\)\s*$/iu, "")
     .trim();
 }
 
@@ -264,7 +265,44 @@ function getToolEventName(event: MemberSessionInternalEvent): string {
     return normalizedContent;
   }
 
-  return event.title.replace(/^Tool\s+(call|completed|result)\s*/iu, "").replace(/^:\s*/u, "").trim() || "Tool";
+  return event.title.replace(/^Tool\s+(call|running|completed|result)\s*/iu, "").replace(/^:\s*/u, "").trim() || "Tool";
+}
+
+function extractToolCallId(event: MemberSessionInternalEvent): string | undefined {
+  const titleMatch = event.title.match(/\[([^\]]+)\]\s*$/u);
+  if (titleMatch?.[1]) {
+    return titleMatch[1].trim();
+  }
+
+  return undefined;
+}
+
+function isGenericDynamicToolName(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+
+  return normalized === "acp.acp_provider_agent_dynamic_tool";
+}
+
+function removePendingToolIndex(
+  pendingToolEventIndexes: Map<string, number[]>,
+  pendingToolIndexes: number[],
+  toolKey: string,
+  pendingIndex: number,
+): void {
+  const keyedIndexes = pendingToolEventIndexes.get(toolKey);
+  if (keyedIndexes) {
+    const nextKeyedIndexes = keyedIndexes.filter((candidateIndex) => candidateIndex !== pendingIndex);
+    if (nextKeyedIndexes.length > 0) {
+      pendingToolEventIndexes.set(toolKey, nextKeyedIndexes);
+    } else {
+      pendingToolEventIndexes.delete(toolKey);
+    }
+  }
+
+  const stackIndex = pendingToolIndexes.lastIndexOf(pendingIndex);
+  if (stackIndex >= 0) {
+    pendingToolIndexes.splice(stackIndex, 1);
+  }
 }
 
 function getActivityEventUpdatedAt(event: MemberSessionActivityEvent): string {
@@ -371,6 +409,7 @@ function buildInternalEvents(args: {
 function mergeToolExecutionEvents(internalEvents: MemberSessionInternalEvent[]): MemberSessionExecutionEvent[] {
   const executionEvents: MemberSessionExecutionEvent[] = [];
   const pendingToolEventIndexes = new Map<string, number[]>();
+  const pendingToolIndexes: number[] = [];
 
   for (const event of internalEvents) {
     if (event.kind !== "tool-call" && event.kind !== "tool-result") {
@@ -379,7 +418,8 @@ function mergeToolExecutionEvents(internalEvents: MemberSessionInternalEvent[]):
     }
 
     const toolName = getToolEventName(event);
-    const toolKey = toolName.toLowerCase();
+    const toolCallId = extractToolCallId(event);
+    const toolKey = toolCallId ?? toolName.toLowerCase();
 
     if (event.kind === "tool-call") {
       executionEvents.push({
@@ -388,27 +428,41 @@ function mergeToolExecutionEvents(internalEvents: MemberSessionInternalEvent[]):
         createdAt: event.createdAt,
         updatedAt: event.createdAt,
         toolName,
+        toolCallId,
         status: "running",
         callContent: event.content,
       });
       const pendingIndexes = pendingToolEventIndexes.get(toolKey) ?? [];
-      pendingIndexes.push(executionEvents.length - 1);
+      const pendingIndex = executionEvents.length - 1;
+      pendingIndexes.push(pendingIndex);
       pendingToolEventIndexes.set(toolKey, pendingIndexes);
+      pendingToolIndexes.push(pendingIndex);
       continue;
     }
 
     const pendingIndexes = pendingToolEventIndexes.get(toolKey);
-    const pendingIndex = pendingIndexes?.at(-1);
+    const pendingIndex = pendingIndexes?.at(-1)
+      ?? (toolCallId || !isGenericDynamicToolName(toolName) ? undefined : pendingToolIndexes.at(-1));
     const pendingToolEvent = pendingIndex !== undefined ? executionEvents[pendingIndex] : undefined;
 
     if (pendingToolEvent && pendingToolEvent.type === "tool") {
+      const resolvedPendingIndex = pendingIndex;
+      if (resolvedPendingIndex === undefined) {
+        continue;
+      }
       pendingToolEvent.status = "completed";
       pendingToolEvent.updatedAt = event.createdAt;
       pendingToolEvent.resultContent = event.content;
-      pendingIndexes?.pop();
-      if (!pendingIndexes || pendingIndexes.length === 0) {
-        pendingToolEventIndexes.delete(toolKey);
-      }
+      removePendingToolIndex(
+        pendingToolEventIndexes,
+        pendingToolIndexes,
+        pendingToolEvent.toolCallId ?? pendingToolEvent.toolName.toLowerCase(),
+        resolvedPendingIndex,
+      );
+      continue;
+    }
+
+    if (isGenericDynamicToolName(toolName)) {
       continue;
     }
 
@@ -418,6 +472,7 @@ function mergeToolExecutionEvents(internalEvents: MemberSessionInternalEvent[]):
       createdAt: event.createdAt,
       updatedAt: event.createdAt,
       toolName,
+      toolCallId,
       status: "completed",
       resultContent: event.content,
     });

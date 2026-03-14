@@ -65,7 +65,6 @@ describe("AcpTemplateGenerationTransport", () => {
               capabilities: ["prompt", "cancel", "loadSession"],
             },
             isEntryMember: true,
-            observeAllRoomMessages: true,
             acceptsDirectMessages: true,
             skills: [
               {
@@ -91,7 +90,6 @@ describe("AcpTemplateGenerationTransport", () => {
               env: {},
               capabilities: ["prompt", "cancel", "loadSession"],
             },
-            observeAllRoomMessages: false,
             acceptsDirectMessages: true,
             skills: [
               {

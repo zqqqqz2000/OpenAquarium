@@ -26,4 +26,15 @@ describe("MessageMarkdown", () => {
     expect(container.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(2);
     expect(getByText("重点", { selector: '[data-streamdown="strong"]' })).toBeInTheDocument();
   });
+
+  it("highlights role/employee assignment syntax using the resolved employee handle", () => {
+    const { getByText } = render(
+      <MessageMarkdown
+        content="@>builder/builder-4 跟进实现"
+        mentionHandles={new Set(["builder-4"])}
+      />,
+    );
+
+    expect(getByText("@>builder/builder-4")).toHaveAttribute("data-message-mention-kind", "assignment");
+  });
 });

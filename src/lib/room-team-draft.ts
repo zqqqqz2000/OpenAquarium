@@ -1,5 +1,6 @@
 import type {
   AccentTone,
+  CodexThinkingDepth,
   ProviderBinding,
   ProviderModelProfileId,
   Room,
@@ -13,18 +14,23 @@ import { resolveRoomTeamSummary } from "@/lib/room-team";
 
 export interface RoomTeamMemberDraft {
   id: string;
+  roleId: string;
+  roleName: string;
+  isRole: boolean;
   name: string;
   handle: string;
   summary: string;
+  note?: string;
   prompt: string;
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
   provider: ProviderBinding;
   isEntryMember: boolean;
-  observeAllRoomMessages: boolean;
   acceptsDirectMessages: boolean;
+  codexThinkingDepth?: CodexThinkingDepth;
   watchConfigured: boolean;
   watchEnabled: boolean;
+  watchPersistent: boolean;
   watchIntervalMinutes: string;
   skills: SkillDraft[];
 }
@@ -68,6 +74,18 @@ function resolveNextMemberToken(members: RoomTeamMemberDraft[]): string {
   return `room-member-${index}`;
 }
 
+function resolveRoleTemplateIdentity(memberNumber: number): {
+  name: string;
+  handle: string;
+  roleName: string;
+} {
+  return {
+    name: `Role ${memberNumber}`,
+    handle: `role-${memberNumber}`,
+    roleName: `Role ${memberNumber}`,
+  };
+}
+
 function createRoomTeamMemberDraft(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember): RoomTeamMemberDraft {
   const watcher = room.watcherIds
     .map((watcherId) => snapshot.watchers[watcherId])
@@ -75,18 +93,23 @@ function createRoomTeamMemberDraft(snapshot: WorkspaceSnapshot, room: Room, memb
 
   return {
     id: member.id,
+    roleId: member.roleId,
+    roleName: member.roleName,
+    isRole: member.isRole === true,
     name: member.name,
     handle: member.handle,
     summary: member.summary,
+    note: member.note,
     prompt: member.prompt,
     accentTone: member.accentTone,
     modelProfileId: member.modelProfileId,
     provider: cloneProviderBinding(member.provider),
     isEntryMember: member.isEntryMember,
-    observeAllRoomMessages: member.observeAllRoomMessages,
     acceptsDirectMessages: member.acceptsDirectMessages,
+    codexThinkingDepth: member.codexThinkingDepth,
     watchConfigured: Boolean(watcher),
     watchEnabled: watcher?.enabled ?? false,
+    watchPersistent: watcher?.persistent ?? false,
     watchIntervalMinutes: watcher ? String(watcher.intervalMinutes) : "15",
     skills: member.skills.map((skill) => ({
       id: skill.id,
@@ -116,6 +139,7 @@ export function addEmptyRoomTeamMemberDraft(
   args: {
     teamAccentTone: AccentTone;
     baseMember?: RoomTeamMemberDraft;
+    mode?: "role-template" | "employee";
   },
 ): RoomTeamMemberDraft[] {
   const sourceMember = args.baseMember ?? members[0];
@@ -125,25 +149,32 @@ export function addEmptyRoomTeamMemberDraft(
 
   const token = resolveNextMemberToken(members);
   const memberNumber = Number(token.match(/(\d+)$/u)?.[1] ?? members.length + 1);
+  const roleIdentity = resolveRoleTemplateIdentity(memberNumber);
+  const isRoleTemplate = args.mode === "role-template";
 
   return [
     ...members,
     {
       id: token,
-      name: `Member ${memberNumber}`,
-      handle: token,
-      summary: "New room-scoped team member.",
-      prompt: "Handle tasks for your role, coordinate with the room, and send concise visible progress updates for long work.",
+      roleId: isRoleTemplate ? token : sourceMember.roleId,
+      roleName: isRoleTemplate ? roleIdentity.roleName : sourceMember.roleName,
+      isRole: isRoleTemplate,
+      name: isRoleTemplate ? roleIdentity.name : `Member ${memberNumber}`,
+      handle: isRoleTemplate ? roleIdentity.handle : `${slugify(sourceMember.roleName)}-${memberNumber}`,
+      summary: isRoleTemplate ? "Describe this role's responsibility." : sourceMember.summary,
+      note: "",
+      prompt: sourceMember.prompt,
       accentTone: sourceMember.accentTone ?? args.teamAccentTone,
       modelProfileId: sourceMember.modelProfileId,
       provider: cloneProviderBinding(sourceMember.provider),
       isEntryMember: members.length === 0,
-      observeAllRoomMessages: false,
       acceptsDirectMessages: true,
-      watchConfigured: false,
-      watchEnabled: false,
+      codexThinkingDepth: sourceMember.codexThinkingDepth,
+      watchConfigured: isRoleTemplate ? sourceMember.watchConfigured : false,
+      watchEnabled: isRoleTemplate ? sourceMember.watchEnabled : false,
+      watchPersistent: isRoleTemplate ? sourceMember.watchPersistent : false,
       watchIntervalMinutes: sourceMember.watchIntervalMinutes,
-      skills: [],
+      skills: isRoleTemplate ? sourceMember.skills.map((skill) => ({ ...skill })) : [],
     },
   ];
 }
@@ -172,21 +203,26 @@ function buildRoomTeamMemberInput(draft: RoomTeamMemberDraft): RoomTeamMemberInp
 
   return {
     memberId: draft.id,
+    roleId: draft.roleId,
+    roleName: draft.roleName,
+    isRole: draft.isRole,
     name: draft.name.trim(),
     handle: draft.handle.trim().replace(/^@/u, ""),
     summary: draft.summary.trim(),
+    note: draft.note?.trim() || undefined,
     prompt: draft.prompt.trim(),
     accentTone: draft.accentTone,
     modelProfileId: draft.modelProfileId?.trim() || undefined,
     isEntryMember: draft.isEntryMember,
-    observeAllRoomMessages: draft.observeAllRoomMessages,
     acceptsDirectMessages: draft.acceptsDirectMessages,
+    codexThinkingDepth: draft.codexThinkingDepth,
     provider: cloneProviderBinding(draft.provider),
     skills: toSkillDefinitions(draft.skills),
     watch: draft.watchConfigured
       ? {
           enabled: draft.watchEnabled,
           intervalMinutes: Math.round(intervalMinutes),
+          persistent: draft.watchPersistent,
         }
       : undefined,
   };

@@ -37,6 +37,9 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("rendered to the user as Markdown");
     expect(prompt).toContain("Mermaid");
     expect(prompt).toContain("Prefer $$...$$ for formulas");
+    expect(prompt).toContain("/role-add <role> <employee-handle> [reason]");
+    expect(prompt).toContain("This shared prompt only tells you the commands exist.");
+    expect(prompt).toContain("允许使用岗位员工命令");
     expect(prompt).toContain(`prompt: ${member.prompt}`);
   });
 
@@ -96,6 +99,8 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("It does not notify the member, does not route work");
     expect(prompt).toContain("render as Markdown");
     expect(prompt).toContain("Prefer $$...$$ for formulas");
+    expect(prompt).toContain("/role-remove <role> <employee-handle> [reason]");
+    expect(prompt).toContain("If your member/template prompt says `不允许使用岗位员工命令`");
     expect(prompt).toContain("prompt: omitted on this delta turn");
     expect(prompt).not.toContain(`prompt: ${lead.prompt}`);
   });
@@ -175,5 +180,97 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("was not posted into the room for others");
     expect(prompt).toContain("这里有一条 watcher 还没见过的新消息。");
     expect(prompt).toContain("member history files:");
+  });
+
+  it("keeps room transcript visible for regular members", () => {
+    const context = createRuntimeContext(800, "2026-03-10T13:00:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "builder");
+
+    if (!builder) {
+      throw new Error("Expected the builder member");
+    }
+
+    const unrelatedMessage = "这是一个没分配给 builder 的普通 room 消息。";
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: unrelatedMessage,
+      },
+      context,
+    );
+
+    const assignedMessage = "@>builder 清理 Monitor 残留 UI。";
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: assignedMessage,
+        mentionedMemberIds: [builder.id],
+      },
+      createRuntimeContext(801, "2026-03-10T13:01:00.000Z"),
+    );
+
+    const nextBuilder = snapshot.members[builder.id];
+    const currentTask = nextBuilder.activeTaskId ? snapshot.tasks[nextBuilder.activeTaskId] : undefined;
+    if (!currentTask) {
+      throw new Error("Expected an active builder task");
+    }
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room: snapshot.rooms[room.id],
+      member: nextBuilder,
+      task: currentTask,
+      snapshot,
+    });
+
+    expect(prompt).toContain(`source message: ${assignedMessage}`);
+    expect(prompt).toContain("[Recent Room Transcript]");
+    expect(prompt).toContain(unrelatedMessage);
+  });
+
+  it("keeps the full room transcript for entry members too", () => {
+    const context = createRuntimeContext(820, "2026-03-10T13:10:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "lead");
+
+    if (!lead) {
+      throw new Error("Expected the lead member");
+    }
+
+    const monitorVisibleMessage = "这条 room 消息应该继续出现在 lead 成员的 transcript 里。";
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: monitorVisibleMessage,
+      },
+      context,
+    );
+
+    const nextLead = snapshot.members[lead.id];
+    const currentTask = nextLead.activeTaskId ? snapshot.tasks[nextLead.activeTaskId] : undefined;
+    if (!currentTask) {
+      throw new Error("Expected an active lead task");
+    }
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room: snapshot.rooms[room.id],
+      member: nextLead,
+      task: currentTask,
+      snapshot,
+    });
+
+    expect(prompt).toContain("[Recent Room Transcript]");
+    expect(prompt).toContain(monitorVisibleMessage);
   });
 });

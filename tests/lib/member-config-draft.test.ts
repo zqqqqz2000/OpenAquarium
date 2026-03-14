@@ -31,16 +31,19 @@ describe("member config draft helpers", () => {
       buildWatcherConfigInput("member_1", {
         enabled: true,
         intervalMinutes: "12",
+        persistent: true,
       }),
     ).toEqual({
       memberId: "member_1",
       enabled: true,
       intervalMinutes: 12,
+      persistent: true,
     });
     expect(() =>
       buildWatcherConfigInput("member_1", {
         enabled: true,
         intervalMinutes: "0",
+        persistent: false,
       }),
     ).toThrow(/positive number/i);
   });

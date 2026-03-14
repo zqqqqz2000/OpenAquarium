@@ -196,7 +196,6 @@ export async function handleWorkspaceJsonApiRequest(args: {
             capabilities: string[];
           };
           isEntryMember?: boolean;
-          observeAllRoomMessages?: boolean;
           acceptsDirectMessages?: boolean;
           watch?: {
             intervalMinutes: number;
@@ -359,7 +358,6 @@ export async function handleWorkspaceJsonApiRequest(args: {
             capabilities: string[];
           };
           isEntryMember?: boolean;
-          observeAllRoomMessages?: boolean;
           acceptsDirectMessages?: boolean;
           watch?: {
             enabled: boolean;
@@ -448,10 +446,12 @@ export async function handleWorkspaceJsonApiRequest(args: {
     const snapshot = await runtime.updateMemberConfig({
       memberId,
       ...(body as {
+        isRole?: boolean;
         summary: string;
         prompt: string;
         modelProfileId?: string;
         acceptsDirectMessages: boolean;
+        codexThinkingDepth?: "low" | "mid" | "high" | "extra-high";
         skills: Array<{ id: string; name: string; description: string; command: string }>;
         provider: {
           kind: "codex-acp" | "generic-acp";
@@ -500,22 +500,6 @@ export async function handleWorkspaceJsonApiRequest(args: {
       enabled: (body as { enabled: boolean }).enabled,
       intervalMinutes: (body as { intervalMinutes: number }).intervalMinutes,
     });
-    return {
-      statusCode: 200,
-      payload: { snapshot },
-    };
-  }
-
-  const monitorMatch = pathname.match(/^\/api\/members\/([^/]+)\/monitor-toggle$/u);
-  if (method === "POST" && monitorMatch) {
-    const [, memberId] = monitorMatch;
-    if (!memberId) {
-      return {
-        statusCode: 400,
-        payload: { error: "Missing member id" },
-      };
-    }
-    const snapshot = await runtime.toggleMemberMonitoring(memberId);
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -780,7 +764,6 @@ export async function startWorkspaceHttpServer(args: {
               capabilities: string[];
             };
             isEntryMember?: boolean;
-            observeAllRoomMessages?: boolean;
             acceptsDirectMessages?: boolean;
             watch?: {
               intervalMinutes: number;
@@ -1001,7 +984,6 @@ export async function startWorkspaceHttpServer(args: {
               capabilities: string[];
             };
             isEntryMember?: boolean;
-            observeAllRoomMessages?: boolean;
             acceptsDirectMessages?: boolean;
             watch?: {
               enabled: boolean;
@@ -1078,10 +1060,12 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
         const body = await readJson<{
+          isRole?: boolean;
           summary: string;
           prompt: string;
           modelProfileId?: string;
           acceptsDirectMessages: boolean;
+          codexThinkingDepth?: "low" | "mid" | "high" | "extra-high";
           skills: Array<{ id: string; name: string; description: string; command: string }>;
           provider: {
             kind: "codex-acp" | "generic-acp";
@@ -1120,24 +1104,13 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing member id" });
           return;
         }
-        const body = await readJson<{ enabled: boolean; intervalMinutes: number }>(request);
+      const body = await readJson<{ enabled: boolean; intervalMinutes: number; persistent?: boolean }>(request);
         const snapshot = await args.runtime.upsertWatcher({
-          memberId,
-          enabled: body.enabled,
-          intervalMinutes: body.intervalMinutes,
-        });
-        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
-        return;
-      }
-
-      const monitorMatch = url.pathname.match(/^\/api\/members\/([^/]+)\/monitor-toggle$/u);
-      if (request.method === "POST" && monitorMatch) {
-        const [, memberId] = monitorMatch;
-        if (!memberId) {
-          sendJson(response, 400, { error: "Missing member id" });
-          return;
-        }
-        const snapshot = await args.runtime.toggleMemberMonitoring(memberId);
+        memberId,
+        enabled: body.enabled,
+        intervalMinutes: body.intervalMinutes,
+        persistent: body.persistent ?? false,
+      });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }

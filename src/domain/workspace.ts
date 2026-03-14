@@ -153,6 +153,460 @@ function insertMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): void 
   snapshot.messageOrderByRoom[message.roomId].push(message.id);
 }
 
+function insertSystemRoomMessage(snapshot: WorkspaceSnapshot, args: {
+  roomId: RoomId;
+  content: string;
+  createdAt: string;
+  createId: MutationContext["createId"];
+}): void {
+  insertMessage(snapshot, {
+    id: args.createId("message"),
+    roomId: args.roomId,
+    author: buildSystemAuthor("System"),
+    content: args.content,
+    createdAt: args.createdAt,
+    transport: "group",
+    status: "sent",
+    mentionedMemberIds: [],
+    quotedMemberIds: [],
+    recipientMemberIds: [],
+  });
+  touchRoomActivity(snapshot, args.roomId, args.createdAt);
+}
+
+const ASSIGNMENT_TOKEN_PATTERN = /@>([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)?)/gu;
+const REFERENCE_TOKEN_PATTERN = /@([\p{L}\p{N}_-]+)/gu;
+const ROLE_NOTE_COMMAND_PATTERN = /^\/role-note\s+([\p{L}\p{N}_-]+)\s*$/u;
+const ROLE_NOTES_COMMAND_PATTERN = /^\/role-notes\s+([\p{L}\p{N}_-]+)\s*$/u;
+const ROLE_ADD_COMMAND_PATTERN = /^\/role-add\s+([\p{L}\p{N}_-]+)\s+([\p{L}\p{N}_-]+)(?:\s+(.+))?\s*$/u;
+const ROLE_REMOVE_COMMAND_PATTERN = /^\/role-remove\s+([\p{L}\p{N}_-]+)\s+([\p{L}\p{N}_-]+)(?:\s+(.+))?\s*$/u;
+const ROLE_RENAME_COMMAND_PATTERN = /^\/role-rename\s+([\p{L}\p{N}_-]+)\s+(.+?)\s*$/u;
+
+interface ResolvedRoomRoute {
+  hasAssignments: boolean;
+  memberIds: MemberId[];
+  notices: string[];
+}
+
+interface RoleCommandResult {
+  handled: boolean;
+  notices?: string[];
+}
+
+const ROLE_COMMAND_ALLOW_PATTERNS = [
+  /(?<!不)(?<!默认不)允许使用岗位员工命令/u,
+  /允许使用\s*\/role-add/u,
+];
+
+const ROLE_COMMAND_DENY_PATTERNS = [
+  /不允许使用岗位员工命令/u,
+  /禁止使用岗位员工命令/u,
+  /默认不允许使用岗位员工命令/u,
+];
+
+function normalizeHandleToken(value: string): string {
+  return value.trim().replace(/^[@>]+/u, "").toLowerCase();
+}
+
+function getActiveRoomMembers(snapshot: WorkspaceSnapshot, roomId: RoomId): TeamMember[] {
+  const room = snapshot.rooms[roomId];
+  if (!room) {
+    return [];
+  }
+
+  return room.memberIds
+    .map((memberId) => snapshot.members[memberId])
+    .filter((member): member is TeamMember => Boolean(member) && !member.archivedAt);
+}
+
+function resolveMemberByHandle(snapshot: WorkspaceSnapshot, roomId: RoomId, handle: string): TeamMember | undefined {
+  const normalizedHandle = normalizeHandleToken(handle);
+  return getActiveRoomMembers(snapshot, roomId).find((member) => member.handle.toLowerCase() === normalizedHandle);
+}
+
+function resolveMembersByRole(snapshot: WorkspaceSnapshot, roomId: RoomId, role: string): TeamMember[] {
+  const normalizedRole = normalizeHandleToken(role);
+  return getActiveRoomMembers(snapshot, roomId)
+    .filter((member) => member.roleName.toLowerCase() === normalizedRole || member.roleId.toLowerCase() === normalizedRole)
+    .sort((left, right) => left.handle.localeCompare(right.handle));
+}
+
+function resolveRoleOwner(snapshot: WorkspaceSnapshot, roomId: RoomId, role: string): TeamMember | undefined {
+  const normalizedRole = normalizeHandleToken(role);
+  return getActiveRoomMembers(snapshot, roomId).find(
+    (member) =>
+      member.isRole === true
+      && (member.handle.toLowerCase() === normalizedRole
+        || member.roleName.toLowerCase() === normalizedRole
+        || member.roleId.toLowerCase() === normalizedRole),
+  );
+}
+
+function humanizeHandle(handle: string): string {
+  return normalizeHandleToken(handle)
+    .split(/[-_]+/u)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
+function canMemberUseRoleStaffingCommands(member: TeamMember): boolean {
+  const prompt = member.prompt.trim();
+  if (!prompt) {
+    return false;
+  }
+
+  const explicitlyAllowed = ROLE_COMMAND_ALLOW_PATTERNS.some((pattern) => pattern.test(prompt));
+  if (explicitlyAllowed) {
+    return true;
+  }
+
+  const explicitlyDenied = ROLE_COMMAND_DENY_PATTERNS.some((pattern) => pattern.test(prompt));
+  if (explicitlyDenied) {
+    return false;
+  }
+
+  return false;
+}
+
+function stripMarkdownCodeSegments(content: string): string {
+  let sanitized = "";
+  let cursor = 0;
+
+  while (cursor < content.length) {
+    if (content[cursor] !== "`") {
+      sanitized += content[cursor];
+      cursor += 1;
+      continue;
+    }
+
+    let delimiterLength = 1;
+    while (content[cursor + delimiterLength] === "`") {
+      delimiterLength += 1;
+    }
+
+    const delimiter = "`".repeat(delimiterLength);
+    const closingIndex = content.indexOf(delimiter, cursor + delimiterLength);
+    if (closingIndex === -1) {
+      cursor += delimiterLength;
+      continue;
+    }
+
+    cursor = closingIndex + delimiterLength;
+  }
+
+  return sanitized;
+}
+
+function resolveRoleRouting(snapshot: WorkspaceSnapshot, roomId: RoomId, content: string): ResolvedRoomRoute {
+  const sanitizedContent = stripMarkdownCodeSegments(content);
+  const seenTargets = new Set<string>();
+  const memberIds: MemberId[] = [];
+  const notices: string[] = [];
+  let hasAssignments = false;
+
+  for (const match of sanitizedContent.matchAll(ASSIGNMENT_TOKEN_PATTERN)) {
+    const rawTarget = match[1];
+    if (!rawTarget) {
+      continue;
+    }
+    hasAssignments = true;
+
+    const normalizedTarget = rawTarget.toLowerCase();
+    if (seenTargets.has(normalizedTarget)) {
+      continue;
+    }
+    seenTargets.add(normalizedTarget);
+
+    if (normalizedTarget === "handle") {
+      continue;
+    }
+
+    const [roleToken, explicitHandle] = rawTarget.split("/", 2);
+    const exactMember = explicitHandle ? undefined : resolveMemberByHandle(snapshot, roomId, rawTarget);
+
+    if (exactMember) {
+      memberIds.push(exactMember.id);
+      continue;
+    }
+
+    const roleMembers = resolveMembersByRole(snapshot, roomId, roleToken);
+    if (explicitHandle) {
+      const explicitMember = resolveMemberByHandle(snapshot, roomId, explicitHandle);
+      if (!explicitMember || !roleMembers.some((member) => member.id === explicitMember.id)) {
+        notices.push(`岗位路由未执行：@>${rawTarget} 未命中该岗位员工。`);
+        continue;
+      }
+
+      memberIds.push(explicitMember.id);
+      notices.push(`岗位路由已执行：@>${rawTarget} -> ${explicitMember.name}（@${explicitMember.handle}）。`);
+      continue;
+    }
+
+    if (roleMembers.length === 0) {
+      notices.push(`岗位路由未执行：@>${roleToken} 对应岗位当前无人可接。`);
+      continue;
+    }
+
+    if (roleMembers.length > 1) {
+      notices.push(`岗位路由未执行：@>${roleToken} 对应多个活跃员工，请改用 @>${roleToken}/employee-handle。`);
+      continue;
+    }
+
+    const [member] = roleMembers;
+    if (!member) {
+      continue;
+    }
+
+    memberIds.push(member.id);
+    notices.push(`岗位路由已执行：@>${roleToken} -> ${member.name}（@${member.handle}）。`);
+  }
+
+  return {
+    hasAssignments,
+    memberIds: [...new Set(memberIds)],
+    notices,
+  };
+}
+
+function resolveRoleCommand(
+  snapshot: WorkspaceSnapshot,
+  roomId: RoomId,
+  content: string,
+  actorLabel: string,
+  context: MutationContext,
+  options?: {
+    staffingAuthorized?: boolean;
+  },
+): RoleCommandResult {
+  const roleNoteMatch = content.match(ROLE_NOTE_COMMAND_PATTERN);
+  if (roleNoteMatch) {
+    const handle = roleNoteMatch[1];
+    const member = handle ? resolveMemberByHandle(snapshot, roomId, handle) : undefined;
+    if (!member) {
+      return {
+        handled: true,
+        notices: [`查询岗位备注失败：未找到成员 @${handle}。`],
+      };
+    }
+
+    return {
+      handled: true,
+      notices: [
+        member.note?.trim()
+          ? `查询岗位备注：@${member.handle}（岗位：${member.roleName}）备注：${member.note.trim()}。`
+          : `查询岗位备注：@${member.handle}（岗位：${member.roleName}）备注为空。`,
+      ],
+    };
+  }
+
+  const roleNotesMatch = content.match(ROLE_NOTES_COMMAND_PATTERN);
+  if (roleNotesMatch) {
+    const role = roleNotesMatch[1];
+    const members = role ? resolveMembersByRole(snapshot, roomId, role) : [];
+    if (members.length === 0) {
+      return {
+        handled: true,
+        notices: [`查询岗位备注失败：未找到岗位 @${role}。`],
+      };
+    }
+
+    return {
+      handled: true,
+      notices: [[
+        `查询岗位备注：@${normalizeHandleToken(role)} 岗位下共有 ${members.length} 名员工。`,
+        ...members.map((member) =>
+          member.note?.trim()
+            ? `- @${member.handle}（岗位：${member.roleName}）备注：${member.note.trim()}。`
+            : `- @${member.handle}（岗位：${member.roleName}）备注为空。`,
+        ),
+      ].join("\n")],
+    };
+  }
+
+  const roleAddMatch = content.match(ROLE_ADD_COMMAND_PATTERN);
+  if (roleAddMatch) {
+    if (!options?.staffingAuthorized) {
+      return {
+        handled: true,
+        notices: ["岗位成员命令未执行：当前 prompt 未授权使用 /role-add、/role-remove、/role-rename。"],
+      };
+    }
+    const [, roleToken, handleToken, reasonText] = roleAddMatch;
+    const roleOwner = roleToken ? resolveRoleOwner(snapshot, roomId, roleToken) : undefined;
+    const employeeHandle = handleToken ? normalizeHandleToken(handleToken) : "";
+    if (!roleOwner) {
+      return {
+        handled: true,
+        notices: [`岗位成员新增失败：未找到岗位 @${roleToken}。`],
+      };
+    }
+    if (!employeeHandle) {
+      return {
+        handled: true,
+        notices: [`岗位成员新增失败：员工 handle 不能为空。`],
+      };
+    }
+    if (resolveMemberByHandle(snapshot, roomId, employeeHandle)) {
+      return {
+        handled: true,
+        notices: [`岗位成员新增失败：@${employeeHandle} 已存在。`],
+      };
+    }
+
+    const room = snapshot.rooms[roomId];
+    if (!room) {
+      return {
+        handled: true,
+        notices: [`岗位成员新增失败：未找到房间。`],
+      };
+    }
+
+    const memberId = context.createId("member");
+    snapshot.members[memberId] = {
+      ...roleOwner,
+      id: memberId,
+      blueprintId: roleOwner.blueprintId,
+      name: humanizeHandle(employeeHandle),
+      handle: employeeHandle,
+      isRole: false,
+      isEntryMember: false,
+      note: undefined,
+      status: "idle",
+      providerSessionId: undefined,
+      activeTaskId: undefined,
+      archivedAt: undefined,
+    };
+    snapshot.rooms[roomId] = {
+      ...room,
+      memberIds: [...room.memberIds, memberId],
+      visibleMemberIds: validateVisibleIds([...(room.visibleMemberIds ?? room.memberIds), memberId], [...room.memberIds, memberId]),
+    };
+
+    const reason = reasonText?.trim();
+    return {
+      handled: true,
+      notices: [
+        reason
+          ? `@${employeeHandle}（岗位：${roleOwner.roleName}）被 ${actorLabel} 加入群组，原因是：${reason}。`
+          : `@${employeeHandle}（岗位：${roleOwner.roleName}）被 ${actorLabel} 加入群组。`,
+      ],
+    };
+  }
+
+  const roleRemoveMatch = content.match(ROLE_REMOVE_COMMAND_PATTERN);
+  if (roleRemoveMatch) {
+    if (!options?.staffingAuthorized) {
+      return {
+        handled: true,
+        notices: ["岗位成员命令未执行：当前 prompt 未授权使用 /role-add、/role-remove、/role-rename。"],
+      };
+    }
+    const [, roleToken, handleToken, reasonText] = roleRemoveMatch;
+    const roleOwner = roleToken ? resolveRoleOwner(snapshot, roomId, roleToken) : undefined;
+    const employee = handleToken ? resolveMemberByHandle(snapshot, roomId, handleToken) : undefined;
+    if (!roleOwner) {
+      return {
+        handled: true,
+        notices: [`岗位成员移除失败：未找到岗位 @${roleToken}。`],
+      };
+    }
+    if (!employee || employee.roleId !== roleOwner.roleId) {
+      return {
+        handled: true,
+        notices: [`岗位成员移除失败：@${handleToken} 不在岗位 @${roleOwner.handle} 下。`],
+      };
+    }
+    if (employee.id === roleOwner.id) {
+      return {
+        handled: true,
+        notices: [`岗位成员移除失败：不能直接移除岗位默认成员 @${employee.handle}。`],
+      };
+    }
+
+    const activeTask = employee.activeTaskId ? snapshot.tasks[employee.activeTaskId] : undefined;
+    if (activeTask?.status === "running") {
+      return {
+        handled: true,
+        notices: [`岗位成员移除失败：@${employee.handle} 仍在处理中。`],
+      };
+    }
+
+    const room = snapshot.rooms[roomId];
+    if (!room) {
+      return {
+        handled: true,
+        notices: [`岗位成员移除失败：未找到房间。`],
+      };
+    }
+
+    snapshot.members[employee.id] = {
+      ...employee,
+      status: "idle",
+      activeTaskId: undefined,
+      providerSessionId: undefined,
+      archivedAt: context.now(),
+    };
+    snapshot.rooms[roomId] = {
+      ...room,
+      memberIds: room.memberIds.filter((memberId) => memberId !== employee.id),
+      visibleMemberIds: (room.visibleMemberIds ?? room.memberIds).filter((memberId) => memberId !== employee.id),
+      watcherIds: room.watcherIds.filter((watcherId) => snapshot.watchers[watcherId]?.memberId !== employee.id),
+    };
+    Object.entries(snapshot.watchers).forEach(([watcherId, watcher]) => {
+      if (watcher.memberId === employee.id) {
+        delete snapshot.watchers[watcherId];
+      }
+    });
+
+    const reason = reasonText?.trim();
+    return {
+      handled: true,
+      notices: [
+        reason
+          ? `@${employee.handle}（岗位：${roleOwner.roleName}）被 ${actorLabel} 移除群组，原因是：${reason}。`
+          : `@${employee.handle}（岗位：${roleOwner.roleName}）被 ${actorLabel} 移除群组。`,
+      ],
+    };
+  }
+
+  const roleRenameMatch = content.match(ROLE_RENAME_COMMAND_PATTERN);
+  if (roleRenameMatch) {
+    if (!options?.staffingAuthorized) {
+      return {
+        handled: true,
+        notices: ["岗位成员命令未执行：当前 prompt 未授权使用 /role-add、/role-remove、/role-rename。"],
+      };
+    }
+    const [, handleToken, nameText] = roleRenameMatch;
+    const member = handleToken ? resolveMemberByHandle(snapshot, roomId, handleToken) : undefined;
+    const nextName = nameText?.trim();
+    if (!member) {
+      return {
+        handled: true,
+        notices: [`岗位成员更名失败：未找到成员 @${handleToken}。`],
+      };
+    }
+    if (!nextName) {
+      return {
+        handled: true,
+        notices: [`岗位成员更名失败：名称不能为空。`],
+      };
+    }
+
+    snapshot.members[member.id] = {
+      ...member,
+      name: nextName,
+    };
+    return {
+      handled: true,
+      notices: [`@${member.handle}（岗位：${member.roleName}）被 ${actorLabel} 更名为 ${nextName}。`],
+    };
+  }
+
+  return { handled: false };
+}
+
 function updateMember(snapshot: WorkspaceSnapshot, member: TeamMember): void {
   snapshot.members[member.id] = member;
 }
@@ -348,7 +802,7 @@ function startTaskForMember(
   });
 }
 
-function resolveRecipients(snapshot: WorkspaceSnapshot, message: ChatMessage): MemberId[] {
+function resolveRecipients(snapshot: WorkspaceSnapshot, message: ChatMessage, routing?: ResolvedRoomRoute): MemberId[] {
   const room = snapshot.rooms[message.roomId];
 
   if (!room) {
@@ -365,9 +819,10 @@ function resolveRecipients(snapshot: WorkspaceSnapshot, message: ChatMessage): M
     });
   }
 
-  const addressedMemberIds = extractAddressedMemberIds(snapshot, message.roomId, message.content);
+  const resolvedRouting = routing ?? resolveRoleRouting(snapshot, message.roomId, message.content);
+  const addressedMemberIds = resolvedRouting.memberIds;
   if (message.author.kind === "user") {
-    return addressedMemberIds.length > 0 ? addressedMemberIds : [room.entryMemberId];
+    return addressedMemberIds.length > 0 || resolvedRouting.hasAssignments ? addressedMemberIds : [room.entryMemberId];
   }
 
   return addressedMemberIds;
@@ -377,6 +832,27 @@ function routeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage, now: st
   const room = snapshot.rooms[message.roomId];
 
   if (!room) {
+    return;
+  }
+
+  if (message.transport === "group") {
+    const routing = resolveRoleRouting(snapshot, message.roomId, message.content);
+    routing.notices.forEach((notice) => {
+      insertSystemRoomMessage(snapshot, {
+        roomId: message.roomId,
+        content: notice,
+        createdAt: now,
+        createId,
+      });
+    });
+    const recipients = resolveRecipients(snapshot, message, routing);
+    recipients.forEach((memberId) => {
+      const member = snapshot.members[memberId];
+      if (!member) {
+        return;
+      }
+      startTaskForMember(snapshot, room, member, message.id, now, createId);
+    });
     return;
   }
 
@@ -399,17 +875,20 @@ function instantiateMember(
     id: createId("member"),
     roomId,
     blueprintId: blueprint.id,
+    roleId: blueprint.id,
+    roleName: blueprint.handle,
     name: blueprint.name,
     handle: blueprint.handle,
+    isRole: blueprint.isRole === true,
     summary: blueprint.summary,
     prompt: blueprint.prompt,
     accentTone: blueprint.accentTone,
     modelProfileId: blueprint.modelProfileId,
     skills: blueprint.skills,
     provider: blueprint.provider,
-    observeAllRoomMessages: blueprint.observeAllRoomMessages ?? false,
     acceptsDirectMessages: blueprint.acceptsDirectMessages ?? true,
     isEntryMember: blueprint.isEntryMember ?? false,
+    codexThinkingDepth: blueprint.codexThinkingDepth,
     providerSessionId: undefined,
     status: "idle",
   };
@@ -431,6 +910,8 @@ function instantiateWatcher(
     memberId,
     intervalMinutes: blueprint.watch.intervalMinutes,
     enabled: blueprint.watch.enabledByDefault,
+    persistent: blueprint.watch.persistent ?? false,
+    pausedUntilActivity: false,
   };
 }
 
@@ -700,6 +1181,22 @@ export function postUserMessage(
   insertMessage(snapshot, message);
   setRoomReadState(snapshot, room.id, now);
   touchRoomActivity(snapshot, room.id, now);
+  const roleCommand = !input.directMemberId
+    ? resolveRoleCommand(snapshot, input.roomId, trimmedContent, snapshot.currentUserName, context, { staffingAuthorized: true })
+    : { handled: false };
+  if (roleCommand.handled) {
+    roleCommand.notices?.forEach((notice) => {
+      insertSystemRoomMessage(snapshot, {
+        roomId: room.id,
+        content: notice,
+        createdAt: now,
+        createId: context.createId,
+      });
+    });
+    snapshot.selection.roomId = room.id;
+    snapshot.selection.projectId = room.projectId;
+    return snapshot;
+  }
   routeMessage(snapshot, message, now, context.createId);
   snapshot.selection.roomId = room.id;
   snapshot.selection.projectId = room.projectId;
@@ -751,6 +1248,22 @@ export function postMemberMessage(
         updatedAt: now,
       });
     }
+  }
+  const roleCommand = !isDirectMessage
+    ? resolveRoleCommand(snapshot, input.roomId, content, member.name, context, {
+      staffingAuthorized: canMemberUseRoleStaffingCommands(member),
+    })
+    : { handled: false };
+  if (roleCommand.handled) {
+    roleCommand.notices?.forEach((notice) => {
+      insertSystemRoomMessage(snapshot, {
+        roomId: input.roomId,
+        content: notice,
+        createdAt: now,
+        createId: context.createId,
+      });
+    });
+    return snapshot;
   }
   routeMessage(snapshot, message, now, context.createId);
 
@@ -832,18 +1345,6 @@ export function completeMemberTask(
     status: "idle",
     activeTaskId: member.activeTaskId === task.id ? undefined : member.activeTaskId,
   });
-
-  return snapshot;
-}
-
-export function toggleMemberMonitor(current: WorkspaceSnapshot, memberId: MemberId): WorkspaceSnapshot {
-  const snapshot = cloneSnapshot(current);
-  const { member } = resolveActiveRoomMember(snapshot, memberId);
-
-  snapshot.members[memberId] = {
-    ...member,
-    observeAllRoomMessages: !member.observeAllRoomMessages,
-  };
 
   return snapshot;
 }
@@ -933,11 +1434,15 @@ function validateTemplateMembers(members: TeamMemberBlueprint[]): TeamMemberBlue
       ? {
           intervalMinutes: Math.round(member.watch.intervalMinutes),
           enabledByDefault: member.watch.enabledByDefault,
+          persistent: member.watch.persistent ?? false,
         }
       : undefined;
 
     if (watch && (!Number.isFinite(watch.intervalMinutes) || watch.intervalMinutes <= 0)) {
       throw new Error(`Watcher interval for @${member.handle} must be a positive number`);
+    }
+    if (member.isRole === true && watch) {
+      throw new Error(`Role member @${member.handle} cannot enable Watch`);
     }
 
     return {
@@ -945,10 +1450,12 @@ function validateTemplateMembers(members: TeamMemberBlueprint[]): TeamMemberBlue
       id: member.id.trim(),
       name: member.name.trim(),
       handle: member.handle.trim().replace(/^@/u, ""),
+      isRole: member.isRole === true,
       summary: member.summary.trim(),
       prompt: member.prompt.trim(),
       accentTone: validateAccentTone(member.accentTone),
       modelProfileId: member.modelProfileId?.trim() || undefined,
+      codexThinkingDepth: member.codexThinkingDepth,
       skills: validateSkills(member.skills),
       provider: normalizeProviderBinding(member.provider),
       watch,
@@ -980,6 +1487,7 @@ interface NormalizedRoomTeamMemberInput extends Omit<RoomTeamMemberInput, "watch
   watch?: {
     enabled: boolean;
     intervalMinutes: number;
+    persistent: boolean;
   };
 }
 
@@ -997,6 +1505,7 @@ function validateRoomTeamMembers(members: RoomTeamMemberInput[]): NormalizedRoom
       ? {
           enabled: member.watch.enabled,
           intervalMinutes: Math.round(member.watch.intervalMinutes),
+          persistent: member.watch.persistent ?? false,
         }
       : undefined;
 
@@ -1007,12 +1516,17 @@ function validateRoomTeamMembers(members: RoomTeamMemberInput[]): NormalizedRoom
     return {
       ...member,
       memberId: member.memberId.trim(),
+      roleId: member.roleId?.trim() || member.memberId.trim(),
+      roleName: member.roleName?.trim() || member.handle.trim().replace(/^@/u, ""),
       name: member.name.trim(),
       handle: member.handle.trim().replace(/^@/u, ""),
+      isRole: member.isRole === true,
       summary: member.summary.trim(),
+      note: member.note?.trim() || undefined,
       prompt: member.prompt.trim(),
       accentTone: validateAccentTone(member.accentTone),
       modelProfileId: member.modelProfileId?.trim() || undefined,
+      codexThinkingDepth: member.codexThinkingDepth,
       skills: validateSkills(member.skills),
       provider: normalizeProviderBinding(member.provider),
       watch,
@@ -1042,17 +1556,40 @@ function validateRoomTeamMembers(members: RoomTeamMemberInput[]): NormalizedRoom
 
 export function updateMemberConfig(current: WorkspaceSnapshot, input: UpdateMemberConfigInput): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
-  const { member } = resolveActiveRoomMember(snapshot, input.memberId);
+  const { member, room } = resolveActiveRoomMember(snapshot, input.memberId);
+
+  if (input.isRole === false) {
+    const hasRoleEmployees = getActiveRoomMembers(snapshot, room.id).some(
+      (candidate) => candidate.id !== member.id && candidate.roleId === member.roleId,
+    );
+    if (member.isRole && hasRoleEmployees) {
+      throw new Error("Remove role employees before turning Role off.");
+    }
+  }
 
   snapshot.members[input.memberId] = {
     ...member,
+    isRole: input.isRole === true,
     summary: input.summary.trim(),
     prompt: input.prompt.trim(),
     modelProfileId: input.modelProfileId?.trim() || undefined,
     acceptsDirectMessages: input.acceptsDirectMessages,
+    codexThinkingDepth: input.codexThinkingDepth,
     skills: validateSkills(input.skills),
     provider: member.provider,
   };
+
+  if (input.isRole === true) {
+    room.watcherIds
+      .filter((watcherId) => snapshot.watchers[watcherId]?.memberId === member.id)
+      .forEach((watcherId) => {
+        delete snapshot.watchers[watcherId];
+      });
+    snapshot.rooms[room.id] = {
+      ...room,
+      watcherIds: room.watcherIds.filter((watcherId) => snapshot.watchers[watcherId]),
+    };
+  }
 
   return snapshot;
 }
@@ -1191,6 +1728,8 @@ export function updateRoomTeam(
   const nextVisibleMemberIds: MemberId[] = [];
   const nextWatcherIds: string[] = [];
   const now = context.now();
+  const addedMembers: Array<{ name: string; note?: string }> = [];
+  const removedMembers: Array<{ name: string }> = [];
 
   normalizedMembers.forEach((memberInput) => {
     const existingMember = activeMemberIds.has(memberInput.memberId) ? snapshot.members[memberInput.memberId] : undefined;
@@ -1199,39 +1738,53 @@ export function updateRoomTeam(
     snapshot.members[nextMemberId] = existingMember
       ? {
           ...existingMember,
+          roleId: memberInput.roleId ?? existingMember.roleId,
+          roleName: memberInput.roleName ?? existingMember.roleName,
+          isRole: memberInput.isRole === true,
           name: memberInput.name,
           handle: memberInput.handle,
           summary: memberInput.summary,
+          note: memberInput.note,
           prompt: memberInput.prompt,
           accentTone: memberInput.accentTone,
           modelProfileId: memberInput.modelProfileId,
           skills: memberInput.skills,
           provider: memberInput.provider,
-          observeAllRoomMessages: memberInput.observeAllRoomMessages ?? false,
           acceptsDirectMessages: memberInput.acceptsDirectMessages ?? true,
           isEntryMember: memberInput.isEntryMember === true,
+          codexThinkingDepth: memberInput.codexThinkingDepth,
           archivedAt: undefined,
         }
       : {
           id: nextMemberId,
           roomId: room.id,
           blueprintId: memberInput.memberId,
+          roleId: memberInput.roleId ?? memberInput.memberId,
+          roleName: memberInput.roleName ?? memberInput.handle,
+          isRole: memberInput.isRole === true,
           name: memberInput.name,
           handle: memberInput.handle,
           summary: memberInput.summary,
+          note: memberInput.note,
           prompt: memberInput.prompt,
           accentTone: memberInput.accentTone,
           modelProfileId: memberInput.modelProfileId,
           skills: memberInput.skills,
           provider: memberInput.provider,
-          observeAllRoomMessages: memberInput.observeAllRoomMessages ?? false,
           acceptsDirectMessages: memberInput.acceptsDirectMessages ?? true,
           isEntryMember: memberInput.isEntryMember === true,
+          codexThinkingDepth: memberInput.codexThinkingDepth,
           status: "idle",
           providerSessionId: undefined,
           activeTaskId: undefined,
           archivedAt: undefined,
         };
+    if (!existingMember) {
+      addedMembers.push({
+        name: memberInput.name,
+        note: memberInput.note,
+      });
+    }
 
     nextMemberIds.push(nextMemberId);
     if (!existingMember || previousVisibleMemberIds.has(existingMember.id)) {
@@ -1253,6 +1806,8 @@ export function updateRoomTeam(
       memberId: nextMemberId,
       enabled: memberInput.watch.enabled,
       intervalMinutes: memberInput.watch.intervalMinutes,
+      persistent: memberInput.watch.persistent,
+      pausedUntilActivity: existingWatcherId ? snapshot.watchers[existingWatcherId]?.pausedUntilActivity ?? false : false,
       lastConsumedMessageId: existingWatcherId ? snapshot.watchers[existingWatcherId]?.lastConsumedMessageId : undefined,
       lastConsumedStateAt: existingWatcherId ? snapshot.watchers[existingWatcherId]?.lastConsumedStateAt : undefined,
     };
@@ -1280,6 +1835,7 @@ export function updateRoomTeam(
         providerSessionId: undefined,
         archivedAt: now,
       };
+      removedMembers.push({ name: member.name });
     });
 
   room.watcherIds
@@ -1315,6 +1871,25 @@ export function updateRoomTeam(
     };
   }
 
+  addedMembers.forEach((member) => {
+    insertSystemRoomMessage(snapshot, {
+      roomId: room.id,
+      createdAt: now,
+      createId: context.createId,
+      content: member.note?.trim()
+        ? `${member.name} 被 ${snapshot.currentUserName} 加入群组，原因是：${member.note.trim()}`
+        : `${member.name} 被 ${snapshot.currentUserName} 加入群组。`,
+    });
+  });
+  removedMembers.forEach((member) => {
+    insertSystemRoomMessage(snapshot, {
+      roomId: room.id,
+      createdAt: now,
+      createId: context.createId,
+      content: `${member.name} 被 ${snapshot.currentUserName} 移除群组。`,
+    });
+  });
+
   return snapshot;
 }
 
@@ -1346,6 +1921,9 @@ export function upsertMemberWatcher(
   if (!Number.isFinite(input.intervalMinutes) || input.intervalMinutes <= 0) {
     throw new Error("Watcher interval must be a positive number");
   }
+  if (member.isRole) {
+    throw new Error("Role members cannot enable Watch.");
+  }
 
   const existingWatcherId = room.watcherIds.find((watcherId) => snapshot.watchers[watcherId]?.memberId === member.id);
 
@@ -1354,6 +1932,7 @@ export function upsertMemberWatcher(
       ...snapshot.watchers[existingWatcherId],
       enabled: input.enabled,
       intervalMinutes: Math.round(input.intervalMinutes),
+      persistent: input.persistent ?? snapshot.watchers[existingWatcherId]?.persistent ?? false,
     };
     return snapshot;
   }
@@ -1365,6 +1944,8 @@ export function upsertMemberWatcher(
     memberId: member.id,
     enabled: input.enabled,
     intervalMinutes: Math.round(input.intervalMinutes),
+    persistent: input.persistent ?? false,
+    pausedUntilActivity: false,
   };
   snapshot.rooms[room.id] = {
     ...room,
@@ -1455,7 +2036,8 @@ export function toggleWatcher(current: WorkspaceSnapshot, watcherId: string): Wo
 
   snapshot.watchers[watcherId] = {
     ...watcher,
-    enabled: !watcher.enabled,
+    enabled: watcher.persistent ? true : !watcher.enabled,
+    pausedUntilActivity: watcher.persistent ? !watcher.pausedUntilActivity : false,
   };
 
   return snapshot;
@@ -1610,6 +2192,7 @@ function buildWatcherDigestContent(
   snapshot: WorkspaceSnapshot,
   newMessageIds: MessageId[],
   stateChanges: TaskTraceEntry[],
+  persistentHeartbeat: boolean,
 ): string {
   const sections = ["Watcher activity since last watch:"];
 
@@ -1621,6 +2204,11 @@ function buildWatcherDigestContent(
   if (stateChanges.length > 0) {
     sections.push("", "[Member state changes]");
     sections.push(...stateChanges.map((trace) => `- ${formatWatcherStateDigestLine(snapshot, trace)}`));
+  }
+
+  if (persistentHeartbeat && newMessageIds.length === 0 && stateChanges.length === 0) {
+    sections.push("", "[Persistent watch]");
+    sections.push("- No new room messages or member state changes since the last interval.");
   }
 
   return sections.join("\n");
@@ -1683,17 +2271,31 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
   const observedMessageIds = validRoomMessageIds.slice(startIndex);
   const newMessageIds = observedMessageIds.filter((messageId) => !shouldExcludeFromWatcherDigest(snapshot, messageId));
   const stateChanges = collectWatcherStateChanges(snapshot, watcherWithResolvedStateCursor);
+  const hasObservedActivity = observedMessageIds.length > 0 || stateChanges.length > 0;
+  const hasDigestActivity = newMessageIds.length > 0 || stateChanges.length > 0;
   const nextCursor = {
     lastConsumedMessageId:
       observedMessageIds.length > 0 ? observedMessageIds[observedMessageIds.length - 1] : watcher.lastConsumedMessageId,
     lastConsumedStateAt: stateChanges[stateChanges.length - 1]?.createdAt ?? watcherWithResolvedStateCursor.lastConsumedStateAt,
   };
 
-  if (observedMessageIds.length === 0 && stateChanges.length === 0) {
+  if (watcher.pausedUntilActivity) {
+    if (!hasObservedActivity) {
+      return snapshot;
+    }
+
+    snapshot.watchers[watcherId] = {
+      ...watcher,
+      pausedUntilActivity: false,
+    };
     return snapshot;
   }
 
-  if (newMessageIds.length === 0 && stateChanges.length === 0) {
+  if (!hasObservedActivity && !watcher.persistent) {
+    return snapshot;
+  }
+
+  if (!hasDigestActivity && !watcher.persistent) {
     advanceWatcherCursor(snapshot, watcher, watcherId, nextCursor);
     return snapshot;
   }
@@ -1703,7 +2305,7 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
     id: context.createId("message"),
     roomId: watcher.roomId,
     author: buildSystemAuthor("Watcher"),
-    content: buildWatcherDigestContent(snapshot, newMessageIds, stateChanges),
+    content: buildWatcherDigestContent(snapshot, newMessageIds, stateChanges, watcher.persistent ?? false),
     createdAt: now,
     transport: "watch-digest",
     status: "sent",
@@ -1715,7 +2317,7 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
 
   insertMessage(snapshot, digestMessage);
   advanceWatcherCursor(snapshot, watcher, watcherId, {
-    lastConsumedMessageId: digestMessage.id,
+    lastConsumedMessageId: hasObservedActivity ? digestMessage.id : watcher.lastConsumedMessageId,
     lastConsumedStateAt: nextCursor.lastConsumedStateAt,
   });
   routeMessage(snapshot, digestMessage, now, context.createId);
@@ -1747,16 +2349,18 @@ function extractTaggedHandles(
     return [];
   }
 
+  if (trigger === "@>") {
+    return resolveRoleRouting(snapshot, roomId, content).memberIds;
+  }
+
+  const sanitizedContent = stripMarkdownCodeSegments(content);
   const seenHandles = new Set<string>();
   const memberIdByHandle = new Map(
     room.memberIds.map((memberId) => [snapshot.members[memberId]?.handle.toLowerCase(), memberId] as const),
   );
   const handles: MemberId[] = [];
-  const pattern = trigger === "@>"
-    ? /@>([\p{L}\p{N}_-]+)/gu
-    : /@([\p{L}\p{N}_-]+)/gu;
 
-  for (const match of content.matchAll(pattern)) {
+  for (const match of sanitizedContent.matchAll(REFERENCE_TOKEN_PATTERN)) {
     const handle = match[1]?.toLowerCase();
     if (!handle || seenHandles.has(handle)) {
       continue;

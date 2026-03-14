@@ -88,7 +88,6 @@ export interface WorkspaceRemoteStoreState {
   selectMember(memberId?: string): void;
   updateRoomSettings(input: UpdateRoomSettingsInput): Promise<void>;
   sendUserMessage(content: string, directMemberId?: string): Promise<void>;
-  toggleMemberMonitoring(memberId: string): Promise<void>;
   toggleWatcherSchedule(watcherId: string): Promise<void>;
   runWatcher(watcherId: string): Promise<void>;
   updatePrompt(memberId: string, prompt: string): Promise<void>;
@@ -103,7 +102,7 @@ export interface WorkspaceRemoteStoreState {
     modelProfileId?: string;
   }): Promise<{ assistantMessage: string; modelProfileId: string }>;
   setEntryMember(memberId: string): Promise<void>;
-  upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number }): Promise<void>;
+  upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean }): Promise<void>;
   generateTemplate(brief: string): Promise<TeamTemplate>;
   replaceSnapshot(snapshot: WorkspaceSnapshot): void;
   replaceRemoteState(payload: { snapshot: WorkspaceSnapshot; globalConfig?: GlobalWorkspaceConfig }): void;
@@ -139,8 +138,7 @@ export interface WorkspaceRemoteClient {
     modelProfileId?: string;
   }): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; assistantMessage: string; modelProfileId: string }>;
   setEntryMember(memberId: string): Promise<WorkspaceSnapshot>;
-  upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number }): Promise<WorkspaceSnapshot>;
-  toggleMemberMonitoring(memberId: string): Promise<WorkspaceSnapshot>;
+  upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean }): Promise<WorkspaceSnapshot>;
   toggleWatcher(watcherId: string): Promise<WorkspaceSnapshot>;
   runWatcher(watcherId: string): Promise<WorkspaceSnapshot>;
   generateTemplate(brief: string): Promise<{ template: TeamTemplate; snapshot: WorkspaceSnapshot }>;
@@ -268,12 +266,6 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
           directMemberId,
         }),
       );
-      set((state) => ({
-        snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
-      }));
-    },
-    async toggleMemberMonitoring(memberId) {
-      const snapshot = await runMutation(set, () => client.toggleMemberMonitoring(memberId));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
       }));

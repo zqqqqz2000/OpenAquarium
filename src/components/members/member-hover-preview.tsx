@@ -36,7 +36,6 @@ export function MemberHoverPreview(props: {
               </Badge>
               <Badge variant="secondary">{member.skills.length} skills</Badge>
               {member.isEntryMember ? <Badge variant="outline">Entry</Badge> : null}
-              {member.observeAllRoomMessages ? <Badge variant="outline">Monitor all</Badge> : null}
               {member.acceptsDirectMessages ? <Badge variant="secondary">Direct inbox</Badge> : null}
               {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
             </div>

@@ -1,4 +1,4 @@
-import { Bot, Eye, Radio } from "lucide-react";
+import { Bot, Radio } from "lucide-react";
 
 import type { TeamMember } from "@/domain/model";
 import { Avatar, AvatarBadge, AvatarFallback } from "@/components/ui/avatar";
@@ -50,7 +50,6 @@ export function MemberAvatar(props: {
               {roleLabel}
             </span>
             {member.status === "running" ? <Radio size={16} className="text-[color:var(--tone-blueprint-foreground)]" /> : null}
-            {member.observeAllRoomMessages ? <Eye size={16} className="text-[color:var(--tone-blueprint-foreground)]" /> : null}
           </span>
           <span className="block text-sm text-muted-foreground">{member.name}</span>
         </span>

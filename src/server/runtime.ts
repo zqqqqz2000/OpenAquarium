@@ -25,7 +25,6 @@ import {
   postUserMessage,
   runWatcher,
   setEntryMember,
-  toggleMemberMonitor,
   toggleWatcher,
   updateMemberConfig,
   updateRoomSettings as updateRoomSettingsInWorkspace,
@@ -63,6 +62,7 @@ import { getRoomTranscriptFilePath, syncRoomTranscriptFiles } from "./room-trans
 import { normalizeProjectPath, resolveProjectWorkingDirectory } from "./project-paths";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
+import { CODEX_ACP_THINKING_DEPTH_ENV_KEY } from "../lib/acp/providers/codex-session";
 import { createDefaultGlobalWorkspaceConfig, findProviderModelProfile, resolveProviderBindingFromProfile } from "../lib/provider-model-profiles";
 import { resolveRoomTeamSummary } from "../lib/room-team";
 import type { TemplateStudioUIMessage } from "../lib/template-studio-ui-message";
@@ -197,12 +197,38 @@ function buildVisibleTaskFailureContent(message: string): string {
   return compactMessage.length > 0 ? `任务执行失败：${compactMessage}` : "任务执行失败。";
 }
 
+const TOOL_STATUS_PREFIX = "__oa_tool__";
+
 function describeTaskStatusTrace(summary: string): {
   append: boolean;
   title: string;
   content: string;
 } {
   const trimmedSummary = summary.trim();
+  if (trimmedSummary.startsWith(TOOL_STATUS_PREFIX)) {
+    try {
+      const rawPayload = JSON.parse(trimmedSummary.slice(TOOL_STATUS_PREFIX.length)) as {
+        toolCallId?: string;
+        toolName?: string;
+        status?: "running" | "completed";
+      };
+      const toolName = rawPayload.toolName?.trim() || "Tool";
+      const toolCallIdSuffix = rawPayload.toolCallId?.trim() ? ` [${rawPayload.toolCallId.trim()}]` : "";
+
+      return {
+        append: true,
+        title: rawPayload.status === "completed" ? `Tool completed${toolCallIdSuffix}` : `Tool call${toolCallIdSuffix}`,
+        content: toolName,
+      };
+    } catch {
+      return {
+        append: false,
+        title: "ACP status",
+        content: trimmedSummary,
+      };
+    }
+  }
+
   const toolCalledMatch = /^(.+?)\s+\(called\)$/u.exec(trimmedSummary);
   if (toolCalledMatch?.[1]) {
     return {
@@ -654,13 +680,6 @@ export class WorkspaceRuntime {
     const previous = this.snapshot;
     this.activeRoomId = roomId;
     const next = acknowledgeRoom(previous, roomId, this.context);
-    await this.applySnapshot(previous, next);
-    return this.snapshot;
-  }
-
-  async toggleMemberMonitoring(memberId: string): Promise<WorkspaceSnapshot> {
-    const previous = this.snapshot;
-    const next = toggleMemberMonitor(previous, memberId);
     await this.applySnapshot(previous, next);
     return this.snapshot;
   }
@@ -1579,14 +1598,24 @@ export class WorkspaceRuntime {
       this.globalConfig.modelProfiles,
       member.modelProfileId,
     );
+    const providerWithMemberDepth =
+      resolvedProvider.kind === "codex-acp" && member.codexThinkingDepth
+        ? {
+            ...resolvedProvider,
+            env: {
+              ...resolvedProvider.env,
+              [CODEX_ACP_THINKING_DEPTH_ENV_KEY]: member.codexThinkingDepth,
+            },
+          }
+        : resolvedProvider;
 
-    if (resolvedProvider === member.provider) {
+    if (providerWithMemberDepth === member.provider) {
       return member;
     }
 
     return {
       ...member,
-      provider: resolvedProvider,
+      provider: providerWithMemberDepth,
     };
   }
 
@@ -1597,11 +1626,21 @@ export class WorkspaceRuntime {
       member.modelProfileId,
     );
     const resolvedProfile = findProviderModelProfile(this.globalConfig.modelProfiles, member.modelProfileId);
+    const providerWithMemberDepth =
+      resolvedProvider.kind === "codex-acp" && member.codexThinkingDepth
+        ? {
+            ...resolvedProvider,
+            env: {
+              ...resolvedProvider.env,
+              [CODEX_ACP_THINKING_DEPTH_ENV_KEY]: member.codexThinkingDepth,
+            },
+          }
+        : resolvedProvider;
 
     return JSON.stringify({
       memberId: member.id,
       modelProfileId: resolvedProfile?.id ?? null,
-      provider: resolvedProvider,
+      provider: providerWithMemberDepth,
       providerSessionId: member.providerSessionId ?? null,
     });
   }

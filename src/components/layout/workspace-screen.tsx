@@ -108,7 +108,6 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const deleteTemplate = useWorkspaceStore((state) => state.deleteTemplate);
   const selectRoom = useWorkspaceStore((state) => state.selectRoom);
   const selectMember = useWorkspaceStore((state) => state.selectMember);
-  const toggleMemberMonitoring = useWorkspaceStore((state) => state.toggleMemberMonitoring);
   const runWatcher = useWorkspaceStore((state) => state.runWatcher);
   const updateMemberConfig = useWorkspaceStore((state) => state.updateMemberConfig);
   const updateRoomSettings = useWorkspaceStore((state) => state.updateRoomSettings);
@@ -398,7 +397,6 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
         connected={connected}
         error={error}
         onClose={closeMemberStudio}
-        onToggleMonitor={(targetMemberId) => void toggleMemberMonitoring(targetMemberId)}
         onSaveConfig={(input) => void updateMemberConfig(input)}
         onSetEntryMember={(targetMemberId) => void setEntryMember(targetMemberId)}
         onSaveWatcher={(input) => void upsertWatcher(input)}

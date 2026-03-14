@@ -144,10 +144,12 @@ export class WorkspaceRuntimeClient {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          isRole: input.isRole,
           summary: input.summary,
           prompt: input.prompt,
           modelProfileId: input.modelProfileId,
           acceptsDirectMessages: input.acceptsDirectMessages,
+          codexThinkingDepth: input.codexThinkingDepth,
           skills: input.skills,
           provider: input.provider,
         }),
@@ -244,7 +246,7 @@ export class WorkspaceRuntimeClient {
     return payload.snapshot;
   }
 
-  async upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number }): Promise<WorkspaceSnapshot> {
+  async upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean }): Promise<WorkspaceSnapshot> {
     const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
       await fetch(`${this.baseUrl}/api/members/${input.memberId}/watcher`, {
         method: "POST",
@@ -252,16 +254,8 @@ export class WorkspaceRuntimeClient {
         body: JSON.stringify({
           enabled: input.enabled,
           intervalMinutes: input.intervalMinutes,
+          persistent: input.persistent ?? false,
         }),
-      }),
-    );
-    return payload.snapshot;
-  }
-
-  async toggleMemberMonitoring(memberId: string): Promise<WorkspaceSnapshot> {
-    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
-      await fetch(`${this.baseUrl}/api/members/${memberId}/monitor-toggle`, {
-        method: "POST",
       }),
     );
     return payload.snapshot;

@@ -47,8 +47,8 @@ function describeMember(member: TeamMember, workspaceRoot: string): string {
   return [
     `- ${member.name} (@${member.handle})`,
     `  summary: ${member.summary}`,
-    `  observeAllRoomMessages: ${member.observeAllRoomMessages ? "true" : "false"}`,
     `  acceptsDirectMessages: ${member.acceptsDirectMessages ? "true" : "false"}`,
+    `  codexThinkingDepth: ${member.codexThinkingDepth ?? "default"}`,
     `  provider: ${member.provider.label} -> ${member.provider.command} ${member.provider.args.join(" ")}`.trim(),
     `  skills: ${skillList || "(none)"}`,
   ].join("\n");
@@ -65,6 +65,11 @@ function getVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room): ChatMe
   return (snapshot.messageOrderByRoom[room.id] ?? [])
     .map((messageId) => snapshot.messages[messageId])
     .filter((message): message is ChatMessage => Boolean(message) && isVisibleMainRoomMessage(message));
+}
+
+function getPromptVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember): ChatMessage[] {
+  void member;
+  return getVisibleRoomMessages(snapshot, room);
 }
 
 function sortMemberTasks(snapshot: WorkspaceSnapshot, memberId: string): MemberTask[] {
@@ -97,8 +102,8 @@ function resolvePromptMode(snapshot: WorkspaceSnapshot, member: TeamMember, task
   };
 }
 
-function collectDeltaMessages(snapshot: WorkspaceSnapshot, room: Room, previousTask?: MemberTask): ChatMessage[] {
-  const visibleMessages = getVisibleRoomMessages(snapshot, room);
+function collectDeltaMessages(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember, previousTask?: MemberTask): ChatMessage[] {
+  const visibleMessages = getPromptVisibleRoomMessages(snapshot, room, member);
 
   if (!previousTask) {
     return visibleMessages.slice(-DELTA_PROMPT_TRANSCRIPT_LIMIT);
@@ -120,7 +125,7 @@ function formatTaskSourceMessage(sourceMessage: ChatMessage): string {
   return sourceMessage.content;
 }
 
-function buildWatcherContextSections(sourceMessage: ChatMessage): string[] {
+function buildWatcherContextSections(sourceMessage: ChatMessage, watcherMode?: "persistent"): string[] {
   if (sourceMessage.transport !== "watch-digest") {
     return [];
   }
@@ -128,7 +133,9 @@ function buildWatcherContextSections(sourceMessage: ChatMessage): string[] {
   return [
     "",
     "[Watcher Context]",
-    "This task was triggered by a private watcher digest. The unseen room activity below was not posted into the room for others. Decide yourself whether any visible room reply is actually needed.",
+    watcherMode === "persistent"
+      ? "This task was triggered by a private watcher digest while persistent watch is active. Periodic watcher turns can arrive even when there is no new room activity. The unseen room activity below was not posted into the room for others. Decide yourself whether any visible room reply is actually needed."
+      : "This task was triggered by a private watcher digest. The unseen room activity below was not posted into the room for others. Decide yourself whether any visible room reply is actually needed.",
     sourceMessage.content,
   ];
 }
@@ -155,6 +162,17 @@ function buildMemberReferenceSyntaxSections(): string[] {
     "[Member Reference Syntax]",
     "@handle: passive reference only. Never use plain @handle to route work. Use it when explaining, citing, or comparing members for the user or team. It does not notify the member, does not route work, and does not start a task for them.",
     "@>handle: active routing. That member immediately receives the message as work and may be interrupted to act on it. Use @>handle only when you want that member to start working now.",
+  ];
+}
+
+function buildRoleStaffingCommandSections(): string[] {
+  return [
+    "[Role Staffing Commands]",
+    "The workspace supports these room commands: `/role-add <role> <employee-handle> [reason]`, `/role-remove <role> <employee-handle> [reason]`, and `/role-rename <employee-handle> <name>`.",
+    "This shared prompt only tells you the commands exist.",
+    "Whether you may actually use them is controlled by the specific member/template prompt, not by this shared prompt.",
+    "Treat the commands as authorized only when your member/template prompt explicitly grants them, for example with `允许使用岗位员工命令`.",
+    "If your member/template prompt says `不允许使用岗位员工命令`, or does not explicitly grant them, do not use these commands.",
   ];
 }
 
@@ -215,7 +233,7 @@ function buildSharedSections(args: {
       : "prompt: omitted on this delta turn; reuse the persisted member/session instructions until the next full prompt refresh.",
     `summary: ${member.summary}`,
     `isEntryMember: ${member.isEntryMember ? "true" : "false"}`,
-    `observeAllRoomMessages: ${member.observeAllRoomMessages ? "true" : "false"}`,
+    `codexThinkingDepth: ${member.codexThinkingDepth ?? "default"}`,
     "",
     "[Project]",
     `project: ${project.name}`,
@@ -229,13 +247,22 @@ function buildSharedSections(args: {
     "",
     ...buildMemberReferenceSyntaxSections(),
     "",
+    ...buildRoleStaffingCommandSections(),
+    "",
     "[Task]",
     `taskId: ${task.id}`,
     `title: ${task.title}`,
     `source message: ${formatTaskSourceMessage(sourceMessage)}`,
     `source transport: ${sourceMessage.transport}`,
     `routing note: ${routingNote}`,
-    ...buildWatcherContextSections(sourceMessage),
+    ...buildWatcherContextSections(
+      sourceMessage,
+      sourceMessage.transport === "watch-digest" && Object.values(snapshot.watchers).some(
+        (watcher) => watcher.memberId === member.id && watcher.roomId === room.id && watcher.persistent,
+      )
+        ? "persistent"
+        : undefined,
+    ),
     "",
     "[Preferred Tools]",
     preferredTools,
@@ -254,7 +281,7 @@ function buildFullPrompt(args: {
   taskSequence: number;
 }): string {
   const { room, snapshot, member } = args;
-  const recentMessages = getVisibleRoomMessages(snapshot, room)
+  const recentMessages = getPromptVisibleRoomMessages(snapshot, room, member)
     .slice(-FULL_PROMPT_TRANSCRIPT_LIMIT)
     .map((message) => summarizeMessage(snapshot, message))
     .join("\n");
@@ -312,7 +339,7 @@ function buildDeltaPrompt(args: {
   previousTask?: MemberTask;
 }): string {
   const { room, snapshot, previousTask } = args;
-  const deltaMessages = collectDeltaMessages(snapshot, room, previousTask)
+  const deltaMessages = collectDeltaMessages(snapshot, room, args.member, previousTask)
     .map((message) => summarizeMessage(snapshot, message))
     .join("\n");
 

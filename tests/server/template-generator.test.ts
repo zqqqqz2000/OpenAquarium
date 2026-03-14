@@ -51,7 +51,6 @@ describe("template generator", () => {
                 capabilities: ["prompt", "cancel", "loadSession"],
               },
               isEntryMember: true,
-              observeAllRoomMessages: true,
               acceptsDirectMessages: true,
               skills: [
                 {
@@ -78,7 +77,6 @@ describe("template generator", () => {
                 capabilities: ["prompt", "cancel"],
               },
               isEntryMember: true,
-              observeAllRoomMessages: false,
               acceptsDirectMessages: true,
               skills: [
                 {
