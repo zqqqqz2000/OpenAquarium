@@ -222,9 +222,14 @@ describe("TemplateStudioDialog", () => {
     expect(screen.getByText("Global team template config")).toBeInTheDocument();
     expect(screen.getByText("这里改的是 team template 本身，只影响之后新建的 room。当前 room 里的 member 实例不会被回写。")).toBeInTheDocument();
     expect(screen.getByText("Config directory: /tmp/openaquarium")).toBeInTheDocument();
+    expect(screen.getByText("Saved to file")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Save$/i })).toBeDisabled();
 
     await user.clear(screen.getByRole("textbox", { name: /Template name/i }));
     await user.type(screen.getByRole("textbox", { name: /Template name/i }), "Product Pod v2");
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+    expect(screen.getByText("Unsaved changes are local until you save.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Save$/i })).toBeEnabled();
     const forgeCrabTrigger = screen.getAllByRole("button", { name: /Forge Crab/i })[0];
     if (!forgeCrabTrigger) {
       throw new Error("Expected Forge Crab trigger");
@@ -674,5 +679,78 @@ describe("TemplateStudioDialog", () => {
 
     expect(savedPayload?.members.some((member) => member.handle === deletedMember.handle)).toBe(false);
     expect(savedPayload?.members.some((member) => member.handle === "qa-review")).toBe(true);
+  });
+
+  it("reopens from the latest template props instead of stale local drafts", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const templates = snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
+    const template = templates[0];
+
+    const { rerender } = renderTemplateStudio(
+      <TemplateStudioDialog
+        open
+        templates={templates}
+        selectedTemplateId={template.id}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSaveGlobalConfig={vi.fn()}
+      />,
+    );
+
+    const promptInput = screen.getByRole("textbox", { name: /^Prompt$/i });
+    await user.clear(promptInput);
+    await user.type(promptInput, "stale local draft");
+    expect(promptInput).toHaveValue("stale local draft");
+
+    rerender(
+      <TooltipProvider>
+        <TemplateStudioDialog
+          open={false}
+          templates={templates}
+          selectedTemplateId={template.id}
+          globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+          onClose={vi.fn()}
+          onDeleteTemplate={vi.fn()}
+          onSaveConfig={vi.fn()}
+          onSaveGlobalConfig={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const reloadedTemplates = templates.map((candidate) =>
+      candidate.id === template.id
+        ? {
+            ...candidate,
+            members: candidate.members.map((member, index) =>
+              index === 0
+                ? {
+                    ...member,
+                    prompt: "prompt from latest template props",
+                  }
+                : member,
+            ),
+          }
+        : candidate,
+    );
+
+    rerender(
+      <TooltipProvider>
+        <TemplateStudioDialog
+          open
+          templates={reloadedTemplates}
+          selectedTemplateId={template.id}
+          globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+          onClose={vi.fn()}
+          onDeleteTemplate={vi.fn()}
+          onSaveConfig={vi.fn()}
+          onSaveGlobalConfig={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("textbox", { name: /^Prompt$/i })).toHaveValue("prompt from latest template props");
   });
 });

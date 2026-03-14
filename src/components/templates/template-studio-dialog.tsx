@@ -13,7 +13,7 @@ import type {
   UpdateGlobalConfigInput,
   UpdateTemplateInput,
 } from "@/domain/model";
-import { addEmptyModelProfileDraft, buildGlobalConfigInput, createGlobalConfigDraft, type ModelProfileDraft } from "@/lib/global-config-draft";
+import { addEmptyModelProfileDraft, buildGlobalConfigInput, createGlobalConfigDraft, type GlobalConfigDraft, type ModelProfileDraft } from "@/lib/global-config-draft";
 import { WorkspaceRuntimeClient, resolveWorkspaceRuntimeBaseUrl } from "@/lib/runtime-client";
 import { AllowedSkillSelector } from "@/components/skills/allowed-skill-selector";
 import {
@@ -200,6 +200,14 @@ function formatProviderTypeLabel(providerType: string): string {
 function isToastInteractionTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement
     && Boolean(target.closest("[data-sonner-toaster], [data-sonner-toast], [data-close-button]"));
+}
+
+function isTemplateDraftDirty(template: TeamTemplate, draft: TemplateConfigDraft): boolean {
+  return JSON.stringify(buildTemplateConfigInput(template, draft)) !== JSON.stringify(buildTemplateConfigInput(template, createTemplateConfigDraft(template)));
+}
+
+function isGlobalConfigDraftDirty(globalConfig: GlobalWorkspaceConfig, draft: GlobalConfigDraft): boolean {
+  return JSON.stringify(buildGlobalConfigInput(globalConfig, draft)) !== JSON.stringify(buildGlobalConfigInput(globalConfig, createGlobalConfigDraft(globalConfig)));
 }
 
 function InlineHint(props: { content: string }) {
@@ -720,6 +728,19 @@ export function TemplateStudioDialog(props: {
   const wasOpenRef = useRef(false);
   const previousSelectedTemplateIdRef = useRef<string | undefined>(undefined);
 
+  const resetTemplateStudioState = (): void => {
+    setActiveTab("templates");
+    setTemplateDrafts({});
+    setActiveMemberIds({});
+    setTemplateErrorById({});
+    setTemplateDeleteError(undefined);
+    setSavingTemplate(false);
+    setChatInputByTemplate({});
+    setChatMessagesByTemplate({});
+    setChatModelIdByTemplate({});
+    setStoppedChatMessageIdByTemplate({});
+  };
+
   useEffect(() => {
     const openedNow = open && !wasOpenRef.current;
     const selectedTemplateChanged = selectedTemplateId !== previousSelectedTemplateIdRef.current;
@@ -728,6 +749,7 @@ export function TemplateStudioDialog(props: {
     previousSelectedTemplateIdRef.current = selectedTemplateId;
 
     if (!open) {
+      resetTemplateStudioState();
       return;
     }
 
@@ -773,6 +795,10 @@ export function TemplateStudioDialog(props: {
     : undefined;
   const activeChatModelId = selectedTemplate ? chatModelIdByTemplate[selectedTemplate.id] : undefined;
   const activeModelProfile = globalConfigDraft.modelProfiles.find((profile) => profile.id === activeModelProfileId) ?? globalConfigDraft.modelProfiles[0];
+  const selectedTemplateDirty = selectedTemplate && selectedTemplateDraft
+    ? isTemplateDraftDirty(selectedTemplate, selectedTemplateDraft)
+    : false;
+  const globalConfigDirty = isGlobalConfigDraftDirty(globalConfig, globalConfigDraft);
 
   if (!open) {
     return null;
@@ -957,7 +983,15 @@ export function TemplateStudioDialog(props: {
   };
 
   return (
-    <Dialog open onOpenChange={(nextOpen) => (!nextOpen ? onClose() : undefined)}>
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          resetTemplateStudioState();
+          onClose();
+        }
+      }}
+    >
       <DialogContent
         className="grid h-[94vh] w-[min(96vw,1360px)] max-w-[1360px] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[1360px]"
         showCloseButton={false}
@@ -1148,6 +1182,7 @@ export function TemplateStudioDialog(props: {
                                 {selectedTemplateDraft.members.length} members
                               </Badge>
                             ) : null}
+                            {selectedTemplateDirty ? <Badge variant="secondary">Unsaved changes</Badge> : <Badge variant="outline">Saved to file</Badge>}
                           </div>
                           <label className="flex flex-col gap-2">
                             <span className="text-sm font-medium">Team template name</span>
@@ -1349,8 +1384,16 @@ export function TemplateStudioDialog(props: {
                       </div>
                     </ScrollArea>
                     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/95 px-1 pt-4">
-                      {templateErrorById[selectedTemplate.id] ? <p className="m-0 text-sm text-destructive">{templateErrorById[selectedTemplate.id]}</p> : <div />}
-                      <Button onClick={() => void saveTemplateConfig()} disabled={savingTemplate}>
+                      <div>
+                        {templateErrorById[selectedTemplate.id] ? (
+                          <p className="m-0 text-sm text-destructive">{templateErrorById[selectedTemplate.id]}</p>
+                        ) : (
+                          <p className="m-0 text-sm text-muted-foreground">
+                            {selectedTemplateDirty ? "Unsaved changes are local until you save." : "This view matches the file on disk."}
+                          </p>
+                        )}
+                      </div>
+                      <Button onClick={() => void saveTemplateConfig()} disabled={savingTemplate || !selectedTemplateDirty}>
                         <Save size={16} />
                         Save
                       </Button>
@@ -1507,8 +1550,16 @@ export function TemplateStudioDialog(props: {
                     ) : null}
 
                     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-                      {globalConfigError ? <p className="m-0 text-sm text-destructive">{globalConfigError}</p> : <div />}
-                      <Button onClick={() => void saveGlobalConfig()} disabled={savingGlobalConfig}>
+                      <div>
+                        {globalConfigError ? (
+                          <p className="m-0 text-sm text-destructive">{globalConfigError}</p>
+                        ) : (
+                          <p className="m-0 text-sm text-muted-foreground">
+                            {globalConfigDirty ? "Unsaved provider changes are local until you save." : "Provider settings match the file on disk."}
+                          </p>
+                        )}
+                      </div>
+                      <Button onClick={() => void saveGlobalConfig()} disabled={savingGlobalConfig || !globalConfigDirty}>
                         <Save size={16} />
                         Save
                       </Button>

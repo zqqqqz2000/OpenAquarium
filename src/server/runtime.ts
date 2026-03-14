@@ -1,4 +1,5 @@
 import path from "node:path";
+import { watch, type FSWatcher } from "node:fs";
 
 import type {
   GlobalWorkspaceConfig,
@@ -409,6 +410,9 @@ export class WorkspaceRuntime {
   private readonly logger?: DiagnosticsLogger;
   private globalConfig: GlobalWorkspaceConfig;
   private readonly executorKeys = new Map<MemberId, string>();
+  private templateConfigWatcher?: FSWatcher;
+  private templateConfigReloadTimer: ReturnType<typeof setTimeout> | undefined;
+  private templateConfigReloadChain: Promise<void> = Promise.resolve();
   private pendingProgressPersist = false;
   private pendingProgressPersistTimer: ReturnType<typeof setTimeout> | undefined;
   private persistenceChain: Promise<void> = Promise.resolve();
@@ -450,6 +454,7 @@ export class WorkspaceRuntime {
         ? Math.max(0, Math.floor(args.taskExecutionMaxRetries))
         : DEFAULT_TASK_EXECUTION_MAX_RETRIES;
     this.logger = args.logger;
+    this.startTemplateConfigWatcher();
     this.executorFactory =
       args.executorFactory ??
       (({ member, project }) =>
@@ -842,12 +847,7 @@ export class WorkspaceRuntime {
       modelProfileId: input.modelProfileId,
       modelId: input.modelId,
     });
-
-    const reloaded = await this.globalConfigManager.load();
-    this.globalConfig = reloaded.config;
-    const previous = this.snapshot;
-    const next = mergeGlobalTemplatesIntoSnapshot(previous, reloaded.templates);
-    await this.applySnapshot(previous, next);
+    await this.reloadGlobalTemplatesFromDisk();
 
     return {
       assistantMessage: assistantReply.assistantMessage,
@@ -891,11 +891,7 @@ export class WorkspaceRuntime {
       modelId: streamRun.modelId,
       result: streamRun.result,
       finalize: async () => {
-        const reloaded = await this.globalConfigManager.load();
-        this.globalConfig = reloaded.config;
-        const previous = this.snapshot;
-        const next = mergeGlobalTemplatesIntoSnapshot(previous, reloaded.templates);
-        await this.applySnapshot(previous, next);
+        await this.reloadGlobalTemplatesFromDisk();
 
         return {
           snapshot: this.snapshot,
@@ -1028,6 +1024,12 @@ export class WorkspaceRuntime {
   }
 
   async dispose(): Promise<void> {
+    if (this.templateConfigReloadTimer) {
+      clearTimeout(this.templateConfigReloadTimer);
+      this.templateConfigReloadTimer = undefined;
+    }
+    this.templateConfigWatcher?.close();
+    this.templateConfigWatcher = undefined;
     this.watcherTimers.forEach((entry) => clearInterval(entry.timer));
     this.watcherTimers.clear();
     this.pendingWatcherRuns.clear();
@@ -1142,6 +1144,46 @@ export class WorkspaceRuntime {
   private async enqueuePersistence(snapshot: WorkspaceSnapshot): Promise<void> {
     this.persistenceChain = this.persistenceChain.then(() => this.persistence.save(snapshot));
     await this.persistenceChain;
+  }
+
+  private startTemplateConfigWatcher(): void {
+    if (process.env.VITEST) {
+      return;
+    }
+
+    try {
+      this.templateConfigWatcher = watch(this.globalConfigManager.directory, (_eventType, filename) => {
+        if (filename !== "templates.json") {
+          return;
+        }
+
+        if (this.templateConfigReloadTimer) {
+          clearTimeout(this.templateConfigReloadTimer);
+        }
+
+        this.templateConfigReloadTimer = setTimeout(() => {
+          this.templateConfigReloadTimer = undefined;
+          void this.reloadGlobalTemplatesFromDisk();
+        }, 50);
+      });
+    } catch (error) {
+      this.logger?.info("template-config-watch-unavailable", {
+        directory: this.globalConfigManager.directory,
+        error: getErrorMessage(error as RuntimeError),
+      });
+    }
+  }
+
+  private async reloadGlobalTemplatesFromDisk(): Promise<void> {
+    this.templateConfigReloadChain = this.templateConfigReloadChain.then(async () => {
+      const reloaded = await this.globalConfigManager.load();
+      this.globalConfig = reloaded.config;
+      const previous = this.snapshot;
+      const next = mergeGlobalTemplatesIntoSnapshot(previous, reloaded.templates);
+      await this.applySnapshot(previous, next);
+    });
+
+    await this.templateConfigReloadChain;
   }
 
   private dispatchNewTasks(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): void {

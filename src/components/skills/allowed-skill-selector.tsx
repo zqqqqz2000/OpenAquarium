@@ -49,6 +49,8 @@ export function AllowedSkillSelector(props: {
       const client = new WorkspaceRuntimeClient();
       const response = await client.listSkills();
       setSkills(response.skills);
+    } catch {
+      setSkills([]);
     } finally {
       setLoading(false);
     }
