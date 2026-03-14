@@ -7,6 +7,7 @@ export interface TemplateStudioChatDataParts {
     snapshot: WorkspaceSnapshot;
     globalConfig: GlobalWorkspaceConfig;
     modelProfileId: string;
+    modelId?: string;
   };
   [key: string]: unknown;
 }

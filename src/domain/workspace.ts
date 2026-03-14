@@ -208,6 +208,18 @@ function normalizeHandleToken(value: string): string {
   return value.trim().replace(/^[@>]+/u, "").toLowerCase();
 }
 
+function getNormalizedRoleLabel(member: Pick<TeamMember, "roleName" | "roleId" | "handle">): string {
+  const rawRoleName = typeof member.roleName === "string" ? member.roleName.trim() : "";
+  const fallbackRoleName = member.handle.trim().replace(/^@/u, "");
+  return normalizeHandleToken(rawRoleName || fallbackRoleName);
+}
+
+function getNormalizedRoleId(member: Pick<TeamMember, "roleId" | "handle">): string {
+  const rawRoleId = typeof member.roleId === "string" ? member.roleId.trim() : "";
+  const fallbackRoleId = member.handle.trim().replace(/^@/u, "");
+  return normalizeHandleToken(rawRoleId || fallbackRoleId);
+}
+
 function getActiveRoomMembers(snapshot: WorkspaceSnapshot, roomId: RoomId): TeamMember[] {
   const room = snapshot.rooms[roomId];
   if (!room) {
@@ -227,7 +239,7 @@ function resolveMemberByHandle(snapshot: WorkspaceSnapshot, roomId: RoomId, hand
 function resolveMembersByRole(snapshot: WorkspaceSnapshot, roomId: RoomId, role: string): TeamMember[] {
   const normalizedRole = normalizeHandleToken(role);
   return getActiveRoomMembers(snapshot, roomId)
-    .filter((member) => member.roleName.toLowerCase() === normalizedRole || member.roleId.toLowerCase() === normalizedRole)
+    .filter((member) => getNormalizedRoleLabel(member) === normalizedRole || getNormalizedRoleId(member) === normalizedRole)
     .sort((left, right) => left.handle.localeCompare(right.handle));
 }
 
@@ -237,8 +249,8 @@ function resolveRoleOwner(snapshot: WorkspaceSnapshot, roomId: RoomId, role: str
     (member) =>
       member.isRole === true
       && (member.handle.toLowerCase() === normalizedRole
-        || member.roleName.toLowerCase() === normalizedRole
-        || member.roleId.toLowerCase() === normalizedRole),
+        || getNormalizedRoleLabel(member) === normalizedRole
+        || getNormalizedRoleId(member) === normalizedRole),
   );
 }
 
@@ -884,6 +896,7 @@ function instantiateMember(
     prompt: blueprint.prompt,
     accentTone: blueprint.accentTone,
     modelProfileId: blueprint.modelProfileId,
+    modelId: blueprint.modelId,
     skills: blueprint.skills,
     provider: blueprint.provider,
     acceptsDirectMessages: blueprint.acceptsDirectMessages ?? true,
@@ -1455,6 +1468,7 @@ function validateTemplateMembers(members: TeamMemberBlueprint[]): TeamMemberBlue
       prompt: member.prompt.trim(),
       accentTone: validateAccentTone(member.accentTone),
       modelProfileId: member.modelProfileId?.trim() || undefined,
+      modelId: member.modelId?.trim() || undefined,
       codexThinkingDepth: member.codexThinkingDepth,
       skills: validateSkills(member.skills),
       provider: normalizeProviderBinding(member.provider),
@@ -1526,6 +1540,7 @@ function validateRoomTeamMembers(members: RoomTeamMemberInput[]): NormalizedRoom
       prompt: member.prompt.trim(),
       accentTone: validateAccentTone(member.accentTone),
       modelProfileId: member.modelProfileId?.trim() || undefined,
+      modelId: member.modelId?.trim() || undefined,
       codexThinkingDepth: member.codexThinkingDepth,
       skills: validateSkills(member.skills),
       provider: normalizeProviderBinding(member.provider),
@@ -1573,6 +1588,7 @@ export function updateMemberConfig(current: WorkspaceSnapshot, input: UpdateMemb
     summary: input.summary.trim(),
     prompt: input.prompt.trim(),
     modelProfileId: input.modelProfileId?.trim() || undefined,
+    modelId: input.modelId?.trim() || undefined,
     acceptsDirectMessages: input.acceptsDirectMessages,
     codexThinkingDepth: input.codexThinkingDepth,
     skills: validateSkills(input.skills),
@@ -1748,6 +1764,7 @@ export function updateRoomTeam(
           prompt: memberInput.prompt,
           accentTone: memberInput.accentTone,
           modelProfileId: memberInput.modelProfileId,
+          modelId: memberInput.modelId,
           skills: memberInput.skills,
           provider: memberInput.provider,
           acceptsDirectMessages: memberInput.acceptsDirectMessages ?? true,
@@ -1769,6 +1786,7 @@ export function updateRoomTeam(
           prompt: memberInput.prompt,
           accentTone: memberInput.accentTone,
           modelProfileId: memberInput.modelProfileId,
+          modelId: memberInput.modelId,
           skills: memberInput.skills,
           provider: memberInput.provider,
           acceptsDirectMessages: memberInput.acceptsDirectMessages ?? true,

@@ -5,6 +5,7 @@ import type {
   ProviderBinding,
   TeamMember,
   TeamTemplate,
+  TemplateStudioModelCatalog,
   UpdateGlobalConfigInput,
   UpdateRoomSettingsInput,
   WorkspaceSnapshot,
@@ -91,8 +92,9 @@ export interface TaskStreamCallbacks {
 
 export interface TemplateStudioChatStreamSession {
   modelProfileId: string;
+  modelId?: string;
   result: Awaited<ReturnType<TemplateStudioChatServiceLike["stream"]>>["result"];
-  finalize(): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; modelProfileId: string }>;
+  finalize(): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; modelProfileId: string; modelId?: string }>;
   cleanup(): Promise<void>;
 }
 
@@ -204,6 +206,15 @@ function describeTaskStatusTrace(summary: string): {
   title: string;
   content: string;
 } {
+  const reasoningMatch = /^Reasoning:(.*)$/su.exec(summary);
+  if (reasoningMatch && reasoningMatch[1].trim().length > 0) {
+    return {
+      append: false,
+      title: "Reasoning",
+      content: reasoningMatch[1],
+    };
+  }
+
   const trimmedSummary = summary.trim();
   if (trimmedSummary.startsWith(TOOL_STATUS_PREFIX)) {
     try {
@@ -247,20 +258,31 @@ function describeTaskStatusTrace(summary: string): {
     };
   }
 
-  const reasoningMatch = /^Reasoning:\s*(.+)$/u.exec(trimmedSummary);
-  if (reasoningMatch?.[1]) {
-    return {
-      append: false,
-      title: "Reasoning",
-      content: reasoningMatch[1],
-    };
-  }
-
   return {
     append: false,
     title: "ACP status",
     content: trimmedSummary,
   };
+}
+
+function concatenateReasoningContent(previousContent: string, nextContent: string): string {
+  if (previousContent.length === 0 || nextContent.length === 0) {
+    return `${previousContent}${nextContent}`;
+  }
+
+  if (/\s$/u.test(previousContent) || /^\s/u.test(nextContent)) {
+    return `${previousContent}${nextContent}`;
+  }
+
+  if (/^[.,;:!?)}\]]/u.test(nextContent)) {
+    return `${previousContent}${nextContent}`;
+  }
+
+  if (/[\p{L}\p{N}]$/u.test(previousContent) && /^[\p{L}\p{N}]/u.test(nextContent)) {
+    return `${previousContent} ${nextContent}`;
+  }
+
+  return `${previousContent}${nextContent}`;
 }
 
 function cloneTemplates(snapshot: WorkspaceSnapshot): TeamTemplate[] {
@@ -807,7 +829,8 @@ export class WorkspaceRuntime {
     templateId: string;
     messages: TemplateStudioChatMessage[];
     modelProfileId?: string;
-  }): Promise<{ assistantMessage: string; snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; modelProfileId: string }> {
+    modelId?: string;
+  }): Promise<{ assistantMessage: string; snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; modelProfileId: string; modelId?: string }> {
     const assistantReply = await this.templateStudioChatService.chat({
       configDirectory: this.globalConfigManager.directory,
       templateId: input.templateId,
@@ -815,6 +838,7 @@ export class WorkspaceRuntime {
       templates: cloneTemplates(this.snapshot),
       globalConfig: this.globalConfig,
       modelProfileId: input.modelProfileId,
+      modelId: input.modelId,
     });
 
     const reloaded = await this.globalConfigManager.load();
@@ -826,15 +850,27 @@ export class WorkspaceRuntime {
     return {
       assistantMessage: assistantReply.assistantMessage,
       modelProfileId: assistantReply.modelProfileId,
+      modelId: assistantReply.modelId,
       snapshot: this.snapshot,
       globalConfig: this.globalConfig,
     };
+  }
+
+  async getTemplateStudioModelCatalog(input: {
+    modelProfileId?: string;
+  }): Promise<TemplateStudioModelCatalog> {
+    return this.templateStudioChatService.getModelCatalog({
+      configDirectory: this.globalConfigManager.directory,
+      globalConfig: this.globalConfig,
+      modelProfileId: input.modelProfileId,
+    });
   }
 
   async streamTemplateStudioChat(input: {
     templateId: string;
     messages: TemplateStudioUIMessage[];
     modelProfileId?: string;
+    modelId?: string;
     abortSignal?: AbortSignal;
   }): Promise<TemplateStudioChatStreamSession> {
     const streamRun = await this.templateStudioChatService.stream({
@@ -844,11 +880,13 @@ export class WorkspaceRuntime {
       templates: cloneTemplates(this.snapshot),
       globalConfig: this.globalConfig,
       modelProfileId: input.modelProfileId,
+      modelId: input.modelId,
       abortSignal: input.abortSignal,
     });
 
     return {
       modelProfileId: streamRun.modelProfileId,
+      modelId: streamRun.modelId,
       result: streamRun.result,
       finalize: async () => {
         const reloaded = await this.globalConfigManager.load();
@@ -861,6 +899,7 @@ export class WorkspaceRuntime {
           snapshot: this.snapshot,
           globalConfig: this.globalConfig,
           modelProfileId: streamRun.modelProfileId,
+          modelId: streamRun.modelId,
         };
       },
       cleanup: async () => {
@@ -1410,6 +1449,14 @@ export class WorkspaceRuntime {
             return;
           }
           const statusTrace = describeTaskStatusTrace(summary);
+          const latestTraceId = (this.snapshot.taskTraceOrderByTask[args.taskId] ?? []).at(-1);
+          const latestTrace = latestTraceId ? this.snapshot.taskTraces[latestTraceId] : undefined;
+          const nextStatusContent =
+            statusTrace.title === "Reasoning"
+            && latestTrace?.kind === "status"
+            && latestTrace.title === statusTrace.title
+              ? concatenateReasoningContent(latestTrace.content, statusTrace.content)
+              : statusTrace.content;
           this.snapshot = compactWorkspaceSnapshot(
             statusTrace.append
               ? appendTaskTrace(
@@ -1420,7 +1467,7 @@ export class WorkspaceRuntime {
                     memberId: currentTask.memberId,
                     kind: "status",
                     title: statusTrace.title,
-                    content: statusTrace.content,
+                    content: nextStatusContent,
                   },
                   this.context,
                 )
@@ -1432,7 +1479,7 @@ export class WorkspaceRuntime {
                     memberId: currentTask.memberId,
                     kind: "status",
                     title: statusTrace.title,
-                    content: statusTrace.content,
+                    content: nextStatusContent,
                   },
                   this.context,
                 ),
@@ -1640,8 +1687,8 @@ export class WorkspaceRuntime {
     return JSON.stringify({
       memberId: member.id,
       modelProfileId: resolvedProfile?.id ?? null,
+      modelId: member.modelId ?? null,
       provider: providerWithMemberDepth,
-      providerSessionId: member.providerSessionId ?? null,
     });
   }
 

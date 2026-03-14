@@ -77,6 +77,13 @@ export async function handleWorkspaceJsonApiRequest(args: {
     };
   }
 
+  if (method === "GET" && pathname === "/api/template-studio/models") {
+    return {
+      statusCode: 200,
+      payload: await runtime.getTemplateStudioModelCatalog((body as { modelProfileId?: string } | undefined) ?? {}),
+    };
+  }
+
   if (method === "POST" && pathname === "/api/system/project-path") {
     try {
       return {
@@ -155,6 +162,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         content: string;
       }>;
       modelProfileId?: string;
+      modelId?: string;
     });
     return {
       statusCode: 200,
@@ -586,6 +594,13 @@ export async function startWorkspaceHttpServer(args: {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/template-studio/models") {
+        sendJson(response, 200, await args.runtime.getTemplateStudioModelCatalog({
+          modelProfileId: url.searchParams.get("modelProfileId") ?? undefined,
+        }));
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/system/project-path") {
         try {
           sendJson(response, 200, { path: await selectProjectDirectory() });
@@ -653,6 +668,7 @@ export async function startWorkspaceHttpServer(args: {
           templateId: string;
           messages: TemplateStudioUIMessage[];
           modelProfileId?: string;
+          modelId?: string;
         }>(request);
         if (!body.templateId) {
           sendJson(response, 400, { error: "Missing template id" });
@@ -684,6 +700,7 @@ export async function startWorkspaceHttpServer(args: {
               templateId: body.templateId,
               messages,
               modelProfileId: body.modelProfileId,
+              modelId: body.modelId,
               abortSignal: abortController.signal,
             });
 
@@ -706,6 +723,7 @@ export async function startWorkspaceHttpServer(args: {
                     snapshot: buildTransportSnapshot(synced.snapshot),
                     globalConfig: synced.globalConfig,
                     modelProfileId: synced.modelProfileId,
+                    modelId: synced.modelId,
                   },
                 });
               }

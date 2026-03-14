@@ -366,6 +366,76 @@ describe("workspace domain", () => {
     expect(Object.values(routed.tasks).some((task) => routed.members[task.memberId]?.handle === "builder-main")).toBe(true);
   });
 
+  it("routes role handles without crashing when legacy members are missing roleName", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [{ handle: "builder-main", name: "Forge Crab" }],
+      },
+      context,
+    );
+
+    const builderMain = Object.values(snapshot.members).find((member) => member.handle === "builder-main");
+    if (!builderMain) {
+      throw new Error("Expected builder-main member");
+    }
+
+    snapshot = {
+      ...snapshot,
+      members: {
+        ...snapshot.members,
+        [builderMain.id]: {
+          ...builderMain,
+          roleName: undefined,
+        },
+      },
+    };
+
+    const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@>builder 继续实现");
+
+    expect(addressedIds.map((memberId) => snapshot.members[memberId]?.handle)).toEqual(["builder-main"]);
+  });
+
+  it("routes role handles without crashing when legacy members are missing roleId", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [{ handle: "builder-main", name: "Forge Crab" }],
+      },
+      context,
+    );
+
+    const builderMain = Object.values(snapshot.members).find((member) => member.handle === "builder-main");
+    if (!builderMain) {
+      throw new Error("Expected builder-main member");
+    }
+
+    snapshot = {
+      ...snapshot,
+      members: {
+        ...snapshot.members,
+        [builderMain.id]: {
+          ...builderMain,
+          roleId: undefined,
+        },
+      },
+    };
+
+    const addressedIds = extractAddressedMemberIds(snapshot, roomId, "@>builder 继续实现");
+
+    expect(addressedIds.map((memberId) => snapshot.members[memberId]?.handle)).toEqual(["builder-main"]);
+  });
+
   it("does not create member tasks when @>role is ambiguous across multiple employees", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);

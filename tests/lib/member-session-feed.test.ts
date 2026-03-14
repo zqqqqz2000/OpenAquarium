@@ -364,4 +364,91 @@ describe("member session feed", () => {
       `room:${leadReply.id}`,
     ]);
   });
+
+  it("merges consecutive reasoning updates while keeping tool events separate", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "lead");
+
+    if (!lead) {
+      throw new Error("Expected a lead member");
+    }
+
+    const leadTask = Object.values(snapshot.tasks).find((task) => task.memberId === lead.id);
+    if (!leadTask) {
+      throw new Error("Expected a lead task");
+    }
+
+    snapshot.taskTraces.trace_0401 = {
+      id: "trace_0401",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "ACP status",
+      content: "Reasoning: approach ",
+      createdAt: "2026-03-09T07:30:01.000Z",
+    };
+    snapshot.taskTraces.trace_0402 = {
+      id: "trace_0402",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "ACP status",
+      content: "Reasoning: plan",
+      createdAt: "2026-03-09T07:30:01.050Z",
+    };
+    snapshot.taskTraces.trace_0403 = {
+      id: "trace_0403",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "Tool call",
+      content: "Read member-session-feed.ts (called)",
+      createdAt: "2026-03-09T07:30:01.100Z",
+    };
+    snapshot.taskTraces.trace_0404 = {
+      id: "trace_0404",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "ACP status",
+      content: "Reasoning: next step",
+      createdAt: "2026-03-09T07:30:01.150Z",
+    };
+    snapshot.taskTraces.trace_0405 = {
+      id: "trace_0405",
+      taskId: leadTask.id,
+      roomId: room.id,
+      memberId: lead.id,
+      kind: "status",
+      title: "ACP status",
+      content: "Reasoning:.",
+      createdAt: "2026-03-09T07:30:01.200Z",
+    };
+    snapshot.taskTraceOrderByTask[leadTask.id] = [
+      "trace_0401",
+      "trace_0402",
+      "trace_0403",
+      "trace_0404",
+      "trace_0405",
+    ];
+
+    const entries = getMemberSessionTimelineEntries(snapshot, room, lead);
+    const activityEntry = entries.find((entry) => entry.type === "activity" && entry.taskId === leadTask.id);
+
+    if (!activityEntry || activityEntry.type !== "activity") {
+      throw new Error("Expected a task activity entry");
+    }
+
+    expect(activityEntry.events.map(describeActivityEvent)).toEqual([
+      "approach plan",
+      "tool:Read member-session-feed.ts:running",
+      "next step.",
+      "room:message_0101",
+    ]);
+  });
 });

@@ -1,12 +1,14 @@
 import path from "node:path";
 
-import { createACPProvider } from "@mcpc-tech/acp-ai-provider";
+import { createACPProvider, type ModelInfo } from "@mcpc-tech/acp-ai-provider";
 import { convertToModelMessages, generateText, streamText, type UIMessageChunk } from "ai";
 
 import type {
   GlobalWorkspaceConfig,
   ProviderModelProfile,
   TeamTemplate,
+  TemplateStudioModelCatalog,
+  TemplateStudioModelOption,
   TemplateStudioChatMessage,
 } from "@/domain/model";
 import type { TemplateStudioChatDataParts, TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
@@ -19,11 +21,13 @@ export interface TemplateStudioChatRequest {
   templates: TeamTemplate[];
   globalConfig: GlobalWorkspaceConfig;
   modelProfileId?: string;
+  modelId?: string;
 }
 
 export interface TemplateStudioChatResult {
   assistantMessage: string;
   modelProfileId: string;
+  modelId?: string;
 }
 
 export interface TemplateStudioChatStreamRequest {
@@ -33,6 +37,7 @@ export interface TemplateStudioChatStreamRequest {
   templates: TeamTemplate[];
   globalConfig: GlobalWorkspaceConfig;
   modelProfileId?: string;
+  modelId?: string;
   abortSignal?: AbortSignal;
 }
 
@@ -48,7 +53,14 @@ export interface TemplateStudioChatStreamResult {
 export interface TemplateStudioChatStreamRun {
   result: TemplateStudioChatStreamResult;
   modelProfileId: string;
+  modelId?: string;
   cleanup(): Promise<void>;
+}
+
+export interface TemplateStudioModelCatalogRequest {
+  configDirectory: string;
+  globalConfig: GlobalWorkspaceConfig;
+  modelProfileId?: string;
 }
 
 function describeTemplates(templates: TeamTemplate[]): string {
@@ -142,22 +154,110 @@ function normalizeChatMessages(messages: TemplateStudioChatMessage[]): TemplateS
     .filter((message) => message.content.length > 0);
 }
 
+function resolveSelectedProfile(args: {
+  globalConfig: GlobalWorkspaceConfig;
+  modelProfileId?: string;
+}): ProviderModelProfile | undefined {
+  return (
+    findProviderModelProfile(args.globalConfig.modelProfiles, args.modelProfileId)
+    ?? findProviderModelProfile(args.globalConfig.modelProfiles, args.globalConfig.templateChatModelProfileId)
+    ?? args.globalConfig.modelProfiles[0]
+  );
+}
+
+function mapRuntimeModel(model: ModelInfo): TemplateStudioModelOption {
+  return {
+    id: model.modelId,
+    label: model.name,
+    description: model.description ?? undefined,
+  };
+}
+
+function buildUnavailableCatalog(args: {
+  selectedProfile: ProviderModelProfile;
+  unavailableMessage: string;
+}): TemplateStudioModelCatalog {
+  return {
+    source: "unavailable",
+    providerType: args.selectedProfile.providerType,
+    providerKind: args.selectedProfile.binding.kind,
+    providerLabel: args.selectedProfile.binding.label,
+    selectedProfileId: args.selectedProfile.id,
+    currentModelId: undefined,
+    unavailableMessage: args.unavailableMessage,
+    availableModels: [],
+  };
+}
+
+async function cleanupProvider(provider: { cleanup: () => void | Promise<void> }): Promise<void> {
+  try {
+    await provider.cleanup();
+  } catch {
+    // Cleanup failures should not replace the primary runtime-model error path.
+  }
+}
+
+async function loadTemplateStudioModelCatalog(args: TemplateStudioModelCatalogRequest): Promise<TemplateStudioModelCatalog> {
+  const selectedProfile = resolveSelectedProfile(args);
+  if (!selectedProfile) {
+    throw new Error("Template Studio requires at least one configured model profile.");
+  }
+
+  const provider = createACPProvider({
+    command: selectedProfile.binding.command,
+    args: selectedProfile.binding.args,
+    env: selectedProfile.binding.env,
+    session: {
+      cwd: selectedProfile.binding.workingDirectory ?? args.configDirectory,
+      mcpServers: [],
+    },
+  });
+
+  try {
+    const session = await provider.initSession();
+    const availableModels = session.models?.availableModels?.map(mapRuntimeModel) ?? [];
+
+    if (availableModels.length > 0) {
+      return {
+        source: "runtime",
+        providerType: selectedProfile.providerType,
+        providerKind: selectedProfile.binding.kind,
+        providerLabel: selectedProfile.binding.label,
+        selectedProfileId: selectedProfile.id,
+        currentModelId: session.models?.currentModelId,
+        availableModels,
+      };
+    }
+
+    return buildUnavailableCatalog({
+      selectedProfile,
+      unavailableMessage: "Runtime model capability unavailable: session returned no available models.",
+    });
+  } catch (error) {
+    return buildUnavailableCatalog({
+      selectedProfile,
+      unavailableMessage: `Runtime model capability unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  } finally {
+    await cleanupProvider(provider);
+  }
+}
+
 async function resolveChatExecution(args: {
   configDirectory: string;
   templateId: string;
   templates: TeamTemplate[];
   globalConfig: GlobalWorkspaceConfig;
   modelProfileId?: string;
+  modelId?: string;
   messages: TemplateStudioUIMessage[];
 }): Promise<{
   selectedProfile: ProviderModelProfile;
   provider: ReturnType<typeof createACPProvider>;
   modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
+  modelId?: string;
 }> {
-  const selectedProfile =
-    findProviderModelProfile(args.globalConfig.modelProfiles, args.modelProfileId)
-    ?? findProviderModelProfile(args.globalConfig.modelProfiles, args.globalConfig.templateChatModelProfileId)
-    ?? args.globalConfig.modelProfiles[0];
+  const selectedProfile = resolveSelectedProfile(args);
 
   if (!selectedProfile) {
     throw new Error("Template Studio requires at least one configured model profile.");
@@ -185,12 +285,14 @@ async function resolveChatExecution(args: {
     selectedProfile,
     provider,
     modelMessages,
+    modelId: args.modelId,
   };
 }
 
 export interface TemplateStudioChatServiceLike {
   chat(input: TemplateStudioChatRequest): Promise<TemplateStudioChatResult>;
   stream(input: TemplateStudioChatStreamRequest): Promise<TemplateStudioChatStreamRun>;
+  getModelCatalog(input: TemplateStudioModelCatalogRequest): Promise<TemplateStudioModelCatalog>;
   dispose(): Promise<void>;
 }
 
@@ -207,15 +309,16 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
       ],
     }));
 
-    const { modelMessages, provider, selectedProfile } = await resolveChatExecution({
+    const { modelMessages, provider, selectedProfile, modelId } = await resolveChatExecution({
       configDirectory: input.configDirectory,
       templateId: input.templateId,
       templates: input.templates,
       globalConfig: input.globalConfig,
       modelProfileId: input.modelProfileId,
+      modelId: input.modelId,
       messages,
     });
-    const model = provider.languageModel();
+    const model = provider.languageModel(modelId);
 
     try {
       const result = await generateText({
@@ -232,6 +335,7 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
       return {
         assistantMessage: result.text.trim(),
         modelProfileId: selectedProfile.id,
+        modelId,
       };
     } finally {
       provider.cleanup();
@@ -239,15 +343,16 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
   }
 
   async stream(input: TemplateStudioChatStreamRequest): Promise<TemplateStudioChatStreamRun> {
-    const { modelMessages, provider, selectedProfile } = await resolveChatExecution({
+    const { modelMessages, provider, selectedProfile, modelId } = await resolveChatExecution({
       configDirectory: input.configDirectory,
       templateId: input.templateId,
       templates: input.templates,
       globalConfig: input.globalConfig,
       modelProfileId: input.modelProfileId,
+      modelId: input.modelId,
       messages: input.messages,
     });
-    const model = provider.languageModel();
+    const model = provider.languageModel(modelId);
     const result = streamText({
       model,
       system: buildTemplateStudioSystemPrompt({
@@ -263,11 +368,16 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
     return {
       result,
       modelProfileId: selectedProfile.id,
+      modelId,
       cleanup: () => {
         provider.cleanup();
         return Promise.resolve();
       },
     };
+  }
+
+  async getModelCatalog(input: TemplateStudioModelCatalogRequest): Promise<TemplateStudioModelCatalog> {
+    return loadTemplateStudioModelCatalog(input);
   }
 
   dispose(): Promise<void> {

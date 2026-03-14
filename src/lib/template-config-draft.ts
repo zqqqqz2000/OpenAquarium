@@ -20,9 +20,9 @@ export interface TemplateMemberDraft {
   prompt: string;
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
+  modelId?: string;
   provider: ProviderBinding;
   isEntryMember: boolean;
-  acceptsDirectMessages: boolean;
   codexThinkingDepth?: CodexThinkingDepth;
   watchEnabled: boolean;
   watchPersistent: boolean;
@@ -97,9 +97,9 @@ function createTemplateMemberDraft(member: TeamMemberBlueprint): TemplateMemberD
     prompt: member.prompt,
     accentTone: member.accentTone,
     modelProfileId: member.modelProfileId,
+    modelId: member.modelId,
     provider: cloneProviderBinding(member.provider),
     isEntryMember: member.isEntryMember ?? false,
-    acceptsDirectMessages: member.acceptsDirectMessages ?? true,
     codexThinkingDepth: member.codexThinkingDepth,
     watchEnabled: Boolean(member.watch),
     watchPersistent: member.watch?.persistent ?? false,
@@ -149,9 +149,9 @@ export function addEmptyTemplateMemberDraft(
       prompt: "Handle tasks for your role, coordinate with the team, and send short visible progress updates when work takes time.",
       accentTone: sourceMember.accentTone ?? args.templateAccentTone,
       modelProfileId: sourceMember.modelProfileId,
+      modelId: sourceMember.modelId,
       provider: cloneProviderBinding(sourceMember.provider),
       isEntryMember: members.length === 0,
-      acceptsDirectMessages: sourceMember.acceptsDirectMessages,
       codexThinkingDepth: sourceMember.codexThinkingDepth,
       watchEnabled: false,
       watchPersistent: false,
@@ -187,8 +187,9 @@ function buildTemplateMemberBlueprint(draft: TemplateMemberDraft): TeamMemberBlu
     prompt: draft.prompt.trim(),
     accentTone: draft.accentTone,
     modelProfileId: draft.modelProfileId?.trim() || undefined,
+    modelId: draft.modelId?.trim() || undefined,
     isEntryMember: draft.isEntryMember,
-    acceptsDirectMessages: draft.acceptsDirectMessages,
+    acceptsDirectMessages: true,
     codexThinkingDepth: draft.codexThinkingDepth,
     provider: cloneProviderBinding(draft.provider),
     skills: toSkillDefinitions(draft.skills),

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { Clock3, KeyRound, Plus, Settings2, Star, Trash2 } from "lucide-react";
+import { Clock3, Plus, Settings2, Star, Trash2 } from "lucide-react";
 
 import type { GlobalWorkspaceConfig, Room, TeamMember, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
 import { buildMemberCliCommands } from "@/domain/tooling";
@@ -16,6 +16,7 @@ import {
   type WatcherDraft,
 } from "@/lib/member-config-draft";
 import { MemberAvatar } from "@/components/members/member-avatar";
+import { ProviderModelSelects } from "@/components/members/provider-model-selects";
 import { getWatcherForMember } from "@/components/members/member-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -227,9 +228,8 @@ export function MemberStudioDialog(props: {
             <Card>
               <CardContent className="flex flex-col gap-3 p-4">
                 {!isSessionTab ? <p className="m-0 text-lg font-semibold tracking-tight">At a glance</p> : null}
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2">
                   <FactTile label="Status" value={member.status} />
-                  <FactTile label="Direct inbox" value={member.acceptsDirectMessages ? "Open" : "Closed"} />
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {!member.isEntryMember ? (
@@ -357,27 +357,15 @@ export function MemberStudioDialog(props: {
                         onChange={(event) => patchConfigDraft({ prompt: event.currentTarget.value })}
                       />
                     </label>
-                    <label className="flex flex-col gap-2">
-                      <span className="text-sm font-medium">Model profile</span>
-                      <Select
-                        value={configDraft.modelProfileId ?? globalConfig.modelProfiles[0]?.id}
-                        onValueChange={(value) => patchConfigDraft({ modelProfileId: value })}
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select a global model profile" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {globalConfig.modelProfiles.map((profile) => (
-                            <SelectItem key={profile.id} value={profile.id}>
-                              {profile.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="m-0 text-xs leading-5 text-muted-foreground">
-                        Provider command/env now live in Template Studio &gt; Models. Room-level config only picks a model name.
-                      </p>
-                    </label>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <ProviderModelSelects
+                        globalConfig={globalConfig}
+                        modelProfileId={configDraft.modelProfileId}
+                        modelId={configDraft.modelId}
+                        onProviderChange={(value) => patchConfigDraft({ modelProfileId: value })}
+                        onModelChange={(value) => patchConfigDraft({ modelId: value })}
+                      />
+                    </div>
                     {supportsCodexThinkingDepth ? (
                       <label className="flex flex-col gap-2">
                         <span className="text-sm font-medium">Codex thinking depth</span>
@@ -398,17 +386,6 @@ export function MemberStudioDialog(props: {
                         </Select>
                       </label>
                     ) : null}
-                    <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
-                      <span className="flex items-center gap-2 text-sm font-medium">
-                        <KeyRound size={18} />
-                        Accept direct messages
-                      </span>
-                      <Switch
-                        aria-label="Accept direct messages"
-                        checked={configDraft.acceptsDirectMessages}
-                        onCheckedChange={(checked) => patchConfigDraft({ acceptsDirectMessages: checked })}
-                      />
-                    </label>
                     <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
                       <span className="text-sm font-medium">Role</span>
                       <Switch

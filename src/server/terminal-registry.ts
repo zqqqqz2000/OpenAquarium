@@ -14,6 +14,8 @@ import type {
   WaitForTerminalExitResponse,
 } from "@agentclientprotocol/sdk";
 
+import { resolveCommandPath } from "./acp-session";
+
 interface TerminalEntry {
   process: ChildProcessByStdio<null, Readable, Readable>;
   output: string;
@@ -40,12 +42,19 @@ export class TerminalRegistry {
 
   create(params: CreateTerminalRequest): Promise<CreateTerminalResponse> {
     const terminalId = randomUUID();
-    const child = spawn(params.command, params.args ?? [], {
-      cwd: params.cwd ?? process.cwd(),
-      env: {
-        ...process.env,
-        ...Object.fromEntries((params.env ?? []).map((entry) => [entry.name, entry.value])),
-      },
+    const cwd = params.cwd ?? process.cwd();
+    const env = {
+      ...process.env,
+      ...Object.fromEntries((params.env ?? []).map((entry) => [entry.name, entry.value])),
+    };
+    const resolvedCommand = resolveCommandPath(params.command, cwd, env);
+    if (!resolvedCommand) {
+      throw new Error(`Command "${params.command}" is not available from "${cwd}"`);
+    }
+
+    const child = spawn(resolvedCommand, params.args ?? [], {
+      cwd,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
 

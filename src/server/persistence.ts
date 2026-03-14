@@ -1,10 +1,27 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { ChatMessage, ProviderBinding, TeamMember, TeamMemberBlueprint, TeamTemplate, WorkspaceSnapshot } from "../domain/model";
+import type {
+  ChatMessage,
+  ProviderBinding,
+  TeamMember,
+  TeamMemberBlueprint,
+  TeamTemplate,
+  WorkspaceSnapshot,
+} from "../domain/model";
 import { getErrorCode, type RuntimeError } from "./error-utils";
-import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND, createCodexAcpProvider, mergeCodexAcpEnv } from "../lib/acp";
-import { countUnreadRoomMemberMessages, resolveTemplateVisibleMemberBlueprintIds } from "../lib/room-message-preferences";
+import {
+  CODEX_ACP_NPX_ARGS,
+  CODEX_ACP_NPX_COMMAND,
+  CODEX_ACP_PACKAGE_NAME,
+  createCodexAcpProvider,
+  isCodexAcpPackageSpec,
+  mergeCodexAcpEnv,
+} from "../lib/acp";
+import {
+  countUnreadRoomMemberMessages,
+  resolveTemplateVisibleMemberBlueprintIds,
+} from "../lib/room-message-preferences";
 import { resolveRoomTeamSummary } from "../lib/room-team";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
@@ -19,7 +36,9 @@ function dedupeIds(ids: string[]): string[] {
   return [...new Set(ids)];
 }
 
-function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
+function normalizeWorkspaceSnapshot(
+  snapshot: WorkspaceSnapshot,
+): WorkspaceSnapshot {
   const legacyPlaceholderCommands = new Set(["clerk-acp", "research-acp"]);
 
   const normalizeCodexArgs = (args: string[]): string[] => {
@@ -51,10 +70,18 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
       return provider;
     }
 
-    if (provider.command === CODEX_ACP_NPX_COMMAND && provider.args[0] === CODEX_ACP_NPX_ARGS[0]) {
+    if (
+      provider.command === CODEX_ACP_NPX_COMMAND &&
+      isCodexAcpPackageSpec(provider.args[0])
+    ) {
       return {
         ...provider,
-        args: [CODEX_ACP_NPX_ARGS[0], ...normalizeCodexArgs(provider.args.slice(1))],
+        args: [
+          provider.args[0] === CODEX_ACP_PACKAGE_NAME
+            ? CODEX_ACP_NPX_ARGS[0]
+            : provider.args[0],
+          ...normalizeCodexArgs(provider.args.slice(1)),
+        ],
         env: mergeCodexAcpEnv(provider.env),
       };
     }
@@ -73,16 +100,20 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
 
   const normalizeTemplate = (template: TeamTemplate): TeamTemplate => ({
     ...template,
-    members: template.members.map((member): TeamMemberBlueprint => ({
-      ...member,
-      modelProfileId: member.modelProfileId,
-      provider: normalizeProvider(member.provider),
-    })),
+    members: template.members.map(
+      (member): TeamMemberBlueprint => ({
+        ...member,
+        modelProfileId: member.modelProfileId,
+        modelId: member.modelId,
+        provider: normalizeProvider(member.provider),
+      }),
+    ),
   });
 
   const normalizeMember = (member: TeamMember): TeamMember => ({
     ...member,
     modelProfileId: member.modelProfileId,
+    modelId: member.modelId,
     provider: normalizeProvider(member.provider),
     providerSessionId: member.providerSessionId,
   });
@@ -92,14 +123,19 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
     visibility:
       message.transport === "watch-digest"
         ? "internal"
-        : message.visibility ?? (message.author.kind === "member" && message.taskId ? "internal" : "public"),
+        : (message.visibility ??
+          (message.author.kind === "member" && message.taskId
+            ? "internal"
+            : "public")),
     quotedMemberIds: message.quotedMemberIds ?? [],
   });
 
   const normalizedMessageOrderByRoom = Object.fromEntries(
     Object.entries(snapshot.messageOrderByRoom).map(([roomId, messageIds]) => [
       roomId,
-      dedupeIds(messageIds).filter((messageId) => snapshot.messages[messageId]?.roomId === roomId),
+      dedupeIds(messageIds).filter(
+        (messageId) => snapshot.messages[messageId]?.roomId === roomId,
+      ),
     ]),
   );
 
@@ -125,13 +161,22 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
   );
 
   const normalizedTemplates = Object.fromEntries(
-    Object.entries(snapshot.templates).map(([templateId, template]) => [templateId, normalizeTemplate(template)]),
+    Object.entries(snapshot.templates).map(([templateId, template]) => [
+      templateId,
+      normalizeTemplate(template),
+    ]),
   );
   const normalizedMembers = Object.fromEntries(
-    Object.entries(snapshot.members).map(([memberId, member]) => [memberId, normalizeMember(member)]),
+    Object.entries(snapshot.members).map(([memberId, member]) => [
+      memberId,
+      normalizeMember(member),
+    ]),
   );
   const normalizedMessages = Object.fromEntries(
-    Object.entries(snapshot.messages).map(([messageId, message]) => [messageId, normalizeMessage(message)]),
+    Object.entries(snapshot.messages).map(([messageId, message]) => [
+      messageId,
+      normalizeMessage(message),
+    ]),
   );
   const normalizedSnapshot = {
     ...snapshot,
@@ -144,33 +189,50 @@ function normalizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnaps
     Object.entries(snapshot.rooms).map(([roomId, room]) => [
       roomId,
       (() => {
-        const legacyRoom = room as typeof room & { memberMessageFilter?: "all" | "only-members" | "hide-members" };
-        const templateVisibleBlueprintIds = new Set(resolveTemplateVisibleMemberBlueprintIds(normalizedTemplates[room.templateId]));
+        const legacyRoom = room as typeof room & {
+          memberMessageFilter?: "all" | "only-members" | "hide-members";
+        };
+        const templateVisibleBlueprintIds = new Set(
+          resolveTemplateVisibleMemberBlueprintIds(
+            normalizedTemplates[room.templateId],
+          ),
+        );
         const resolvedRoom = {
           ...room,
           updatedAt: room.updatedAt ?? room.createdAt,
           visibleMemberIds:
-            room.visibleMemberIds
-            ?? (legacyRoom.memberMessageFilter === "hide-members"
+            room.visibleMemberIds ??
+            (legacyRoom.memberMessageFilter === "hide-members"
               ? []
               : room.memberIds.filter((memberId) => {
-                const member = normalizedMembers[memberId];
-                return member ? templateVisibleBlueprintIds.has(member.blueprintId) : false;
-              })),
+                  const member = normalizedMembers[memberId];
+                  return member
+                    ? templateVisibleBlueprintIds.has(member.blueprintId)
+                    : false;
+                })),
         };
         const latestSeenMemberMessageAt =
           (normalizedMessageOrderByRoom[roomId] ?? [])
             .map((messageId) => normalizedMessages[messageId])
             .filter((message): message is ChatMessage => Boolean(message))
-            .filter((message) => message.author.kind === "member" && message.transport !== "direct" && message.visibility !== "internal")
-            .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.createdAt
-          ?? resolvedRoom.createdAt;
+            .filter(
+              (message) =>
+                message.author.kind === "member" &&
+                message.transport !== "direct" &&
+                message.visibility !== "internal",
+            )
+            .sort((left, right) =>
+              right.createdAt.localeCompare(left.createdAt),
+            )[0]?.createdAt ?? resolvedRoom.createdAt;
         const roomWithReadState = {
           ...resolvedRoom,
           teamName: resolveRoomTeamSummary(normalizedSnapshot, room).name,
-          teamDescription: resolveRoomTeamSummary(normalizedSnapshot, room).description,
-          teamAccentTone: resolveRoomTeamSummary(normalizedSnapshot, room).accentTone,
-          lastReadMemberMessageAt: resolvedRoom.lastReadMemberMessageAt ?? latestSeenMemberMessageAt,
+          teamDescription: resolveRoomTeamSummary(normalizedSnapshot, room)
+            .description,
+          teamAccentTone: resolveRoomTeamSummary(normalizedSnapshot, room)
+            .accentTone,
+          lastReadMemberMessageAt:
+            resolvedRoom.lastReadMemberMessageAt ?? latestSeenMemberMessageAt,
         };
 
         return {
@@ -229,7 +291,9 @@ export class WorkspacePersistence {
     try {
       const raw = await readFile(this.filePath, "utf8");
       const parsed = JSON.parse(raw) as PersistedWorkspaceState;
-      const normalized = compactWorkspaceSnapshot(normalizeWorkspaceSnapshot(parsed.snapshot));
+      const normalized = compactWorkspaceSnapshot(
+        normalizeWorkspaceSnapshot(parsed.snapshot),
+      );
       this.logger?.info("state-loaded", {
         filePath: this.filePath,
         bytes: raw.length,

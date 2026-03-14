@@ -1,5 +1,6 @@
 import type {
   GlobalWorkspaceConfig,
+  TemplateStudioModelCatalog,
   UpdateRoomSettingsInput,
   UpdateRoomTeamInput,
   TeamTemplate,
@@ -227,7 +228,8 @@ export class WorkspaceRuntimeClient {
     templateId: string;
     messages: TemplateStudioChatMessage[];
     modelProfileId?: string;
-  }): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; assistantMessage: string; modelProfileId: string }> {
+    modelId?: string;
+  }): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; assistantMessage: string; modelProfileId: string; modelId?: string }> {
     return parseJson(
       await fetch(`${this.baseUrl}/api/template-studio/chat`, {
         method: "POST",
@@ -235,6 +237,15 @@ export class WorkspaceRuntimeClient {
         body: JSON.stringify(input),
       }),
     );
+  }
+
+  async getTemplateStudioModels(input: { modelProfileId?: string } = {}): Promise<TemplateStudioModelCatalog> {
+    const url = new URL(`${this.baseUrl}/api/template-studio/models`);
+    if (input.modelProfileId) {
+      url.searchParams.set("modelProfileId", input.modelProfileId);
+    }
+
+    return parseJson(await fetch(url));
   }
 
   async setEntryMember(memberId: string): Promise<WorkspaceSnapshot> {

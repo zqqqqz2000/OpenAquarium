@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ProviderModelSelects } from "@/components/members/provider-model-selects";
 import {
   Dialog,
   DialogContent,
@@ -551,24 +552,15 @@ export function RoomTeamDialog(props: {
                       )}
 
                       {isActiveRoleTemplate ? (
-                        <label className="flex flex-col gap-2">
-                          <span className="text-sm font-medium">Model profile</span>
-                          <Select
-                            value={activeMember.modelProfileId ?? globalConfig.modelProfiles[0]?.id}
-                            onValueChange={(value) => patchMemberDraft(activeMember.id, { modelProfileId: value })}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue placeholder="Select a global model profile" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {globalConfig.modelProfiles.map((profile) => (
-                                <SelectItem key={profile.id} value={profile.id}>
-                                  {profile.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </label>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <ProviderModelSelects
+                            globalConfig={globalConfig}
+                            modelProfileId={activeMember.modelProfileId}
+                            modelId={activeMember.modelId}
+                            onProviderChange={(value) => patchMemberDraft(activeMember.id, { modelProfileId: value })}
+                            onModelChange={(value) => patchMemberDraft(activeMember.id, { modelId: value })}
+                          />
+                        </div>
                       ) : null}
                       {isActiveRoleTemplate ? (
                         <>
@@ -596,17 +588,6 @@ export function RoomTeamDialog(props: {
                               </Select>
                             </label>
                           ) : null}
-
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
-                              <span className="text-sm font-medium">Accept direct messages</span>
-                              <Switch
-                                aria-label="Room team accept direct messages"
-                                checked={activeMember.acceptsDirectMessages}
-                                onCheckedChange={(checked) => patchMemberDraft(activeMember.id, { acceptsDirectMessages: checked })}
-                              />
-                            </label>
-                  </div>
 
                           <div className="grid gap-3 md:grid-cols-4">
                             <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">

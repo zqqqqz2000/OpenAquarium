@@ -1,9 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { GlobalWorkspaceConfig, ProviderModelProfile, TeamTemplate } from "@/domain/model";
+import type {
+  GlobalWorkspaceConfig,
+  ProviderModelProfile,
+  TeamTemplate,
+} from "@/domain/model";
+import { CODEX_ACP_MIN_VERSION_PACKAGE_SPEC } from "@/lib/acp";
 import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 
-const { cleanupMock, generateTextMock, languageModelMock, streamTextMock, streamConsumeMock, streamUiMessageMock } = vi.hoisted(() => ({
+const {
+  cleanupMock,
+  generateTextMock,
+  languageModelMock,
+  streamTextMock,
+  streamConsumeMock,
+  streamUiMessageMock,
+} = vi.hoisted(() => ({
   cleanupMock: vi.fn(),
   languageModelMock: vi.fn(() => ({ provider: "mock" })),
   generateTextMock: vi.fn(),
@@ -28,7 +40,9 @@ vi.mock("ai", async (importOriginal) => {
   };
 });
 
-function createProfile(kind: "codex-acp" | "generic-acp"): ProviderModelProfile {
+function createProfile(
+  kind: "codex-acp" | "generic-acp",
+): ProviderModelProfile {
   return {
     id: `model-${kind}`,
     name: kind === "codex-acp" ? "Codex ACP" : "Generic ACP",
@@ -38,7 +52,10 @@ function createProfile(kind: "codex-acp" | "generic-acp"): ProviderModelProfile 
       kind,
       label: kind,
       command: kind === "codex-acp" ? "npx" : "generic-acp",
-      args: kind === "codex-acp" ? ["@zed-industries/codex-acp"] : ["--stdio"],
+      args:
+        kind === "codex-acp"
+          ? [CODEX_ACP_MIN_VERSION_PACKAGE_SPEC]
+          : ["--stdio"],
       env: kind === "codex-acp" ? { OA_CODEX_ACP_MODE: "full-access" } : {},
       capabilities: ["prompt", "cancel", "loadSession"],
     },
@@ -63,7 +80,7 @@ function createTemplate(): TeamTemplate {
           kind: "codex-acp",
           label: "Codex ACP",
           command: "npx",
-          args: ["@zed-industries/codex-acp"],
+          args: [CODEX_ACP_MIN_VERSION_PACKAGE_SPEC],
           env: {},
           capabilities: ["prompt", "cancel", "loadSession"],
         },
@@ -75,7 +92,9 @@ function createTemplate(): TeamTemplate {
   };
 }
 
-function createGlobalConfig(profile: ProviderModelProfile): GlobalWorkspaceConfig {
+function createGlobalConfig(
+  profile: ProviderModelProfile,
+): GlobalWorkspaceConfig {
   return {
     directory: "/tmp/openaquarium-config",
     modelProfiles: [profile],
@@ -101,7 +120,8 @@ describe("TemplateStudioChatService", () => {
   });
 
   it("builds a plain ACP-backed generateText call for template chat", async () => {
-    const { TemplateStudioChatService } = await import("@/server/template-studio-chat");
+    const { TemplateStudioChatService } =
+      await import("@/server/template-studio-chat");
     const profile = createProfile("codex-acp");
 
     const service = new TemplateStudioChatService();
@@ -114,18 +134,28 @@ describe("TemplateStudioChatService", () => {
       modelProfileId: profile.id,
     });
 
-    const generateTextCall = generateTextMock.mock.calls[0]?.[0] as {
-      tools?: unknown;
-      system: string;
-      messages: Array<{ role: string }>;
-    } | undefined;
+    const generateTextCall = generateTextMock.mock.calls[0]?.[0] as
+      | {
+          tools?: unknown;
+          system: string;
+          messages: Array<{ role: string }>;
+        }
+      | undefined;
 
     expect(result.assistantMessage).toBe("updated");
     expect(generateTextCall?.tools).toBeUndefined();
-    expect(generateTextCall?.system).toContain("Edit OpenAquarium team templates by changing the real files in the working directory.");
-    expect(generateTextCall?.system).toContain("Read template.schema.json and templates.json before editing.");
-    expect(generateTextCall?.system).toContain("By default, edit only the selected template.");
-    expect(generateTextCall?.system).toContain("Working directory: /tmp/openaquarium-config");
+    expect(generateTextCall?.system).toContain(
+      "Edit OpenAquarium team templates by changing the real files in the working directory.",
+    );
+    expect(generateTextCall?.system).toContain(
+      "Read template.schema.json and templates.json before editing.",
+    );
+    expect(generateTextCall?.system).toContain(
+      "By default, edit only the selected template.",
+    );
+    expect(generateTextCall?.system).toContain(
+      "Working directory: /tmp/openaquarium-config",
+    );
     expect(generateTextCall?.messages).toHaveLength(1);
     expect(generateTextCall?.messages[0]?.role).toBe("user");
     expect(generateTextCall?.messages[0]).toMatchObject({
@@ -135,7 +165,8 @@ describe("TemplateStudioChatService", () => {
   });
 
   it("reuses the same simple prompt path for generic ACP chat", async () => {
-    const { TemplateStudioChatService } = await import("@/server/template-studio-chat");
+    const { TemplateStudioChatService } =
+      await import("@/server/template-studio-chat");
     const profile = createProfile("generic-acp");
 
     const service = new TemplateStudioChatService();
@@ -148,16 +179,21 @@ describe("TemplateStudioChatService", () => {
       modelProfileId: profile.id,
     });
 
-    const generateTextCall = generateTextMock.mock.calls[0]?.[0] as { tools?: unknown; system: string } | undefined;
+    const generateTextCall = generateTextMock.mock.calls[0]?.[0] as
+      | { tools?: unknown; system: string }
+      | undefined;
 
     expect(generateTextCall?.tools).toBeUndefined();
-    expect(generateTextCall?.system).toContain("Edit OpenAquarium team templates by changing the real files in the working directory.");
+    expect(generateTextCall?.system).toContain(
+      "Edit OpenAquarium team templates by changing the real files in the working directory.",
+    );
     expect(generateTextCall?.system).toContain("[Selected Team Template]");
     expect(cleanupMock).toHaveBeenCalledTimes(1);
   });
 
   it("builds a plain ACP-backed streamText call for streaming template chat", async () => {
-    const { TemplateStudioChatService } = await import("@/server/template-studio-chat");
+    const { TemplateStudioChatService } =
+      await import("@/server/template-studio-chat");
     const profile = createProfile("codex-acp");
     const messages: TemplateStudioUIMessage[] = [
       {
@@ -177,16 +213,20 @@ describe("TemplateStudioChatService", () => {
       modelProfileId: profile.id,
     });
 
-    const streamTextCall = streamTextMock.mock.calls[0]?.[0] as {
-      tools?: unknown;
-      system: string;
-      messages: Array<{ role: string }>;
-      abortSignal?: AbortSignal;
-    } | undefined;
+    const streamTextCall = streamTextMock.mock.calls[0]?.[0] as
+      | {
+          tools?: unknown;
+          system: string;
+          messages: Array<{ role: string }>;
+          abortSignal?: AbortSignal;
+        }
+      | undefined;
 
     expect(result.modelProfileId).toBe(profile.id);
     expect(streamTextCall?.tools).toBeUndefined();
-    expect(streamTextCall?.system).toContain("Read template.schema.json and templates.json before editing.");
+    expect(streamTextCall?.system).toContain(
+      "Read template.schema.json and templates.json before editing.",
+    );
     expect(streamTextCall?.messages).toHaveLength(1);
     expect(streamTextCall?.messages[0]?.role).toBe("user");
     expect(streamTextCall?.messages[0]).toMatchObject({

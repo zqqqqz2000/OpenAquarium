@@ -53,6 +53,18 @@ describe("workspace http api routing", () => {
           assistantMessage: "Template updated from chat.",
           modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
         }),
+        getModelCatalog: () =>
+          Promise.resolve({
+            source: "runtime",
+            providerType: "acp",
+            providerKind: loadedGlobalConfig.config.modelProfiles[0]?.binding.kind ?? "codex-acp",
+            providerLabel: loadedGlobalConfig.config.modelProfiles[0]?.binding.label ?? "Codex",
+            selectedProfileId:
+              loadedGlobalConfig.config.templateChatModelProfileId ??
+              loadedGlobalConfig.config.modelProfiles[0]?.id ??
+              "model-codex-acp-default",
+            availableModels: [],
+          }),
         stream: () => Promise.resolve({
           modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
           result: {
@@ -446,6 +458,18 @@ describe("workspace http api routing", () => {
           assistantMessage: "unused",
           modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
         }),
+        getModelCatalog: () =>
+          Promise.resolve({
+            source: "runtime",
+            providerType: "acp",
+            providerKind: loadedGlobalConfig.config.modelProfiles[0]?.binding.kind ?? "codex-acp",
+            providerLabel: loadedGlobalConfig.config.modelProfiles[0]?.binding.label ?? "Codex",
+            selectedProfileId:
+              loadedGlobalConfig.config.templateChatModelProfileId ??
+              loadedGlobalConfig.config.modelProfiles[0]?.id ??
+              "model-codex-acp-default",
+            availableModels: [],
+          }),
         stream: ({ templates, templateId }) => {
           const nextTemplates = templates.map((template) =>
             template.id === templateId

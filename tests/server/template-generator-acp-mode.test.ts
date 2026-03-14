@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { cleanupMock, generateTextMock, initSessionMock, isCommandAvailableMock, setModeMock } = vi.hoisted(() => ({
+const {
+  cleanupMock,
+  generateTextMock,
+  initSessionMock,
+  isCommandAvailableMock,
+  setModeMock,
+} = vi.hoisted(() => ({
   initSessionMock: vi.fn(),
   setModeMock: vi.fn(),
   cleanupMock: vi.fn(),
@@ -34,7 +40,10 @@ describe("AcpTemplateGenerationTransport", () => {
       sessionId: "session_1",
       modes: {
         currentModeId: "read-only",
-        availableModes: [{ id: "read-only", name: "Read Only" }, { id: "full-access", name: "Full Access" }],
+        availableModes: [
+          { id: "read-only", name: "Read Only" },
+          { id: "full-access", name: "Full Access" },
+        ],
       },
     });
     setModeMock.mockReset();
@@ -60,7 +69,7 @@ describe("AcpTemplateGenerationTransport", () => {
               kind: "codex-acp",
               label: "Codex ACP",
               command: "npx",
-              args: ["@zed-industries/codex-acp"],
+              args: ["@zed-industries/codex-acp@^0.7.0"],
               env: {},
               capabilities: ["prompt", "cancel", "loadSession"],
             },
@@ -71,7 +80,7 @@ describe("AcpTemplateGenerationTransport", () => {
                 id: "state",
                 name: "state",
                 description: "state",
-                command: "./bin/oa-room-state --room \"$ROOM\"",
+                command: './bin/oa-room-state --room "$ROOM"',
               },
             ],
           },
@@ -86,7 +95,7 @@ describe("AcpTemplateGenerationTransport", () => {
               kind: "codex-acp",
               label: "Codex ACP",
               command: "npx",
-              args: ["@zed-industries/codex-acp"],
+              args: ["@zed-industries/codex-acp@^0.7.0"],
               env: {},
               capabilities: ["prompt", "cancel", "loadSession"],
             },
@@ -96,7 +105,7 @@ describe("AcpTemplateGenerationTransport", () => {
                 id: "send",
                 name: "send",
                 description: "send",
-                command: "./bin/oa-room-send --scope group --text \"ok\"",
+                command: './bin/oa-room-send --scope group --text "ok"',
               },
             ],
           },
@@ -106,7 +115,8 @@ describe("AcpTemplateGenerationTransport", () => {
   });
 
   it("forces codex template generation sessions into full-access by default", async () => {
-    const { generateTemplateFromBrief } = await import("@/server/template-generator");
+    const { generateTemplateFromBrief } =
+      await import("@/server/template-generator");
 
     await generateTemplateFromBrief("coding pod", {
       workspaceRoot: process.cwd(),
@@ -120,7 +130,8 @@ describe("AcpTemplateGenerationTransport", () => {
   });
 
   it("allows overriding the codex mode for template generation", async () => {
-    const { generateTemplateFromBrief } = await import("@/server/template-generator");
+    const { generateTemplateFromBrief } =
+      await import("@/server/template-generator");
     initSessionMock.mockResolvedValueOnce({
       sessionId: "session_1",
       modes: {

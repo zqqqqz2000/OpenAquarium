@@ -95,7 +95,8 @@ function buildSnapshot(): WorkspaceSnapshot {
       memberId,
       kind: "status",
       title: "Status",
-      content: traceIndex === 70 ? "y".repeat(25_000) : `running status ${traceIndex}`,
+      content:
+        traceIndex === 70 ? "y".repeat(25_000) : `running status ${traceIndex}`,
       createdAt: `2026-03-10T10:59:${String(traceIndex % 60).padStart(2, "0")}.000Z`,
     };
     taskTraceOrderByTask.task_running.push(traceId);
@@ -153,7 +154,7 @@ function buildSnapshot(): WorkspaceSnapshot {
           kind: "codex-acp",
           label: "Codex ACP",
           command: "npx",
-          args: ["@zed-industries/codex-acp"],
+          args: ["@zed-industries/codex-acp@^0.7.0"],
           env: {},
           capabilities: ["prompt"],
         },
@@ -201,7 +202,9 @@ describe("compactWorkspaceSnapshot", () => {
     expect(compacted.messages.message_1).toBeDefined();
     expect(compacted.messages.message_2).toBeDefined();
 
-    const completedTaskIds = Object.keys(compacted.tasks).filter((taskId) => taskId.startsWith("task_completed_"));
+    const completedTaskIds = Object.keys(compacted.tasks).filter((taskId) =>
+      taskId.startsWith("task_completed_"),
+    );
     expect(completedTaskIds.length).toBeGreaterThanOrEqual(
       DEFAULT_WORKSPACE_SNAPSHOT_COMPACTION_LIMITS.maxCompletedTasksPerRoom,
     );
@@ -212,14 +215,20 @@ describe("compactWorkspaceSnapshot", () => {
       DEFAULT_WORKSPACE_SNAPSHOT_COMPACTION_LIMITS.maxCompletedTaskTraces,
     );
     expect(compacted.taskTraceOrderByTask.task_running).toHaveLength(
-      1 + DEFAULT_WORKSPACE_SNAPSHOT_COMPACTION_LIMITS.maxRunningTaskStatusTraces,
+      1 +
+        DEFAULT_WORKSPACE_SNAPSHOT_COMPACTION_LIMITS.maxRunningTaskStatusTraces,
     );
     expect(compacted.messages.message_300?.content).toContain("[truncated ");
-    const runningStatusTraceId = compacted.taskTraceOrderByTask.task_running.at(-1);
+    const runningStatusTraceId =
+      compacted.taskTraceOrderByTask.task_running.at(-1);
     expect(runningStatusTraceId).toBeDefined();
-    expect(compacted.taskTraces[runningStatusTraceId!]?.content).toContain("[truncated ");
+    expect(compacted.taskTraces[runningStatusTraceId!]?.content).toContain(
+      "[truncated ",
+    );
     expect(compacted.watchers.watcher_a.lastConsumedMessageId).toBe(
-      compacted.messageOrderByRoom.room_a[compacted.messageOrderByRoom.room_a.length - 1],
+      compacted.messageOrderByRoom.room_a[
+        compacted.messageOrderByRoom.room_a.length - 1
+      ],
     );
   });
 });

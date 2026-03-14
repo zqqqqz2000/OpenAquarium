@@ -91,6 +91,15 @@ function encodeToolStatusSummary(input: { toolCallId?: string; toolName: string;
   return `${TOOL_STATUS_PREFIX}${JSON.stringify(input)}`;
 }
 
+function isMissingPersistedSessionError(error: RuntimeError, providerSessionId?: string): boolean {
+  if (!providerSessionId) {
+    return false;
+  }
+
+  const message = getErrorMessage(error).toLowerCase();
+  return message.includes("resource not found") || message.includes("session not found");
+}
+
 export class AcpMemberExecutor implements MemberExecutor {
   private readonly workspaceRoot: string;
   private readonly project: Pick<Project, "path">;
@@ -172,7 +181,7 @@ export class AcpMemberExecutor implements MemberExecutor {
         const result = streamText({
           abortSignal: abortController.signal,
           includeRawChunks: true,
-          model: this.provider.languageModel(),
+          model: this.provider.languageModel(request.member.modelId),
           prompt: request.prompt,
           tools,
           onChunk: async ({ chunk }) => {
@@ -221,9 +230,9 @@ export class AcpMemberExecutor implements MemberExecutor {
                     taskId: request.task.id,
                     memberId: request.member.id,
                     memberHandle: request.member.handle,
-                    delta: chunk.text.trim(),
+                    delta: chunk.text,
                   });
-                  await callbacks.onStatus(`Reasoning: ${chunk.text.trim()}`);
+                  await callbacks.onStatus(`Reasoning: ${chunk.text}`);
                 }
                 return;
               case "raw": {
@@ -515,10 +524,28 @@ export class AcpMemberExecutor implements MemberExecutor {
       return;
     }
 
-    await ensureCodexAcpSessionMode(this.provider, {
-      mode: this.member.provider.env[CODEX_ACP_MODE_ENV_KEY],
-      tools,
-    });
+    try {
+      await ensureCodexAcpSessionMode(this.provider, {
+        mode: this.member.provider.env[CODEX_ACP_MODE_ENV_KEY],
+        tools,
+      });
+    } catch (error) {
+      if (!isMissingPersistedSessionError(error as RuntimeError, this.providerSessionId)) {
+        throw error;
+      }
+
+      this.logger?.warn("acp-session-reset-stale", {
+        memberId: this.member.id,
+        memberHandle: this.member.handle,
+        providerSessionId: this.providerSessionId ?? null,
+        message: getErrorMessage(error as RuntimeError),
+      });
+      await this.resetProvider();
+      await ensureCodexAcpSessionMode(this.provider, {
+        mode: this.member.provider.env[CODEX_ACP_MODE_ENV_KEY],
+        tools,
+      });
+    }
   }
 
   private async persistSessionIdIfNeeded(): Promise<void> {

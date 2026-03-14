@@ -146,7 +146,13 @@ function SessionInternalEventRow(props: { event: MemberSessionInternalEvent }) {
     >
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={toneBadge.variant} className={cn("gap-1 px-2 py-0.5 text-[10px]", toneBadge.className)}>
-          <Icon size={14} className={event.kind === "status" || event.streaming ? "animate-spin" : undefined} />
+          <Icon
+            size={14}
+            className={cn(
+              event.kind === "status" && "animate-spin",
+              event.kind === "draft" && event.streaming && "animate-spin",
+            )}
+          />
           {label}
         </Badge>
         {event.streaming ? (

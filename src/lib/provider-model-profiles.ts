@@ -1,4 +1,8 @@
-import type { GlobalWorkspaceConfig, ProviderBinding, ProviderModelProfile } from "@/domain/model";
+import type {
+  GlobalWorkspaceConfig,
+  ProviderBinding,
+  ProviderModelProfile,
+} from "@/domain/model";
 import { createCodexAcpProvider } from "@/lib/acp";
 
 export const DEFAULT_CODEX_MODEL_PROFILE_ID = "model-codex-acp-default";
@@ -9,7 +13,8 @@ export function createDefaultProviderModelProfiles(): ProviderModelProfile[] {
     {
       id: DEFAULT_CODEX_MODEL_PROFILE_ID,
       name: "Codex ACP",
-      description: "Default Codex ACP model profile for template editing and room members.",
+      description:
+        "Default Codex ACP model profile for template editing and room members. Uses codex-acp >=0.7.0 for runtime model discovery.",
       providerType: "acp",
       binding: createCodexAcpProvider(),
     },
@@ -24,7 +29,8 @@ export function createDefaultGlobalWorkspaceConfig(
   return {
     directory,
     modelProfiles,
-    templateChatModelProfileId: modelProfiles[0]?.id ?? DEFAULT_CODEX_MODEL_PROFILE_ID,
+    templateChatModelProfileId:
+      modelProfiles[0]?.id ?? DEFAULT_CODEX_MODEL_PROFILE_ID,
   };
 }
 
@@ -44,5 +50,8 @@ export function resolveProviderBindingFromProfile(
   modelProfiles: ProviderModelProfile[],
   profileId?: string,
 ): ProviderBinding {
-  return findProviderModelProfile(modelProfiles, profileId)?.binding ?? fallbackProvider;
+  return (
+    findProviderModelProfile(modelProfiles, profileId)?.binding ??
+    fallbackProvider
+  );
 }

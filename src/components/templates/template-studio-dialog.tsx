@@ -9,12 +9,13 @@ import { ArrowUp, Bot, LoaderCircle, MessageSquare, Plus, Save, Settings2, Spark
 import type {
   GlobalWorkspaceConfig,
   TeamTemplate,
+  TemplateStudioModelCatalog,
   UpdateGlobalConfigInput,
   UpdateTemplateInput,
 } from "@/domain/model";
 import { addEmptyModelProfileDraft, buildGlobalConfigInput, createGlobalConfigDraft, type ModelProfileDraft } from "@/lib/global-config-draft";
 import { addEmptySkillDraft, type SkillDraft } from "@/lib/member-config-draft";
-import { resolveWorkspaceRuntimeBaseUrl } from "@/lib/runtime-client";
+import { WorkspaceRuntimeClient, resolveWorkspaceRuntimeBaseUrl } from "@/lib/runtime-client";
 import {
   addEmptyTemplateMemberDraft,
   buildTemplateConfigInput,
@@ -37,6 +38,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { ProviderModelSelects } from "@/components/members/provider-model-selects";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -71,10 +73,9 @@ const CODEX_THINKING_DEPTHS = ["low", "mid", "high", "extra-high"] as const;
 
 function supportsCodexThinkingDepth(args: {
   modelProfileId?: string;
-  providerKind: string;
   globalConfig: GlobalWorkspaceConfig;
 }): boolean {
-  return (args.globalConfig.modelProfiles.find((profile) => profile.id === args.modelProfileId)?.binding.kind ?? args.providerKind) === "codex-acp";
+  return args.globalConfig.modelProfiles.find((profile) => profile.id === args.modelProfileId)?.binding.kind === "codex-acp";
 }
 
 function ScopeNote(props: { directory: string }) {
@@ -225,6 +226,20 @@ function resolveProfileLabel(args: {
   return `${args.providerLabel} (legacy)`;
 }
 
+function formatProviderTypeLabel(providerType: string): string {
+  switch (providerType) {
+    case "acp":
+      return "ACP";
+    default:
+      return providerType;
+  }
+}
+
+function isToastInteractionTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    && Boolean(target.closest("[data-sonner-toaster], [data-sonner-toast], [data-close-button]"));
+}
+
 function InlineHint(props: { content: string }) {
   return (
     <Tooltip>
@@ -256,8 +271,8 @@ function ModelProfileEditor(props: {
     <Card className="rounded-2xl border-border/70 bg-background/70 shadow-none">
       <CardHeader className="gap-3">
         <div>
-          <CardTitle className="text-lg tracking-tight">Model profile</CardTitle>
-          <CardDescription>Provider config is global. Templates only point at these model names.</CardDescription>
+          <CardTitle className="text-lg tracking-tight">Provider profile</CardTitle>
+          <CardDescription>Provider config lives here. Team templates still pick model profiles and thinking depth separately.</CardDescription>
         </div>
         <CardAction>
           <Button size="sm" variant="ghost" disabled={disableRemove} onClick={onRemove}>
@@ -270,7 +285,7 @@ function ModelProfileEditor(props: {
       <CardContent className="flex flex-col gap-4">
         <div className="grid gap-4 md:grid-cols-2">
           <label className="flex flex-col gap-2">
-            <span className="text-sm font-medium">Profile name</span>
+            <span className="text-sm font-medium">Model name</span>
             <Input value={draft.name} onChange={(event) => onChange({ name: event.currentTarget.value })} />
           </label>
           <label className="flex flex-col gap-2">
@@ -330,11 +345,13 @@ function TemplateStudioChatPanel(props: {
   input: string;
   initialMessages: TemplateStudioUIMessage[];
   modelProfileId?: string;
+  modelId?: string;
   stoppedMessageId?: string;
   chatTransport?: ChatTransport<TemplateStudioUIMessage>;
   onInputChange: (value: string) => void;
   onMessagesChange: (messages: TemplateStudioUIMessage[]) => void;
   onModelProfileChange: (modelProfileId: string) => void;
+  onModelIdChange: (modelId?: string) => void;
   onStoppedMessageChange: (messageId?: string) => void;
   onSync: (payload: TemplateStudioChatDataParts["templateStudioSync"]) => void;
 }) {
@@ -344,16 +361,21 @@ function TemplateStudioChatPanel(props: {
     input,
     initialMessages,
     modelProfileId,
+    modelId,
     stoppedMessageId,
     chatTransport,
     onInputChange,
     onMessagesChange,
     onModelProfileChange,
+    onModelIdChange,
     onStoppedMessageChange,
     onSync,
   } = props;
   const chatLogRootRef = useRef<HTMLDivElement | null>(null);
   const onMessagesChangeRef = useRef(onMessagesChange);
+  const onModelProfileChangeRef = useRef(onModelProfileChange);
+  const onModelIdChangeRef = useRef(onModelIdChange);
+  const runtimeClient = useMemo(() => new WorkspaceRuntimeClient(), []);
   const normalizedInitialMessages = useMemo(
     () => sanitizeTemplateStudioMessages(initialMessages),
     [initialMessages],
@@ -410,6 +432,9 @@ function TemplateStudioChatPanel(props: {
   });
 
   const isBusy = status === "submitted" || status === "streaming";
+  const [modelCatalog, setModelCatalog] = useState<TemplateStudioModelCatalog | undefined>(undefined);
+  const [modelCatalogError, setModelCatalogError] = useState<string | undefined>(undefined);
+  const [loadingModelCatalog, setLoadingModelCatalog] = useState(false);
   const pendingWithoutAssistant = isBusy && messages[messages.length - 1]?.role !== "assistant";
   const latestMessage = messages.at(-1);
   const waitingForFirstAssistantToken =
@@ -421,6 +446,11 @@ function TemplateStudioChatPanel(props: {
   useEffect(() => {
     onMessagesChangeRef.current = onMessagesChange;
   }, [onMessagesChange]);
+
+  useEffect(() => {
+    onModelProfileChangeRef.current = onModelProfileChange;
+    onModelIdChangeRef.current = onModelIdChange;
+  }, [onModelIdChange, onModelProfileChange]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -436,9 +466,48 @@ function TemplateStudioChatPanel(props: {
     viewport.scrollTop = viewport.scrollHeight;
   }, [messages, pendingWithoutAssistant]);
 
-  useEffect(() => () => {
-    void stop();
-  }, [stop]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingModelCatalog(true);
+    setModelCatalogError(undefined);
+
+    void runtimeClient.getTemplateStudioModels({ modelProfileId }).then((catalog) => {
+      if (cancelled) {
+        return;
+      }
+
+      setModelCatalog(catalog);
+
+      if (catalog.source === "runtime") {
+        if (!modelId) {
+          onModelIdChangeRef.current(catalog.currentModelId ?? catalog.availableModels[0]?.id);
+        }
+        return;
+      }
+
+      if (modelId) {
+        onModelIdChangeRef.current(undefined);
+      }
+    }).catch((error) => {
+      if (!cancelled) {
+        setModelCatalog(undefined);
+        setModelCatalogError(error instanceof Error ? error.message : String(error));
+      }
+    }).finally(() => {
+      if (!cancelled) {
+        setLoadingModelCatalog(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [modelId, modelProfileId, runtimeClient]);
+
+  const selectedModelValue =
+    modelCatalog?.source === "runtime"
+      ? (modelId ?? modelCatalog.currentModelId ?? modelCatalog.availableModels[0]?.id)
+      : undefined;
 
   const submit = async (): Promise<void> => {
     const nextInput = input.trim();
@@ -460,6 +529,7 @@ function TemplateStudioChatPanel(props: {
           body: {
             templateId: template.id,
             modelProfileId,
+            modelId: modelCatalog?.source === "runtime" ? selectedModelValue : undefined,
           },
         },
       );
@@ -484,7 +554,7 @@ function TemplateStudioChatPanel(props: {
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <Bot size={18} />
-            <p className="m-0 text-base font-semibold tracking-tight">Team template chat</p>
+            <p className="m-0 text-base font-semibold tracking-tight">Team Builder</p>
           </div>
           <p className="m-0 text-sm leading-6 text-muted-foreground">
             默认修改 <span className="font-medium">{template.name}</span>。要新建 template，直接说。
@@ -566,17 +636,37 @@ function TemplateStudioChatPanel(props: {
               onKeyDown={handleComposerKeyDown}
             />
             <div className="flex flex-col gap-3 border-t border-border/50 pt-2 md:flex-row md:items-center md:justify-between">
-              <div className="flex min-w-0 items-center gap-3">
-                <label className="flex min-w-0 flex-1 flex-col gap-2 md:max-w-[18rem]">
-                  <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Chat model</span>
-                  <Select value={modelProfileId} onValueChange={onModelProfileChange} disabled={isBusy}>
+              <div className="flex min-w-0 flex-1 flex-col gap-3 md:flex-row md:items-center">
+                <label className="flex min-w-0 flex-1 flex-col gap-2 md:max-w-[12rem]">
+                  <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Provider</span>
+                  <Select value="acp" disabled>
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select chat model" />
+                      <SelectValue placeholder="Select provider" />
                     </SelectTrigger>
                     <SelectContent>
-                      {globalConfig.modelProfiles.map((profile) => (
-                        <SelectItem key={profile.id} value={profile.id}>
-                          {profile.name}
+                      <SelectItem value="acp">{formatProviderTypeLabel("acp")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </label>
+                <label className="flex min-w-0 flex-1 flex-col gap-2 md:max-w-[16rem]">
+                  <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Model</span>
+                  <Select
+                    value={selectedModelValue}
+                    onValueChange={(value) => {
+                      if (modelCatalog?.source === "runtime") {
+                        onModelIdChange(value);
+                      }
+                    }}
+                    disabled={isBusy || loadingModelCatalog || !modelCatalog || modelCatalog.source !== "runtime" || modelCatalog.availableModels.length === 0}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder={loadingModelCatalog ? "Loading models…" : modelCatalog?.source === "unavailable" ? "Runtime models unavailable" : "Select model"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {modelCatalog?.availableModels.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          {option.label}
+                          {modelCatalog.source === "runtime" && modelCatalog.currentModelId === option.id ? " (Current)" : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -600,6 +690,19 @@ function TemplateStudioChatPanel(props: {
                 {isBusy ? <X size={18} /> : <ArrowUp size={18} />}
                 <span className="sr-only">{isBusy ? "Stop" : "Send change request"}</span>
               </Button>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span>
+                Provider profile: {globalConfig.modelProfiles.find((profile) => profile.id === modelProfileId)?.name ?? "Not set"}
+              </span>
+              {loadingModelCatalog ? <span>Checking runtime models…</span> : null}
+              {!loadingModelCatalog && modelCatalog?.source === "runtime" ? (
+                <span>Model list comes from the current {modelCatalog.providerLabel} session.</span>
+              ) : null}
+              {!loadingModelCatalog && modelCatalog?.source === "unavailable" ? (
+                <span className="text-destructive">{modelCatalog.unavailableMessage ?? "Runtime model capability unavailable."}</span>
+              ) : null}
+              {modelCatalogError ? <span className="text-destructive">{modelCatalogError}</span> : null}
             </div>
           </div>
         </div>
@@ -647,6 +750,7 @@ export function TemplateStudioDialog(props: {
   const [chatMessagesByTemplate, setChatMessagesByTemplate] = useState<Record<string, TemplateStudioUIMessage[]>>({});
   const [chatInputByTemplate, setChatInputByTemplate] = useState<Record<string, string>>({});
   const [chatModelProfileIdByTemplate, setChatModelProfileIdByTemplate] = useState<Record<string, string | undefined>>({});
+  const [chatModelIdByTemplate, setChatModelIdByTemplate] = useState<Record<string, string | undefined>>({});
   const [stoppedChatMessageIdByTemplate, setStoppedChatMessageIdByTemplate] = useState<Record<string, string | undefined>>({});
   const [templateDeleteError, setTemplateDeleteError] = useState<string | undefined>(undefined);
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -705,6 +809,7 @@ export function TemplateStudioDialog(props: {
   const activeChatModelProfileId = selectedTemplate
     ? chatModelProfileIdByTemplate[selectedTemplate.id] ?? globalConfig.templateChatModelProfileId ?? globalConfig.modelProfiles[0]?.id
     : undefined;
+  const activeChatModelId = selectedTemplate ? chatModelIdByTemplate[selectedTemplate.id] : undefined;
   const activeModelProfile = globalConfigDraft.modelProfiles.find((profile) => profile.id === activeModelProfileId) ?? globalConfigDraft.modelProfiles[0];
 
   if (!open) {
@@ -891,12 +996,25 @@ export function TemplateStudioDialog(props: {
 
   return (
     <Dialog open onOpenChange={(nextOpen) => (!nextOpen ? onClose() : undefined)}>
-      <DialogContent className="grid h-[94vh] w-[min(96vw,1360px)] max-w-[1360px] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[1360px]" showCloseButton={false}>
+      <DialogContent
+        className="grid h-[94vh] w-[min(96vw,1360px)] max-w-[1360px] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[1360px]"
+        showCloseButton={false}
+        onFocusOutside={(event) => {
+          if (isToastInteractionTarget(event.target)) {
+            event.preventDefault();
+          }
+        }}
+        onInteractOutside={(event) => {
+          if (isToastInteractionTarget(event.target)) {
+            event.preventDefault();
+          }
+        }}
+      >
         <div className="border-b border-border px-5 py-4">
           <DialogHeader className="flex-row items-start justify-between gap-4">
             <div className="space-y-1">
               <DialogTitle className="text-2xl font-semibold tracking-tight">Team Template Studio</DialogTitle>
-              <DialogDescription className="sr-only">Edit global team templates, provider models, and template chat instructions.</DialogDescription>
+              <DialogDescription className="sr-only">Edit global team templates, provider profiles, and Team Builder instructions.</DialogDescription>
               <p className="m-0 text-sm text-muted-foreground">Global config lives in {globalConfig.directory}.</p>
             </div>
             <DialogClose asChild>
@@ -917,7 +1035,7 @@ export function TemplateStudioDialog(props: {
                     <p className="m-0 text-lg font-semibold tracking-tight">Workspace defaults</p>
                   </div>
                   <p className="m-0 text-sm leading-6 text-muted-foreground">
-                    这里统一管理 team templates、Template Studio chat 和全局 provider model profiles。
+                    这里统一管理 team templates、Team Builder 和全局 provider profiles。
                   </p>
                 </div>
                 <ScopeNote directory={globalConfig.directory} />
@@ -979,13 +1097,13 @@ export function TemplateStudioDialog(props: {
                 <Settings2 size={16} />
                 Team templates
               </TabsTrigger>
-              <TabsTrigger value="chat" className="rounded-none px-3 py-2">
+              <TabsTrigger value="builder" className="rounded-none px-3 py-2">
                 <MessageSquare size={16} />
-                Chat
+                Team Builder
               </TabsTrigger>
-              <TabsTrigger value="models" className="rounded-none px-3 py-2">
+              <TabsTrigger value="providers" className="rounded-none px-3 py-2">
                 <Sparkles size={16} />
-                Models
+                Providers
               </TabsTrigger>
             </TabsList>
 
@@ -1056,8 +1174,9 @@ export function TemplateStudioDialog(props: {
                     </div>
                   </section>
 
-                  <ScrollArea className="min-h-0 h-full" data-testid="template-detail-scroll">
-                    <div className="flex flex-col gap-4 pr-3 pb-4">
+                  <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
+                    <ScrollArea className="min-h-0 h-full" data-testid="template-detail-scroll">
+                      <div className="flex flex-col gap-4 pr-3 pb-4">
                       <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
                         <div className="flex flex-col gap-4">
                           <div className="flex flex-wrap items-center gap-2">
@@ -1168,27 +1287,28 @@ export function TemplateStudioDialog(props: {
                               />
                             </label>
 
-                            <label className="flex flex-col gap-2">
-                              <span className="text-sm font-medium">Model profile</span>
-                              <Select
-                                value={activeMember.modelProfileId ?? globalConfig.modelProfiles[0]?.id}
-                                onValueChange={(value) => patchMemberDraft(selectedTemplate.id, activeMember.id, { modelProfileId: value })}
-                              >
-                                <SelectTrigger className="w-full">
-                                  <SelectValue placeholder="Select a global model profile" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {globalConfig.modelProfiles.map((profile) => (
-                                    <SelectItem key={profile.id} value={profile.id}>
-                                      {profile.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </label>
+                            <div className="grid gap-4 md:grid-cols-2">
+                              <ProviderModelSelects
+                                globalConfig={globalConfig}
+                                modelProfileId={activeMember.modelProfileId}
+                                modelId={activeMember.modelId}
+                                onProviderChange={(value) => {
+                                  const selectedProfile = globalConfig.modelProfiles.find((profile) => profile.id === value);
+                                  patchMemberDraft(selectedTemplate.id, activeMember.id, {
+                                    modelProfileId: value,
+                                    provider: selectedProfile ? {
+                                      ...selectedProfile.binding,
+                                      args: [...selectedProfile.binding.args],
+                                      env: { ...selectedProfile.binding.env },
+                                      capabilities: [...selectedProfile.binding.capabilities],
+                                    } : activeMember.provider,
+                                  });
+                                }}
+                                onModelChange={(value) => patchMemberDraft(selectedTemplate.id, activeMember.id, { modelId: value })}
+                              />
+                            </div>
                             {supportsCodexThinkingDepth({
                               modelProfileId: activeMember.modelProfileId,
-                              providerKind: activeMember.provider.kind,
                               globalConfig,
                             }) ? (
                               <label className="flex flex-col gap-2">
@@ -1210,17 +1330,6 @@ export function TemplateStudioDialog(props: {
                                 </Select>
                               </label>
                             ) : null}
-
-                            <div className="grid gap-3 md:grid-cols-2">
-                              <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
-                                <span className="text-sm font-medium">Accept direct messages</span>
-                                <Switch
-                                  aria-label="Template accept direct messages"
-                                  checked={activeMember.acceptsDirectMessages}
-                                  onCheckedChange={(checked) => patchMemberDraft(selectedTemplate.id, activeMember.id, { acceptsDirectMessages: checked })}
-                                />
-                              </label>
-                            </div>
 
                             <div className="grid gap-3 md:grid-cols-2">
                               <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
@@ -1298,22 +1407,23 @@ export function TemplateStudioDialog(props: {
                         </section>
                       ) : null}
 
-                      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-                        {templateErrorById[selectedTemplate.id] ? <p className="m-0 text-sm text-destructive">{templateErrorById[selectedTemplate.id]}</p> : <div />}
-                        <Button onClick={() => void saveTemplateConfig()} disabled={savingTemplate}>
-                          <Save size={16} />
-                          Save
-                        </Button>
                       </div>
+                    </ScrollArea>
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background/95 px-1 pt-4">
+                      {templateErrorById[selectedTemplate.id] ? <p className="m-0 text-sm text-destructive">{templateErrorById[selectedTemplate.id]}</p> : <div />}
+                      <Button onClick={() => void saveTemplateConfig()} disabled={savingTemplate}>
+                        <Save size={16} />
+                        Save
+                      </Button>
                     </div>
-                  </ScrollArea>
+                  </div>
                 </div>
               )}
             </TabsContent>
 
-            <TabsContent value="chat" className="m-0 min-h-0 overflow-hidden">
+            <TabsContent value="builder" forceMount className="m-0 min-h-0 overflow-hidden data-[state=inactive]:hidden">
               {!selectedTemplate ? (
-                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a team template to chat about.</div>
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a team template to open Team Builder.</div>
               ) : (
                 <TemplateStudioChatPanel
                   key={selectedTemplate.id}
@@ -1322,6 +1432,7 @@ export function TemplateStudioDialog(props: {
                   input={activeChatInput}
                   initialMessages={chatMessagesByTemplate[selectedTemplate.id] ?? []}
                   modelProfileId={activeChatModelProfileId}
+                  modelId={activeChatModelId}
                   stoppedMessageId={stoppedChatMessageIdByTemplate[selectedTemplate.id]}
                   chatTransport={chatTransport}
                   onInputChange={(nextValue) =>
@@ -1339,6 +1450,11 @@ export function TemplateStudioDialog(props: {
                       ...current,
                       [selectedTemplate.id]: value,
                     }))}
+                  onModelIdChange={(value) =>
+                    setChatModelIdByTemplate((current) => ({
+                      ...current,
+                      [selectedTemplate.id]: value,
+                    }))}
                   onStoppedMessageChange={(messageId) =>
                     setStoppedChatMessageIdByTemplate((current) => ({
                       ...current,
@@ -1350,17 +1466,21 @@ export function TemplateStudioDialog(props: {
                       ...current,
                       [selectedTemplate.id]: payload.modelProfileId,
                     }));
+                    setChatModelIdByTemplate((current) => ({
+                      ...current,
+                      [selectedTemplate.id]: payload.modelId,
+                    }));
                   }}
                 />
               )}
             </TabsContent>
 
-            <TabsContent value="models" className="m-0 min-h-0 overflow-hidden">
+            <TabsContent value="providers" className="m-0 min-h-0 overflow-hidden">
               <div className="grid h-full min-h-0 gap-4 pt-4 xl:grid-cols-[280px_minmax(0,1fr)]">
                 <section className="min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
                   <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
                     <div className="flex items-center justify-between gap-3">
-                      <p className="m-0 text-base font-semibold tracking-tight">Model profiles</p>
+                      <p className="m-0 text-base font-semibold tracking-tight">Provider profiles</p>
                       <Button
                         size="sm"
                         variant="secondary"
@@ -1374,18 +1494,18 @@ export function TemplateStudioDialog(props: {
                         }}
                       >
                         <Plus size={16} />
-                        Add model
+                        Add provider
                       </Button>
                     </div>
 
                     <label className="flex flex-col gap-2">
-                      <span className="text-sm font-medium">Default Team Template Studio chat model</span>
+                      <span className="text-sm font-medium">Default Team Builder provider profile</span>
                       <Select
                         value={globalConfigDraft.templateChatModelProfileId ?? globalConfigDraft.modelProfiles[0]?.id}
                         onValueChange={(value) => setGlobalConfigDraft((current) => ({ ...current, templateChatModelProfileId: value }))}
                       >
                         <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select default model" />
+                          <SelectValue placeholder="Select default provider profile" />
                         </SelectTrigger>
                         <SelectContent>
                           {globalConfigDraft.modelProfiles.map((profile) => (

@@ -95,10 +95,6 @@ function buildMemberCardBadges(member: TeamMember, room: Room, snapshot: Workspa
     badges.push("Codex ACP");
   }
 
-  if (member.acceptsDirectMessages) {
-    badges.push("Direct messages");
-  }
-
   return badges;
 }
 

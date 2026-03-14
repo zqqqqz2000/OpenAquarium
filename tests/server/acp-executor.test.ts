@@ -194,6 +194,65 @@ describe("AcpMemberExecutor", () => {
     expect(cleanupMock).not.toHaveBeenCalled();
   });
 
+  it("resets a stale persisted codex session and retries once", async () => {
+    initSessionMock
+      .mockRejectedValueOnce(new Error("Resource not found"))
+      .mockResolvedValue({
+        sessionId: "session_2",
+        modes: {
+          currentModeId: "read-only",
+          availableModes: [{ id: "read-only", name: "Read Only" }, { id: "full-access", name: "Full Access" }],
+        },
+      });
+    getSessionIdMock.mockReturnValue("session_2");
+
+    const persistMemberSession = vi.fn(() => Promise.resolve());
+    const request = createRequest();
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: {
+        ...request.member,
+        providerSessionId: "session_stale",
+      },
+      host: {
+        sendGroupMessage: () => Promise.resolve(),
+        sendDirectMessage: () => Promise.resolve(),
+        runWatcher: () => Promise.resolve(),
+        inspectRoomState: () => Promise.resolve("state"),
+        persistMemberSession,
+      },
+    });
+
+    await executor.execute(
+      {
+        ...request,
+        member: {
+          ...request.member,
+          providerSessionId: "session_stale",
+        },
+      },
+      {
+        onDraft: () => Promise.resolve(),
+        onStatus: () => Promise.resolve(),
+        onComplete: () => Promise.resolve(),
+        onError: () => Promise.resolve(),
+      },
+    );
+
+    expect(initSessionMock).toHaveBeenCalledTimes(2);
+    expect(cleanupMock).toHaveBeenCalledTimes(1);
+    expect(createACPProviderMock).toHaveBeenCalledTimes(2);
+    expect(persistMemberSession).toHaveBeenNthCalledWith(1, {
+      memberId: "member_1",
+      sessionId: undefined,
+    });
+    expect(persistMemberSession).toHaveBeenNthCalledWith(2, {
+      memberId: "member_1",
+      sessionId: "session_2",
+    });
+    expect(streamTextMock).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves generic ACP sessions unchanged", async () => {
     const provider = createGenericAcpProvider({
       label: "Claude Code",

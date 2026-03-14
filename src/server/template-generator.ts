@@ -3,7 +3,11 @@ import { generateText } from "ai";
 
 import * as z from "zod";
 
-import type { SkillDefinition, TeamMemberBlueprint, TeamTemplate } from "../domain/model";
+import type {
+  SkillDefinition,
+  TeamMemberBlueprint,
+  TeamTemplate,
+} from "../domain/model";
 import {
   CODEX_ACP_MODE_ENV_KEY,
   CODEX_ACP_NPX_ARGS,
@@ -11,6 +15,7 @@ import {
   createCodexAcpProvider,
   createGenericAcpProvider,
   ensureCodexAcpSessionMode,
+  isCodexAcpPackageSpec,
 } from "../lib/acp";
 import { isJsonObject, jsonValueToString, type JsonValue } from "../lib/json";
 import { defaultTemplates } from "../lib/sample-data/templates";
@@ -51,7 +56,11 @@ const memberBlueprintSchema = z.object({
   skills: z.array(skillSchema).min(1).max(8),
   watch: z
     .object({
-      intervalMinutes: z.number().int().positive().max(24 * 60),
+      intervalMinutes: z
+        .number()
+        .int()
+        .positive()
+        .max(24 * 60),
       enabledByDefault: z.boolean().default(true),
       persistent: z.boolean().default(false),
     })
@@ -112,7 +121,10 @@ function summarizeReferenceTemplates(templates: TeamTemplate[]): string {
   );
 }
 
-function buildTemplateGenerationPrompt(brief: string, references: TeamTemplate[]): string {
+function buildTemplateGenerationPrompt(
+  brief: string,
+  references: TeamTemplate[],
+): string {
   return [
     "[OA_TEMPLATE_GENERATION]",
     "You are generating a team template for OpenAquarium.",
@@ -183,7 +195,10 @@ function dedupeStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
-function normalizeSkill(skill: z.infer<typeof skillSchema>, index: number): SkillDefinition {
+function normalizeSkill(
+  skill: z.infer<typeof skillSchema>,
+  index: number,
+): SkillDefinition {
   const slug = slugify(skill.id) || slugify(skill.name) || `skill-${index + 1}`;
   return {
     id: slug,
@@ -212,24 +227,31 @@ function normalizeMember(
       ? {
           ...createCodexAcpProvider({
             command: member.provider.command.trim() || CODEX_ACP_NPX_COMMAND,
-            args: dedupeStrings(member.provider.args).length > 0 ? dedupeStrings(member.provider.args) : CODEX_ACP_NPX_ARGS,
+            args:
+              dedupeStrings(member.provider.args).length > 0
+                ? dedupeStrings(member.provider.args)
+                : CODEX_ACP_NPX_ARGS,
             env: member.provider.env,
-            workingDirectory: member.provider.workingDirectory?.trim() || undefined,
+            workingDirectory:
+              member.provider.workingDirectory?.trim() || undefined,
           }),
           label: member.provider.label.trim() || "Codex ACP",
-          capabilities: dedupeStrings(member.provider.capabilities).length > 0
-            ? dedupeStrings(member.provider.capabilities)
-            : ["prompt", "cancel", "loadSession"],
+          capabilities:
+            dedupeStrings(member.provider.capabilities).length > 0
+              ? dedupeStrings(member.provider.capabilities)
+              : ["prompt", "cancel", "loadSession"],
         }
       : createGenericAcpProvider({
           label: member.provider.label.trim(),
           command: member.provider.command.trim(),
           args: dedupeStrings(member.provider.args),
           env: member.provider.env,
-          workingDirectory: member.provider.workingDirectory?.trim() || undefined,
-          capabilities: dedupeStrings(member.provider.capabilities).length > 0
-            ? dedupeStrings(member.provider.capabilities)
-            : ["prompt", "cancel"],
+          workingDirectory:
+            member.provider.workingDirectory?.trim() || undefined,
+          capabilities:
+            dedupeStrings(member.provider.capabilities).length > 0
+              ? dedupeStrings(member.provider.capabilities)
+              : ["prompt", "cancel"],
         });
 
   return {
@@ -246,7 +268,10 @@ function normalizeMember(
     skills: member.skills.map(normalizeSkill),
     watch: member.watch
       ? {
-          intervalMinutes: Math.max(1, Math.round(member.watch.intervalMinutes)),
+          intervalMinutes: Math.max(
+            1,
+            Math.round(member.watch.intervalMinutes),
+          ),
           enabledByDefault: member.watch.enabledByDefault,
           persistent: member.watch.persistent ?? false,
         }
@@ -256,7 +281,9 @@ function normalizeMember(
 
 function sanitizeDraft(draft: TemplateDraft, brief: string): TeamTemplate {
   const usedHandles = new Set<string>();
-  const members = draft.members.map((member, index) => normalizeMember(member, index, usedHandles));
+  const members = draft.members.map((member, index) =>
+    normalizeMember(member, index, usedHandles),
+  );
   const entryIndex = members.findIndex((member) => member.isEntryMember);
   const normalizedMembers = members.map((member, index) => ({
     ...member,
@@ -277,7 +304,10 @@ function parseArgsConfig(env: Record<string, string | undefined>): string[] {
   const json = env.OA_TEMPLATE_ACP_ARGS_JSON?.trim();
   if (json) {
     const parsed = JSON.parse(json) as JsonValue;
-    if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")) {
+    if (
+      Array.isArray(parsed) &&
+      parsed.every((entry) => typeof entry === "string")
+    ) {
       return parsed;
     }
     throw new Error("OA_TEMPLATE_ACP_ARGS_JSON must be a JSON string array");
@@ -287,7 +317,9 @@ function parseArgsConfig(env: Record<string, string | undefined>): string[] {
   return plain ? plain.split(/\s+/u).filter(Boolean) : [];
 }
 
-function parseTemplateTimeoutMs(env: Record<string, string | undefined>): number {
+function parseTemplateTimeoutMs(
+  env: Record<string, string | undefined>,
+): number {
   const raw = env.OA_TEMPLATE_ACP_TIMEOUT_MS?.trim();
   if (!raw) {
     return DEFAULT_TEMPLATE_ACP_TIMEOUT_MS;
@@ -301,7 +333,11 @@ function parseTemplateTimeoutMs(env: Record<string, string | undefined>): number
   return parsed;
 }
 
-function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`${label} timed out after ${timeoutMs}ms`));
@@ -314,13 +350,18 @@ function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string)
       },
       (error: RuntimeError) => {
         clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(getErrorMessage(error)));
+        reject(
+          error instanceof Error ? error : new Error(getErrorMessage(error)),
+        );
       },
     );
   });
 }
 
-function resolveTemplateAcpCommand(env: Record<string, string | undefined>): { command: string; args: string[] } {
+function resolveTemplateAcpCommand(env: Record<string, string | undefined>): {
+  command: string;
+  args: string[];
+} {
   const command = env.OA_TEMPLATE_ACP_COMMAND?.trim() || CODEX_ACP_NPX_COMMAND;
   const args = parseArgsConfig(env);
 
@@ -334,10 +375,15 @@ function resolveTemplateAcpCommand(env: Record<string, string | undefined>): { c
 }
 
 function isCodexAcpCommand(command: string, args: string[]): boolean {
-  return command === "codex-acp" || (command === CODEX_ACP_NPX_COMMAND && args[0] === CODEX_ACP_NPX_ARGS[0]);
+  return (
+    command === "codex-acp" ||
+    (command === CODEX_ACP_NPX_COMMAND && isCodexAcpPackageSpec(args[0]))
+  );
 }
 
-function parseEnvJson(env: Record<string, string | undefined>): Record<string, string> {
+function parseEnvJson(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
   const json = env.OA_TEMPLATE_ACP_ENV_JSON?.trim();
   if (!json) {
     return {};
@@ -349,7 +395,10 @@ function parseEnvJson(env: Record<string, string | undefined>): Record<string, s
   }
 
   return Object.fromEntries(
-    Object.entries(parsed).map(([key, value]) => [key, jsonValueToString(value)]),
+    Object.entries(parsed).map(([key, value]) => [
+      key,
+      jsonValueToString(value),
+    ]),
   );
 }
 
@@ -357,14 +406,18 @@ class AcpTemplateGenerationTransport implements TemplateGenerationTransport {
   private readonly workspaceRoot: string;
   private readonly env: Record<string, string | undefined>;
 
-  constructor(args: { workspaceRoot: string; env: Record<string, string | undefined> }) {
+  constructor(args: {
+    workspaceRoot: string;
+    env: Record<string, string | undefined>;
+  }) {
     this.workspaceRoot = args.workspaceRoot;
     this.env = args.env;
   }
 
   async generate(prompt: string): Promise<string> {
     const templateAcp = resolveTemplateAcpCommand(this.env);
-    const primaryCwd = this.env.OA_TEMPLATE_ACP_WORKDIR?.trim() || this.workspaceRoot;
+    const primaryCwd =
+      this.env.OA_TEMPLATE_ACP_WORKDIR?.trim() || this.workspaceRoot;
     const primaryEnv = {
       ...process.env,
       ...parseEnvJson(this.env),
@@ -372,7 +425,9 @@ class AcpTemplateGenerationTransport implements TemplateGenerationTransport {
     const timeoutMs = parseTemplateTimeoutMs(this.env);
 
     if (!isCommandAvailable(templateAcp.command, primaryCwd, primaryEnv)) {
-      throw new Error(`Template ACP provider is unavailable: ${templateAcp.command} ${templateAcp.args.join(" ")}`.trim());
+      throw new Error(
+        `Template ACP provider is unavailable: ${templateAcp.command} ${templateAcp.args.join(" ")}`.trim(),
+      );
     }
 
     const provider = createACPProvider({
@@ -388,7 +443,9 @@ class AcpTemplateGenerationTransport implements TemplateGenerationTransport {
     try {
       if (isCodexAcpCommand(templateAcp.command, templateAcp.args)) {
         await ensureCodexAcpSessionMode(provider, {
-          mode: this.env.OA_TEMPLATE_ACP_MODE?.trim() || this.env[CODEX_ACP_MODE_ENV_KEY]?.trim(),
+          mode:
+            this.env.OA_TEMPLATE_ACP_MODE?.trim() ||
+            this.env[CODEX_ACP_MODE_ENV_KEY]?.trim(),
           tools: provider.tools,
         });
       }
@@ -424,7 +481,9 @@ export async function generateTemplateFromBrief(
     });
 
   const raw = await withTimeout(
-    transport.generate(buildTemplateGenerationPrompt(normalizedBrief, references)),
+    transport.generate(
+      buildTemplateGenerationPrompt(normalizedBrief, references),
+    ),
     parseTemplateTimeoutMs(env),
     "Template generation",
   );

@@ -63,6 +63,7 @@ export interface TeamMemberBlueprint {
   prompt: string;
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
+  modelId?: string;
   skills: SkillDefinition[];
   provider: ProviderBinding;
   isEntryMember?: boolean;
@@ -121,6 +122,7 @@ export interface TeamMember {
   prompt: string;
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
+  modelId?: string;
   skills: SkillDefinition[];
   provider: ProviderBinding;
   acceptsDirectMessages: boolean;
@@ -261,6 +263,7 @@ export interface UpdateMemberConfigInput {
   summary: string;
   prompt: string;
   modelProfileId?: ProviderModelProfileId;
+  modelId?: string;
   acceptsDirectMessages: boolean;
   codexThinkingDepth?: CodexThinkingDepth;
   skills: SkillDefinition[];
@@ -294,6 +297,7 @@ export interface RoomTeamMemberInput {
   prompt: string;
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
+  modelId?: string;
   skills: SkillDefinition[];
   provider: ProviderBinding;
   isEntryMember?: boolean;
@@ -324,6 +328,24 @@ export interface GlobalWorkspaceConfig {
   directory: string;
   modelProfiles: ProviderModelProfile[];
   templateChatModelProfileId?: ProviderModelProfileId;
+}
+
+export interface TemplateStudioModelOption {
+  id: string;
+  label: string;
+  description?: string;
+  profileId?: ProviderModelProfileId;
+}
+
+export interface TemplateStudioModelCatalog {
+  source: "runtime" | "unavailable";
+  providerType: "acp";
+  providerKind: ProviderKind;
+  providerLabel: string;
+  selectedProfileId: ProviderModelProfileId;
+  availableModels: TemplateStudioModelOption[];
+  currentModelId?: string;
+  unavailableMessage?: string;
 }
 
 export interface UpsertWatcherInput {

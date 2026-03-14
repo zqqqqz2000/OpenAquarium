@@ -204,6 +204,30 @@ function deriveIncrementalTraceContent(content: string, previousOutputContent?: 
   return content;
 }
 
+function normalizeReasoningContent(content: string): string {
+  return content.replace(/^Reasoning:\s*/u, "");
+}
+
+function concatenateReasoningContent(previousContent: string, nextContent: string): string {
+  if (previousContent.length === 0 || nextContent.length === 0) {
+    return `${previousContent}${nextContent}`;
+  }
+
+  if (/\s$/u.test(previousContent) || /^\s/u.test(nextContent)) {
+    return `${previousContent}${nextContent}`;
+  }
+
+  if (/^[.,;:!?)}\]]/u.test(nextContent)) {
+    return `${previousContent}${nextContent}`;
+  }
+
+  if (/[\p{L}\p{N}]$/u.test(previousContent) && /^[\p{L}\p{N}]/u.test(nextContent)) {
+    return `${previousContent} ${nextContent}`;
+  }
+
+  return `${previousContent}${nextContent}`;
+}
+
 function classifyInternalEvent(entry: MemberSessionTraceEntry): MemberSessionInternalEvent["kind"] {
   if (entry.traceKind === "draft") {
     return "draft";
@@ -351,6 +375,31 @@ function buildInternalEvents(args: {
     }
 
     const kind = classifyInternalEvent(entry);
+    if (kind === "reasoning") {
+      const latestReasoningEvent = internalEvents.at(-1);
+      const reasoningContent = normalizeReasoningContent(entry.content);
+
+      if (latestReasoningEvent?.kind === "reasoning") {
+        latestReasoningEvent.traceKind = entry.traceKind;
+        latestReasoningEvent.title = entry.title;
+        latestReasoningEvent.content = concatenateReasoningContent(latestReasoningEvent.content, reasoningContent);
+        latestReasoningEvent.streaming = taskStatus === "running";
+      } else {
+        internalEvents.push({
+          id: entry.id,
+          type: "internal",
+          createdAt: entry.createdAt,
+          traceKind: entry.traceKind,
+          kind,
+          title: entry.title,
+          content: reasoningContent,
+          streaming: taskStatus === "running",
+        });
+      }
+
+      continue;
+    }
+
     if (isReplyInternalKind(kind)) {
       const latestReplyEvent = internalEvents.at(-1);
       const canMergeWithPreviousReply = Boolean(latestReplyEvent && isReplyInternalKind(latestReplyEvent.kind));

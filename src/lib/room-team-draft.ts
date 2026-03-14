@@ -24,9 +24,9 @@ export interface RoomTeamMemberDraft {
   prompt: string;
   accentTone: AccentTone;
   modelProfileId?: ProviderModelProfileId;
+  modelId?: string;
   provider: ProviderBinding;
   isEntryMember: boolean;
-  acceptsDirectMessages: boolean;
   codexThinkingDepth?: CodexThinkingDepth;
   watchConfigured: boolean;
   watchEnabled: boolean;
@@ -103,9 +103,9 @@ function createRoomTeamMemberDraft(snapshot: WorkspaceSnapshot, room: Room, memb
     prompt: member.prompt,
     accentTone: member.accentTone,
     modelProfileId: member.modelProfileId,
+    modelId: member.modelId,
     provider: cloneProviderBinding(member.provider),
     isEntryMember: member.isEntryMember,
-    acceptsDirectMessages: member.acceptsDirectMessages,
     codexThinkingDepth: member.codexThinkingDepth,
     watchConfigured: Boolean(watcher),
     watchEnabled: watcher?.enabled ?? false,
@@ -166,9 +166,9 @@ export function addEmptyRoomTeamMemberDraft(
       prompt: sourceMember.prompt,
       accentTone: sourceMember.accentTone ?? args.teamAccentTone,
       modelProfileId: sourceMember.modelProfileId,
+      modelId: sourceMember.modelId,
       provider: cloneProviderBinding(sourceMember.provider),
       isEntryMember: members.length === 0,
-      acceptsDirectMessages: true,
       codexThinkingDepth: sourceMember.codexThinkingDepth,
       watchConfigured: isRoleTemplate ? sourceMember.watchConfigured : false,
       watchEnabled: isRoleTemplate ? sourceMember.watchEnabled : false,
@@ -213,8 +213,9 @@ function buildRoomTeamMemberInput(draft: RoomTeamMemberDraft): RoomTeamMemberInp
     prompt: draft.prompt.trim(),
     accentTone: draft.accentTone,
     modelProfileId: draft.modelProfileId?.trim() || undefined,
+    modelId: draft.modelId?.trim() || undefined,
     isEntryMember: draft.isEntryMember,
-    acceptsDirectMessages: draft.acceptsDirectMessages,
+    acceptsDirectMessages: true,
     codexThinkingDepth: draft.codexThinkingDepth,
     provider: cloneProviderBinding(draft.provider),
     skills: toSkillDefinitions(draft.skills),

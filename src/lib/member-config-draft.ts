@@ -29,7 +29,7 @@ export interface MemberConfigDraft {
   summary: string;
   prompt: string;
   modelProfileId?: ProviderModelProfileId;
-  acceptsDirectMessages: boolean;
+  modelId?: string;
   codexThinkingDepth?: CodexThinkingDepth;
   skills: SkillDraft[];
 }
@@ -98,7 +98,7 @@ export function createMemberConfigDraft(member: TeamMember): MemberConfigDraft {
     summary: member.summary,
     prompt: member.prompt,
     modelProfileId: member.modelProfileId,
-    acceptsDirectMessages: member.acceptsDirectMessages,
+    modelId: member.modelId,
     codexThinkingDepth: member.codexThinkingDepth,
     skills: member.skills.map((skill) => ({
       id: skill.id,
@@ -148,7 +148,8 @@ export function buildMemberConfigInput(member: TeamMember, draft: MemberConfigDr
     summary: draft.summary.trim(),
     prompt: draft.prompt.trim(),
     modelProfileId: draft.modelProfileId?.trim() || undefined,
-    acceptsDirectMessages: draft.acceptsDirectMessages,
+    modelId: draft.modelId?.trim() || undefined,
+    acceptsDirectMessages: true,
     codexThinkingDepth: draft.codexThinkingDepth,
     skills: toSkillDefinitions(draft.skills),
     provider: member.provider,
