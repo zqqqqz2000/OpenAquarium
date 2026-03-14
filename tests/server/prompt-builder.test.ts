@@ -37,9 +37,12 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("rendered to the user as Markdown");
     expect(prompt).toContain("Mermaid");
     expect(prompt).toContain("Prefer $$...$$ for formulas");
-    expect(prompt).toContain("/role-add <role> <employee-handle> [reason]");
-    expect(prompt).toContain("This shared prompt only tells you the commands exist.");
-    expect(prompt).toContain("允许使用岗位员工命令");
+    expect(prompt).toContain("oa_role_add_employee");
+    expect(prompt).toContain("Do not send role-staffing instructions as room text.");
+    expect(prompt).toContain("not a regular member like `research`");
+    expect(prompt).toContain("[Role Owners]");
+    expect(prompt).toContain("(none)");
+    expect(prompt).toContain("允许使用岗位员工工具");
     expect(prompt).toContain(`prompt: ${member.prompt}`);
   });
 
@@ -145,11 +148,13 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("Recent Delta Transcript");
     expect(prompt).toContain("@handle: passive reference only.");
     expect(prompt).toContain("@>handle: active routing.");
+    expect(prompt).toContain("If `@>handle` appears inside inline code, backticks, or fenced code blocks, it is display text only");
     expect(prompt).toContain("It does not notify the member, does not route work");
     expect(prompt).toContain("render as Markdown");
     expect(prompt).toContain("Prefer $$...$$ for formulas");
-    expect(prompt).toContain("/role-remove <role> <employee-handle> [reason]");
-    expect(prompt).toContain("If your member/template prompt says `不允许使用岗位员工命令`");
+    expect(prompt).toContain("oa_role_remove_employee");
+    expect(prompt).toContain("Only claim staffing succeeded when the tool result says `ok: true`.");
+    expect(prompt).toContain("If your member/template prompt says `不允许使用岗位员工工具`");
     expect(prompt).toContain("prompt: omitted on this delta turn");
     expect(prompt).not.toContain(`prompt: ${lead.prompt}`);
   });

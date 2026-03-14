@@ -14,6 +14,8 @@ import type {
 import {
   acknowledgeRoom,
   appendTaskTrace,
+  applyRoleStaffingOperation,
+  executeRoleStaffingOperation,
   completeMemberTask,
   createRoomInProject,
   createProjectWithRoom,
@@ -486,6 +488,41 @@ export class WorkspaceRuntime {
                 taskId: input.taskId,
               });
             },
+            addRoleEmployee: async (input) => {
+              return this.applyRoleStaffing({
+                roomId: input.roomId,
+                memberId: input.memberId,
+                operation: {
+                  kind: "add",
+                  role: input.role,
+                  employeeHandle: input.employeeHandle,
+                  reason: input.reason,
+                },
+              });
+            },
+            removeRoleEmployee: async (input) => {
+              return this.applyRoleStaffing({
+                roomId: input.roomId,
+                memberId: input.memberId,
+                operation: {
+                  kind: "remove",
+                  role: input.role,
+                  employeeHandle: input.employeeHandle,
+                  reason: input.reason,
+                },
+              });
+            },
+            renameRoleEmployee: async (input) => {
+              return this.applyRoleStaffing({
+                roomId: input.roomId,
+                memberId: input.memberId,
+                operation: {
+                  kind: "rename",
+                  employeeHandle: input.employeeHandle,
+                  name: input.name,
+                },
+              });
+            },
             runWatcher: async (input) => {
               await this.runWatcherNow(input.watcherId);
             },
@@ -703,6 +740,34 @@ export class WorkspaceRuntime {
     const next = postMemberMessage(previous, input, this.context);
     await this.applySnapshot(previous, next);
     return this.snapshot;
+  }
+
+  async applyRoleStaffing(input: {
+    roomId: string;
+    memberId: string;
+    operation: Parameters<typeof applyRoleStaffingOperation>[1]["operation"];
+  }): Promise<{ snapshot: WorkspaceSnapshot; ok: boolean; notices: string[] }> {
+    const previous = this.snapshot;
+    const member = previous.members[input.memberId];
+    if (!member) {
+      throw new Error(`Unknown member "${input.memberId}"`);
+    }
+
+    const { snapshot: next, result } = executeRoleStaffingOperation(
+      previous,
+      {
+        roomId: input.roomId,
+        actorLabel: member.name,
+        operation: input.operation,
+      },
+      this.context,
+    );
+    await this.applySnapshot(previous, next);
+    return {
+      snapshot: this.snapshot,
+      ok: result.ok,
+      notices: result.notices,
+    };
   }
 
   async acknowledgeRoom(roomId: string): Promise<WorkspaceSnapshot> {

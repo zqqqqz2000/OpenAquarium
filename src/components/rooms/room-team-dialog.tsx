@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { LoaderCircle, Plus, Save, Settings2, Star, Trash2, Users } from "lucide-react";
 
-import type { GlobalWorkspaceConfig, Room, TeamMember, UpdateRoomTeamInput, WorkspaceSnapshot } from "@/domain/model";
+import type { GlobalWorkspaceConfig, Room, UpdateRoomTeamInput, WorkspaceSnapshot } from "@/domain/model";
 import { AllowedSkillSelector } from "@/components/skills/allowed-skill-selector";
 import {
   addEmptyRoomTeamMemberDraft,
@@ -214,6 +214,15 @@ export function RoomTeamDialog(props: {
           }
         : current,
     );
+  };
+
+  const setRoleEnabled = (memberId: string, checked: boolean): void => {
+    patchMemberDraft(memberId, {
+      isRole: checked,
+      watchConfigured: checked ? false : activeMember?.watchConfigured,
+      watchEnabled: checked ? false : activeMember?.watchEnabled,
+      watchPersistent: checked ? false : activeMember?.watchPersistent,
+    });
   };
 
   const addMemberDraft = (): void => {
@@ -494,6 +503,19 @@ export function RoomTeamDialog(props: {
 
                       {isActiveRoleTemplate ? (
                         <>
+                          <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                            <span className="text-sm font-medium">Role owner</span>
+                            <Switch
+                              aria-label="Room team role owner"
+                              checked={activeMember.isRole}
+                              onCheckedChange={(checked) => setRoleEnabled(activeMember.id, checked)}
+                            />
+                          </label>
+                          <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
+                            {activeMember.isRole
+                              ? "Role owner 可以挂员工并接收 `oa_role_*` 扩编操作；同时不能配置 Watch。若要关闭它，必须先移除这个岗位下的员工。"
+                              : "关闭后，这个成员会变成普通成员，不再作为岗位 owner 接收扩编。若这个岗位下还有员工，保存时会被阻止。"}
+                          </div>
                           <label className="flex flex-col gap-2">
                             <span className="text-sm font-medium">Handle</span>
                             <Input value={activeMember.handle} onChange={(event) => patchMemberDraft(activeMember.id, { handle: event.currentTarget.value })} />
@@ -563,6 +585,7 @@ export function RoomTeamDialog(props: {
                               <Switch
                                 aria-label="Room team watcher configured"
                                 checked={activeMember.watchConfigured}
+                                disabled={activeMember.isRole}
                                 onCheckedChange={(checked) =>
                                   patchMemberDraft(activeMember.id, {
                                     watchConfigured: checked,
@@ -576,7 +599,7 @@ export function RoomTeamDialog(props: {
                               <Switch
                                 aria-label="Room team watcher enabled"
                                 checked={activeMember.watchEnabled}
-                                disabled={!activeMember.watchConfigured}
+                                disabled={activeMember.isRole || !activeMember.watchConfigured}
                                 onCheckedChange={(checked) => patchMemberDraft(activeMember.id, { watchEnabled: checked })}
                               />
                             </label>
@@ -585,7 +608,7 @@ export function RoomTeamDialog(props: {
                               <Switch
                                 aria-label="Room team persistent watch"
                                 checked={activeMember.watchPersistent}
-                                disabled={!activeMember.watchConfigured}
+                                disabled={activeMember.isRole || !activeMember.watchConfigured}
                                 onCheckedChange={(checked) => patchMemberDraft(activeMember.id, { watchPersistent: checked })}
                               />
                             </label>
@@ -594,13 +617,15 @@ export function RoomTeamDialog(props: {
                               <Input
                                 inputMode="numeric"
                                 value={activeMember.watchIntervalMinutes}
-                                disabled={!activeMember.watchConfigured}
+                                disabled={activeMember.isRole || !activeMember.watchConfigured}
                                 onChange={(event) => patchMemberDraft(activeMember.id, { watchIntervalMinutes: event.currentTarget.value })}
                               />
                             </label>
                           </div>
                           <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
-                            开启 Persistent watch 后，不会立刻触发；要等第一个 interval 到达。之后即使没有新消息，也会生成 heartbeat digest；如果有新消息或成员状态变化，digest 会带上新增内容。
+                            {activeMember.isRole
+                              ? "Role owner 不允许配置 Watch。先关闭 Role owner，才能在当前 room 为这个成员保存 watcher。"
+                              : "开启 Persistent watch 后，不会立刻触发；要等第一个 interval 到达。之后即使没有新消息，也会生成 heartbeat digest；如果有新消息或成员状态变化，digest 会带上新增内容。"}
                           </div>
 
                           <div className="flex flex-col gap-2">

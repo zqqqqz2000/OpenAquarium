@@ -7,7 +7,6 @@ import {
   getOpenAquariumScriptPath,
   quoteShellToken,
   resolveProjectWorkingDirectory,
-  rewriteCommandForProjectContext,
 } from "./project-paths";
 import { getMemberHistoryFilePath, getRoomContextDirectoryPath, getRoomTranscriptFilePath } from "./room-transcript-files";
 
@@ -42,7 +41,7 @@ function summarizeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): st
   return `[${formatTime(message.createdAt)}] ${message.author.label} (${message.transport}/${message.status}): ${message.content}${summarizeHandles("assignments", message.mentionedMemberIds, snapshot, "@>")}${summarizeReferenceHandles(message, snapshot)}${recipientSuffix}`;
 }
 
-function describeMember(member: TeamMember, workspaceRoot: string): string {
+function describeMember(member: TeamMember): string {
   const skillList = member.allowedSkillIds.join(", ");
 
   return [
@@ -180,17 +179,33 @@ function buildMemberReferenceSyntaxSections(): string[] {
     "[Member Reference Syntax]",
     "@handle: passive reference only. Never use plain @handle to route work. Use it when explaining, citing, or comparing members for the user or team. It does not notify the member, does not route work, and does not start a task for them.",
     "@>handle: active routing. That member immediately receives the message as work and may be interrupted to act on it. Use @>handle only when you want that member to start working now.",
+    "Active routing only works in normal message text. If `@>handle` appears inside inline code, backticks, or fenced code blocks, it is display text only and does not route work.",
   ];
 }
 
-function buildRoleStaffingCommandSections(): string[] {
+function buildRoleStaffingToolSections(): string[] {
   return [
-    "[Role Staffing Commands]",
-    "The workspace supports these room commands: `/role-add <role> <employee-handle> [reason]`, `/role-remove <role> <employee-handle> [reason]`, and `/role-rename <employee-handle> <name>`.",
-    "This shared prompt only tells you the commands exist.",
+    "[Role Staffing Tools]",
+    "The workspace exposes structured staffing tools: `oa_role_add_employee`, `oa_role_remove_employee`, and `oa_role_rename_employee`.",
+    "Use these tools directly for staffing changes. Do not send role-staffing instructions as room text.",
+    "For `role`, use an existing role owner handle in this room, such as `builder` or `checker`, not a regular member like `research`.",
+    "For `employeeHandle`, use a fresh new handle for the employee you are creating. Do not reuse an existing member handle.",
+    "These tools return structured results. Only claim staffing succeeded when the tool result says `ok: true`.",
     "Whether you may actually use them is controlled by the specific member/template prompt, not by this shared prompt.",
-    "Treat the commands as authorized only when your member/template prompt explicitly grants them, for example with `允许使用岗位员工命令`.",
-    "If your member/template prompt says `不允许使用岗位员工命令`, or does not explicitly grant them, do not use these commands.",
+    "Treat the staffing tools as authorized only when your member/template prompt explicitly grants them, for example with `允许使用岗位员工工具`.",
+    "If your member/template prompt says `不允许使用岗位员工工具`, or does not explicitly grant them, do not use these tools.",
+  ];
+}
+
+function buildRoleOwnersSection(room: Room, snapshot: WorkspaceSnapshot): string[] {
+  const roleOwners = room.memberIds
+    .map((memberId) => snapshot.members[memberId])
+    .filter((member): member is TeamMember => Boolean(member) && member.isRole === true && !member.archivedAt)
+    .map((member) => `- @${member.handle}: role owner for ${member.roleName}`);
+
+  return [
+    "[Role Owners]",
+    ...(roleOwners.length > 0 ? roleOwners : ["(none)"]),
   ];
 }
 
@@ -228,6 +243,9 @@ function buildSharedSections(args: {
   const preferredTools = [
     "oa_send_group_message: preferred for visible room replies. Sent content is rendered to the user as Markdown with code fences, Mermaid, math, and CJK support.",
     "oa_send_direct_message: preferred for private teammate DMs and replies to @user. Sent content is rendered as Markdown with code fences, Mermaid, math, and CJK support.",
+    "oa_role_add_employee: add a new employee under an existing role owner such as @builder or @checker. `role` must be a role owner, and `employeeHandle` must be a fresh handle without @. Check the returned `ok` field before claiming success.",
+    "oa_role_remove_employee: remove an existing employee from an existing role owner. Check the returned `ok` field before claiming success.",
+    "oa_role_rename_employee: rename an existing role employee. Check the returned `ok` field before claiming success.",
     "oa_room_state: inspect transcript and member/task state before retrying a send.",
     "oa_read_file: read transcript files or source files when you need deeper context.",
     "oa_run_room_watcher: trigger a watcher immediately when needed.",
@@ -267,7 +285,9 @@ function buildSharedSections(args: {
     "",
     ...buildMemberReferenceSyntaxSections(),
     "",
-    ...buildRoleStaffingCommandSections(),
+    ...buildRoleOwnersSection(room, snapshot),
+    "",
+    ...buildRoleStaffingToolSections(),
     "",
     "[Task]",
     `taskId: ${task.id}`,
@@ -305,7 +325,7 @@ function buildFullPrompt(args: {
     .slice(-FULL_PROMPT_TRANSCRIPT_LIMIT)
     .map((message) => summarizeMessage(snapshot, message))
     .join("\n");
-  const roster = room.memberIds.map((memberId) => describeMember(snapshot.members[memberId], args.workspaceRoot)).join("\n");
+  const roster = room.memberIds.map((memberId) => describeMember(snapshot.members[memberId])).join("\n");
   const persistentWatcher = findEnabledPersistentWatcher(snapshot, room, member);
   const persistentWatchRules = persistentWatcher
     ? [
@@ -334,19 +354,20 @@ function buildFullPrompt(args: {
     "1. If you need to speak in the room or DM someone, prefer the dedicated ACP tools listed below instead of generic shell commands.",
     "2. `@handle` is only a passive reference for explanation. Never use plain `@handle` to assign work. It does not notify that teammate, does not route work, and does not start a task for them.",
     "3. `@>handle` is an active assignment. That teammate immediately gets the message as work and may be interrupted to act on it.",
-    "4. Do not assume hidden roles. Prompt and runtime rules define your baseline operating behavior, team boundaries, and collaboration rules; available skills are optional directory assets you may enter when useful.",
-    "5. Keep room messages concise and actionable, but do not stay silent on long tasks.",
-    "6. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
-    "7. Prefer group messages for user-facing progress updates; use direct messages for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
-    "8. If work is sequential, only use `@>handle` for the member(s) who should act now. Do not route downstream members early just because they will be needed later.",
-    "9. Do not DM teammates just to repeat the same public instruction that is already clear in the room. Use DM only for private coordination, blockers, or a single targeted nudge after checking room state.",
-    "10. If you are a watcher or scribe waiting on upstream replies, stay quiet until the required room messages actually exist; do not proactively chase teammates unless the current task explicitly asks you to.",
-    "11. Once you have completed your scoped visible reply, stop. Do not keep generating follow-up chatter unless a new routed message or blocker requires it.",
-    "12. Do not paste your reasoning, tool narration, or step-by-step plan into room or DM messages.",
-    "13. Do not send the same room or DM content twice. If a send result is unclear, inspect room state first and only retry if the message is actually missing.",
-    "14. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
-    "15. Treat the shared room context directory as the durable source for room transcript and per-member histories. Read the relevant files when watcher context reports unseen messages or member state changes.",
-    "16. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Send plain text when simple is enough, but use valid Markdown when structure, code, links, lists, diagrams, or formulas help. Prefer $$...$$ for formulas.",
+    "4. Active assignments only work in normal message text. If `@>handle` appears inside inline code, backticks, or fenced code blocks, it is display text only and will not route work.",
+    "5. Do not assume hidden roles. Prompt and runtime rules define your baseline operating behavior, team boundaries, and collaboration rules; available skills are optional directory assets you may enter when useful.",
+    "6. Keep room messages concise and actionable, but do not stay silent on long tasks.",
+    "7. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
+    "8. Prefer group messages for user-facing progress updates; use direct messages for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
+    "9. If work is sequential, only use `@>handle` for the member(s) who should act now. Do not route downstream members early just because they will be needed later.",
+    "10. Do not DM teammates just to repeat the same public instruction that is already clear in the room. Use DM only for private coordination, blockers, or a single targeted nudge after checking room state.",
+    "11. If you are a watcher or scribe waiting on upstream replies, stay quiet until the required room messages actually exist; do not proactively chase teammates unless the current task explicitly asks you to.",
+    "12. Once you have completed your scoped visible reply, stop. Do not keep generating follow-up chatter unless a new routed message or blocker requires it.",
+    "13. Do not paste your reasoning, tool narration, or step-by-step plan into room or DM messages.",
+    "14. Do not send the same room or DM content twice. If a send result is unclear, inspect room state first and only retry if the message is actually missing.",
+    "15. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
+    "16. Treat the shared room context directory as the durable source for room transcript and per-member histories. Read the relevant files when watcher context reports unseen messages or member state changes.",
+    "17. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Send plain text when simple is enough, but use valid Markdown when structure, code, links, lists, diagrams, or formulas help. Prefer $$...$$ for formulas.",
     ...persistentWatchRules,
     "",
     ...buildAvailableSkillsSection(member, args.workspaceRoot),
@@ -396,11 +417,12 @@ function buildDeltaPrompt(args: {
     "[Critical Rules]",
     "1. `@handle` is only a passive reference. Never use plain `@handle` to assign work. It does not notify the member, does not route work, and does not start a task.",
     "2. `@>handle` is active routing: that teammate immediately receives the message as work and may be interrupted to act on it.",
-    "3. Send progress updates for work that lasts more than a short turn.",
-    "4. Do not leak reasoning or tool narration into user-visible messages.",
-    "5. Do not resend the same room or DM content unless room state confirms it is missing.",
-    "6. Read the shared room context files when you need older context than the delta shown here, especially for watcher-triggered state changes.",
-    "7. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas and send valid Markdown whenever formatting helps.",
+    "3. Active routing only works in normal message text. If `@>handle` appears inside inline code, backticks, or fenced code blocks, it is display text only and will not route work.",
+    "4. Send progress updates for work that lasts more than a short turn.",
+    "5. Do not leak reasoning or tool narration into user-visible messages.",
+    "6. Do not resend the same room or DM content unless room state confirms it is missing.",
+    "7. Read the shared room context files when you need older context than the delta shown here, especially for watcher-triggered state changes.",
+    "8. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas and send valid Markdown whenever formatting helps.",
     "",
     "[Instruction]",
     "Continue from the existing member session with only the new information above. Respond using tools when you need visible output, and finish once the current task is actually handled.",

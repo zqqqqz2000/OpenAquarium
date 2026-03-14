@@ -4,15 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCodexAcpProvider, createGenericAcpProvider } from "@/lib/acp";
 
-const { cleanupMock, createACPProviderMock, getSessionIdMock, initSessionMock, languageModelMock, setModeMock, streamTextMock } = vi.hoisted(() => ({
-  initSessionMock: vi.fn(),
-  setModeMock: vi.fn(),
-  cleanupMock: vi.fn(),
-  getSessionIdMock: vi.fn(() => "session_1"),
-  languageModelMock: vi.fn(() => ({ provider: "mock" })),
-  streamTextMock: vi.fn(),
-  createACPProviderMock: vi.fn(),
-}));
+const initSessionMock = vi.fn();
+const setModeMock = vi.fn();
+const cleanupMock = vi.fn();
+const getSessionIdMock = vi.fn(() => "session_1");
+const languageModelMock = vi.fn(() => ({ provider: "mock" }));
+const streamTextMock = vi.fn();
+const createACPProviderMock = vi.fn();
 
 vi.mock("@mcpc-tech/acp-ai-provider", () => ({
   ACP_PROVIDER_AGENT_DYNAMIC_TOOL_NAME: "acp-agent-tool",
@@ -34,6 +32,7 @@ vi.mock("ai", () => ({
 import { AcpMemberExecutor } from "@/server/acp-executor";
 import type { DiagnosticsLogger } from "@/server/diagnostics";
 import type { ExecutionRequest } from "@/server/executor";
+import type { MemberToolHost } from "@/server/acp-executor";
 
 function createRequest(provider = createCodexAcpProvider()): ExecutionRequest {
   return {
@@ -101,6 +100,19 @@ function createRequest(provider = createCodexAcpProvider()): ExecutionRequest {
   };
 }
 
+function createHost(overrides: Partial<MemberToolHost> = {}): MemberToolHost {
+  return {
+    sendGroupMessage: () => Promise.resolve(),
+    sendDirectMessage: () => Promise.resolve(),
+    addRoleEmployee: () => Promise.resolve({ ok: true, notices: ["ok"] }),
+    removeRoleEmployee: () => Promise.resolve({ ok: true, notices: ["ok"] }),
+    renameRoleEmployee: () => Promise.resolve({ ok: true, notices: ["ok"] }),
+    runWatcher: () => Promise.resolve(),
+    inspectRoomState: () => Promise.resolve("state"),
+    ...overrides,
+  };
+}
+
 describe("AcpMemberExecutor", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -134,12 +146,7 @@ describe("AcpMemberExecutor", () => {
     const executor = new AcpMemberExecutor({
       workspaceRoot: process.cwd(),
       member: createRequest().member,
-      host: {
-        sendGroupMessage: () => Promise.resolve(),
-        sendDirectMessage: () => Promise.resolve(),
-        runWatcher: () => Promise.resolve(),
-        inspectRoomState: () => Promise.resolve("state"),
-      },
+      host: createHost(),
     });
 
     await executor.execute(createRequest(), {
@@ -154,17 +161,80 @@ describe("AcpMemberExecutor", () => {
     expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
 
+  it("exposes structured role staffing tools and routes them through the host", async () => {
+    const request = createRequest();
+    const addRoleEmployee = vi.fn(() => Promise.resolve());
+    const removeRoleEmployee = vi.fn(() => Promise.resolve());
+    const renameRoleEmployee = vi.fn(() => Promise.resolve());
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: createHost({
+        addRoleEmployee,
+        removeRoleEmployee,
+        renameRoleEmployee,
+      }),
+    });
+
+    await executor.execute(request, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError: () => Promise.resolve(),
+    });
+
+    const streamCall = streamTextMock.mock.calls[0]?.[0] as { tools: Record<string, { execute: (input: unknown) => Promise<string> }> } | undefined;
+    expect(streamCall?.tools.oa_role_add_employee).toBeDefined();
+    expect(streamCall?.tools.oa_role_remove_employee).toBeDefined();
+    expect(streamCall?.tools.oa_role_rename_employee).toBeDefined();
+
+    const addResult = await streamCall?.tools.oa_role_add_employee.execute({
+      role: "@checker",
+      employeeHandle: "checker-2",
+      reason: "parallel acceptance",
+    });
+    const removeResult = await streamCall?.tools.oa_role_remove_employee.execute({
+      role: "checker",
+      employeeHandle: "@checker-2",
+      reason: "done",
+    });
+    const renameResult = await streamCall?.tools.oa_role_rename_employee.execute({
+      employeeHandle: "@checker-2",
+      name: "Second Checker",
+    });
+
+    expect(addResult).toEqual({ ok: true, notices: ["ok"] });
+    expect(removeResult).toEqual({ ok: true, notices: ["ok"] });
+    expect(renameResult).toEqual({ ok: true, notices: ["ok"] });
+
+    expect(addRoleEmployee).toHaveBeenCalledWith({
+      roomId: "room_1",
+      memberId: "member_1",
+      role: "@checker",
+      employeeHandle: "checker-2",
+      reason: "parallel acceptance",
+    });
+    expect(removeRoleEmployee).toHaveBeenCalledWith({
+      roomId: "room_1",
+      memberId: "member_1",
+      role: "checker",
+      employeeHandle: "@checker-2",
+      reason: "done",
+    });
+    expect(renameRoleEmployee).toHaveBeenCalledWith({
+      roomId: "room_1",
+      memberId: "member_1",
+      employeeHandle: "@checker-2",
+      name: "Second Checker",
+    });
+  });
+
   it("reuses the same codex session across turns", async () => {
     const request = createRequest();
     const executor = new AcpMemberExecutor({
       workspaceRoot: process.cwd(),
       member: request.member,
-      host: {
-        sendGroupMessage: () => Promise.resolve(),
-        sendDirectMessage: () => Promise.resolve(),
-        runWatcher: () => Promise.resolve(),
-        inspectRoomState: () => Promise.resolve("state"),
-      },
+      host: createHost(),
     });
 
     await executor.execute(request, {
@@ -215,10 +285,7 @@ describe("AcpMemberExecutor", () => {
         providerSessionId: "session_stale",
       },
       host: {
-        sendGroupMessage: () => Promise.resolve(),
-        sendDirectMessage: () => Promise.resolve(),
-        runWatcher: () => Promise.resolve(),
-        inspectRoomState: () => Promise.resolve("state"),
+        ...createHost(),
         persistMemberSession,
       },
     });
@@ -264,12 +331,7 @@ describe("AcpMemberExecutor", () => {
     const executor = new AcpMemberExecutor({
       workspaceRoot: process.cwd(),
       member: request.member,
-      host: {
-        sendGroupMessage: () => Promise.resolve(),
-        sendDirectMessage: () => Promise.resolve(),
-        runWatcher: () => Promise.resolve(),
-        inspectRoomState: () => Promise.resolve("state"),
-      },
+      host: createHost(),
     });
 
     await executor.execute(request, {
@@ -301,12 +363,7 @@ describe("AcpMemberExecutor", () => {
     const executor = new AcpMemberExecutor({
       workspaceRoot: process.cwd(),
       member: request.member,
-      host: {
-        sendGroupMessage: () => Promise.resolve(),
-        sendDirectMessage: () => Promise.resolve(),
-        runWatcher: () => Promise.resolve(),
-        inspectRoomState: () => Promise.resolve("state"),
-      },
+      host: createHost(),
     });
 
     const runPromise = executor.execute(request, {
@@ -356,12 +413,7 @@ describe("AcpMemberExecutor", () => {
     const executor = new AcpMemberExecutor({
       workspaceRoot: process.cwd(),
       member: request.member,
-      host: {
-        sendGroupMessage: () => Promise.resolve(),
-        sendDirectMessage: () => Promise.resolve(),
-        runWatcher: () => Promise.resolve(),
-        inspectRoomState: () => Promise.resolve("state"),
-      },
+      host: createHost(),
     });
 
     const runPromise = executor.execute(request, {
@@ -410,12 +462,7 @@ describe("AcpMemberExecutor", () => {
     const firstExecutor = new AcpMemberExecutor({
       workspaceRoot: process.cwd(),
       member: request.member,
-      host: {
-        sendGroupMessage: () => Promise.resolve(),
-        sendDirectMessage: () => Promise.resolve(),
-        runWatcher: () => Promise.resolve(),
-        inspectRoomState: () => Promise.resolve("state"),
-      },
+      host: createHost(),
     });
 
     const firstRun = firstExecutor.execute(request, {
@@ -462,12 +509,7 @@ describe("AcpMemberExecutor", () => {
         path: projectPath,
       },
       member: request.member,
-      host: {
-        sendGroupMessage: () => Promise.resolve(),
-        sendDirectMessage: () => Promise.resolve(),
-        runWatcher: () => Promise.resolve(),
-        inspectRoomState: () => Promise.resolve("state"),
-      },
+      host: createHost(),
     });
 
     await executor.execute(
@@ -516,12 +558,7 @@ describe("AcpMemberExecutor", () => {
       workspaceRoot: process.cwd(),
       member: request.member,
       logger,
-      host: {
-        sendGroupMessage: () => Promise.resolve(),
-        sendDirectMessage: () => Promise.resolve(),
-        runWatcher: () => Promise.resolve(),
-        inspectRoomState: () => Promise.resolve("state"),
-      },
+      host: createHost(),
     });
 
     await executor.execute(request, {

@@ -861,6 +861,25 @@ export function TemplateStudioDialog(props: {
     });
   };
 
+  const setRoleEnabled = (templateId: string, memberId: string, checked: boolean): void => {
+    const template = templatesById[templateId];
+    if (!template) {
+      return;
+    }
+
+    const base = templateDrafts[templateId] ?? createTemplateConfigDraft(template);
+    const member = base.members.find((candidate) => candidate.id === memberId);
+    if (!member) {
+      return;
+    }
+
+    patchMemberDraft(templateId, memberId, {
+      isRole: checked,
+      watchEnabled: checked ? false : member.watchEnabled,
+      watchPersistent: checked ? false : member.watchPersistent,
+    });
+  };
+
   const addMemberDraft = (templateId: string): void => {
     const template = templatesById[templateId];
     if (!template) {
@@ -1284,6 +1303,20 @@ export function TemplateStudioDialog(props: {
                               />
                             </label>
 
+                            <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+                              <span className="text-sm font-medium">Role owner</span>
+                              <Switch
+                                aria-label="Template role owner"
+                                checked={activeMember.isRole}
+                                onCheckedChange={(checked) => setRoleEnabled(selectedTemplate.id, activeMember.id, checked)}
+                              />
+                            </label>
+                            <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
+                              {activeMember.isRole
+                                ? "Role owner 会在新建 room 时成为可挂员工的岗位模板；同时不能带默认 Watch。"
+                                : "关闭后，这个模板成员会变成普通成员，新建 room 时不能作为岗位 owner 扩编。"}
+                            </div>
+
                             <div className="grid gap-4 md:grid-cols-2">
                               <ProviderModelSelects
                                 globalConfig={globalConfig}
@@ -1337,6 +1370,7 @@ export function TemplateStudioDialog(props: {
                                 <Switch
                                   aria-label="Template watcher enabled"
                                   checked={activeMember.watchEnabled}
+                                  disabled={activeMember.isRole}
                                   onCheckedChange={(checked) =>
                                     patchMemberDraft(selectedTemplate.id, activeMember.id, {
                                       watchEnabled: checked,
@@ -1352,7 +1386,7 @@ export function TemplateStudioDialog(props: {
                                 <Switch
                                   aria-label="Template persistent watch"
                                   checked={activeMember.watchPersistent}
-                                  disabled={!activeMember.watchEnabled}
+                                  disabled={activeMember.isRole || !activeMember.watchEnabled}
                                   onCheckedChange={(checked) => patchMemberDraft(selectedTemplate.id, activeMember.id, { watchPersistent: checked })}
                                 />
                               </label>
@@ -1361,9 +1395,15 @@ export function TemplateStudioDialog(props: {
                                 <Input
                                   inputMode="numeric"
                                   value={activeMember.watchIntervalMinutes}
+                                  disabled={activeMember.isRole || !activeMember.watchEnabled}
                                   onChange={(event) => patchMemberDraft(selectedTemplate.id, activeMember.id, { watchIntervalMinutes: event.currentTarget.value })}
                                 />
                               </label>
+                            </div>
+                            <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
+                              {activeMember.isRole
+                                ? "Role owner 不允许带默认 Watch。先关闭 Role owner，才能为这个模板成员配置 watcher。"
+                                : "Watcher 默认值会在基于这个模板新建 room 时复制到成员实例。"}
                             </div>
 
                             <div className="flex flex-col gap-2">

@@ -4,6 +4,7 @@ import { createRuntimeContext } from "@/domain/identity";
 import type { ChatMessage } from "@/domain/model";
 import {
   appendTaskTrace,
+  applyRoleStaffingOperation,
   completeMemberTask,
   createProjectWithRoom,
   createWorkspaceSnapshot,
@@ -556,7 +557,7 @@ describe("workspace domain", () => {
     expect(newMessages[3]?.content).toContain("- @builder-4（岗位：builder）备注：补位质量检查。");
   });
 
-  it("adds, renames, and removes role employees through room-only commands", () => {
+  it("adds, renames, and removes role employees through structured staffing operations", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);
     const roomId = snapshot.selection.roomId!;
@@ -581,19 +582,44 @@ describe("workspace domain", () => {
     });
 
     const taskCountBefore = Object.keys(snapshot.tasks).length;
-    snapshot = postUserMessage(snapshot, { roomId, content: "/role-add builder builder-5 补位实现" }, context);
-    snapshot = postUserMessage(snapshot, { roomId, content: "/role-rename builder-5 Signal Heron" }, context);
-    snapshot = postUserMessage(snapshot, { roomId, content: "/role-remove builder builder-5" }, context);
+    snapshot = applyRoleStaffingOperation(snapshot, {
+      roomId,
+      actorLabel: "You",
+      operation: {
+        kind: "add",
+        role: "builder",
+        employeeHandle: "builder-5",
+        reason: "补位实现",
+      },
+    }, context);
+    snapshot = applyRoleStaffingOperation(snapshot, {
+      roomId,
+      actorLabel: "You",
+      operation: {
+        kind: "rename",
+        employeeHandle: "builder-5",
+        name: "Signal Heron",
+      },
+    }, context);
+    snapshot = applyRoleStaffingOperation(snapshot, {
+      roomId,
+      actorLabel: "You",
+      operation: {
+        kind: "remove",
+        role: "builder",
+        employeeHandle: "builder-5",
+      },
+    }, context);
 
     const room = snapshot.rooms[roomId];
     const recentMessages = (snapshot.messageOrderByRoom[roomId] ?? [])
       .map((messageId) => snapshot.messages[messageId])
-      .slice(-6);
+      .slice(-3);
 
     expect(Object.keys(snapshot.tasks)).toHaveLength(taskCountBefore);
-    expect(recentMessages[1]?.content).toBe("@builder-5（岗位：builder）被 You 加入群组，原因是：补位实现。");
-    expect(recentMessages[3]?.content).toBe("@builder-5（岗位：builder）被 You 更名为 Signal Heron。");
-    expect(recentMessages[5]?.content).toBe("@builder-5（岗位：builder）被 You 移除群组。");
+    expect(recentMessages[0]?.content).toBe("@builder-5（岗位：builder）被 You 加入群组，原因是：补位实现。");
+    expect(recentMessages[1]?.content).toBe("@builder-5（岗位：builder）被 You 更名为 Signal Heron。");
+    expect(recentMessages[2]?.content).toBe("@builder-5（岗位：builder）被 You 移除群组。");
     expect(room.memberIds.map((memberId) => snapshot.members[memberId]?.handle)).not.toContain("builder-5");
   });
 
@@ -635,7 +661,7 @@ describe("workspace domain", () => {
     ).toThrow("Role members cannot enable Watch.");
   });
 
-  it("lets member-issued role staffing commands run without prompt authorization", () => {
+  it("lets members run structured staffing operations without prompt-gated parsing", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);
     const roomId = snapshot.selection.roomId!;
@@ -659,15 +685,15 @@ describe("workspace domain", () => {
       provider: builder.provider,
     });
 
-    const updated = postMemberMessage(
-      snapshot,
-      {
-        roomId,
-        memberId: builder.id,
-        content: "/role-add builder builder-7",
+    const updated = applyRoleStaffingOperation(snapshot, {
+      roomId,
+      actorLabel: builder.name,
+      operation: {
+        kind: "add",
+        role: "builder",
+        employeeHandle: "builder-7",
       },
-      context,
-    );
+    }, context);
 
     const latestNotice = (updated.messageOrderByRoom[roomId] ?? [])
       .map((messageId) => updated.messages[messageId])

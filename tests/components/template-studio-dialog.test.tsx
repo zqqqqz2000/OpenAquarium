@@ -255,6 +255,36 @@ describe("TemplateStudioDialog", () => {
     expect(screen.getByTestId("template-members-scroll").querySelector("[data-slot='scroll-area-viewport']")).toBeTruthy();
   });
 
+  it("lets template members toggle role-owner state and disables default watcher controls when enabled", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const templates = snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
+    const template = templates[0];
+
+    renderTemplateStudio(
+      <TemplateStudioDialog
+        open
+        templates={templates}
+        selectedTemplateId={template.id}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSaveGlobalConfig={vi.fn()}
+      />,
+    );
+
+    const roleSwitch = screen.getByRole("switch", { name: "Template role owner" });
+    expect(roleSwitch).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Template watcher enabled" })).not.toBeDisabled();
+
+    await user.click(roleSwitch);
+
+    expect(roleSwitch).toBeChecked();
+    expect(screen.getByText("Role owner 会在新建 room 时成为可挂员工的岗位模板；同时不能带默认 Watch。")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Template watcher enabled" })).toBeDisabled();
+  });
+
   it("supports template chat and global model editing surfaces", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();

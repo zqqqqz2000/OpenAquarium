@@ -3,7 +3,6 @@ import type {
   ChatAuthor,
   ChatMessage,
   CompleteTaskInput,
-  Project,
   ProjectId,
   CreateRoomInput,
   CreateProjectInput,
@@ -92,14 +91,6 @@ function buildMemberAuthor(member: TeamMember): ChatAuthor {
   };
 }
 
-function resolveProjectUpdatedAt(project: Project): string {
-  return project.updatedAt ?? project.createdAt;
-}
-
-function resolveRoomUpdatedAt(room: Room): string {
-  return room.updatedAt ?? room.createdAt;
-}
-
 function touchRoomActivity(snapshot: WorkspaceSnapshot, roomId: RoomId, timestamp: string): void {
   const room = snapshot.rooms[roomId];
   if (!room) {
@@ -178,9 +169,6 @@ const ASSIGNMENT_TOKEN_PATTERN = /@>([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)?)/gu;
 const REFERENCE_TOKEN_PATTERN = /@([\p{L}\p{N}_-]+)/gu;
 const ROLE_NOTE_COMMAND_PATTERN = /^\/role-note\s+([\p{L}\p{N}_-]+)\s*$/u;
 const ROLE_NOTES_COMMAND_PATTERN = /^\/role-notes\s+([\p{L}\p{N}_-]+)\s*$/u;
-const ROLE_ADD_COMMAND_PATTERN = /^\/role-add\s+([\p{L}\p{N}_-]+)\s+([\p{L}\p{N}_-]+)(?:\s+(.+))?\s*$/u;
-const ROLE_REMOVE_COMMAND_PATTERN = /^\/role-remove\s+([\p{L}\p{N}_-]+)\s+([\p{L}\p{N}_-]+)(?:\s+(.+))?\s*$/u;
-const ROLE_RENAME_COMMAND_PATTERN = /^\/role-rename\s+([\p{L}\p{N}_-]+)\s+(.+?)\s*$/u;
 
 interface ResolvedRoomRoute {
   hasAssignments: boolean;
@@ -191,6 +179,30 @@ interface ResolvedRoomRoute {
 interface RoleCommandResult {
   handled: boolean;
   notices?: string[];
+}
+
+export type RoleStaffingOperation =
+  | {
+    kind: "add";
+    role: string;
+    employeeHandle: string;
+    reason?: string;
+  }
+  | {
+    kind: "remove";
+    role: string;
+    employeeHandle: string;
+    reason?: string;
+  }
+  | {
+    kind: "rename";
+    employeeHandle: string;
+    name: string;
+  };
+
+export interface RoleStaffingResult {
+  ok: boolean;
+  notices: string[];
 }
 
 function normalizeHandleToken(value: string): string {
@@ -355,8 +367,6 @@ function resolveRoleCommand(
   snapshot: WorkspaceSnapshot,
   roomId: RoomId,
   content: string,
-  actorLabel: string,
-  context: MutationContext,
 ): RoleCommandResult {
   const roleNoteMatch = content.match(ROLE_NOTE_COMMAND_PATTERN);
   if (roleNoteMatch) {
@@ -403,26 +413,34 @@ function resolveRoleCommand(
     };
   }
 
-  const roleAddMatch = content.match(ROLE_ADD_COMMAND_PATTERN);
-  if (roleAddMatch) {
-    const [, roleToken, handleToken, reasonText] = roleAddMatch;
-    const roleOwner = roleToken ? resolveRoleOwner(snapshot, roomId, roleToken) : undefined;
-    const employeeHandle = handleToken ? normalizeHandleToken(handleToken) : "";
+  return { handled: false };
+}
+
+function applyRoleStaffingOperationToSnapshot(
+  snapshot: WorkspaceSnapshot,
+  roomId: RoomId,
+  operation: RoleStaffingOperation,
+  actorLabel: string,
+  context: MutationContext,
+): RoleStaffingResult {
+  if (operation.kind === "add") {
+    const roleOwner = resolveRoleOwner(snapshot, roomId, operation.role);
+    const employeeHandle = normalizeHandleToken(operation.employeeHandle);
     if (!roleOwner) {
       return {
-        handled: true,
-        notices: [`岗位成员新增失败：未找到岗位 @${roleToken}。`],
+        ok: false,
+        notices: [`岗位成员新增失败：未找到岗位 @${normalizeHandleToken(operation.role)}。`],
       };
     }
     if (!employeeHandle) {
       return {
-        handled: true,
-        notices: [`岗位成员新增失败：员工 handle 不能为空。`],
+        ok: false,
+        notices: ["岗位成员新增失败：员工 handle 不能为空。"],
       };
     }
     if (resolveMemberByHandle(snapshot, roomId, employeeHandle)) {
       return {
-        handled: true,
+        ok: false,
         notices: [`岗位成员新增失败：@${employeeHandle} 已存在。`],
       };
     }
@@ -430,8 +448,8 @@ function resolveRoleCommand(
     const room = snapshot.rooms[roomId];
     if (!room) {
       return {
-        handled: true,
-        notices: [`岗位成员新增失败：未找到房间。`],
+        ok: false,
+        notices: ["岗位成员新增失败：未找到房间。"],
       };
     }
 
@@ -456,9 +474,9 @@ function resolveRoleCommand(
       visibleMemberIds: validateVisibleIds([...(room.visibleMemberIds ?? room.memberIds), memberId], [...room.memberIds, memberId]),
     };
 
-    const reason = reasonText?.trim();
+    const reason = operation.reason?.trim();
     return {
-      handled: true,
+      ok: true,
       notices: [
         reason
           ? `@${employeeHandle}（岗位：${roleOwner.roleName}）被 ${actorLabel} 加入群组，原因是：${reason}。`
@@ -467,26 +485,24 @@ function resolveRoleCommand(
     };
   }
 
-  const roleRemoveMatch = content.match(ROLE_REMOVE_COMMAND_PATTERN);
-  if (roleRemoveMatch) {
-    const [, roleToken, handleToken, reasonText] = roleRemoveMatch;
-    const roleOwner = roleToken ? resolveRoleOwner(snapshot, roomId, roleToken) : undefined;
-    const employee = handleToken ? resolveMemberByHandle(snapshot, roomId, handleToken) : undefined;
+  if (operation.kind === "remove") {
+    const roleOwner = resolveRoleOwner(snapshot, roomId, operation.role);
+    const employee = resolveMemberByHandle(snapshot, roomId, operation.employeeHandle);
     if (!roleOwner) {
       return {
-        handled: true,
-        notices: [`岗位成员移除失败：未找到岗位 @${roleToken}。`],
+        ok: false,
+        notices: [`岗位成员移除失败：未找到岗位 @${normalizeHandleToken(operation.role)}。`],
       };
     }
     if (!employee || employee.roleId !== roleOwner.roleId) {
       return {
-        handled: true,
-        notices: [`岗位成员移除失败：@${handleToken} 不在岗位 @${roleOwner.handle} 下。`],
+        ok: false,
+        notices: [`岗位成员移除失败：@${normalizeHandleToken(operation.employeeHandle)} 不在岗位 @${roleOwner.handle} 下。`],
       };
     }
     if (employee.id === roleOwner.id) {
       return {
-        handled: true,
+        ok: false,
         notices: [`岗位成员移除失败：不能直接移除岗位默认成员 @${employee.handle}。`],
       };
     }
@@ -494,7 +510,7 @@ function resolveRoleCommand(
     const activeTask = employee.activeTaskId ? snapshot.tasks[employee.activeTaskId] : undefined;
     if (activeTask?.status === "running") {
       return {
-        handled: true,
+        ok: false,
         notices: [`岗位成员移除失败：@${employee.handle} 仍在处理中。`],
       };
     }
@@ -502,8 +518,8 @@ function resolveRoleCommand(
     const room = snapshot.rooms[roomId];
     if (!room) {
       return {
-        handled: true,
-        notices: [`岗位成员移除失败：未找到房间。`],
+        ok: false,
+        notices: ["岗位成员移除失败：未找到房间。"],
       };
     }
 
@@ -526,9 +542,9 @@ function resolveRoleCommand(
       }
     });
 
-    const reason = reasonText?.trim();
+    const reason = operation.reason?.trim();
     return {
-      handled: true,
+      ok: true,
       notices: [
         reason
           ? `@${employee.handle}（岗位：${roleOwner.roleName}）被 ${actorLabel} 移除群组，原因是：${reason}。`
@@ -537,35 +553,82 @@ function resolveRoleCommand(
     };
   }
 
-  const roleRenameMatch = content.match(ROLE_RENAME_COMMAND_PATTERN);
-  if (roleRenameMatch) {
-    const [, handleToken, nameText] = roleRenameMatch;
-    const member = handleToken ? resolveMemberByHandle(snapshot, roomId, handleToken) : undefined;
-    const nextName = nameText?.trim();
-    if (!member) {
-      return {
-        handled: true,
-        notices: [`岗位成员更名失败：未找到成员 @${handleToken}。`],
-      };
-    }
-    if (!nextName) {
-      return {
-        handled: true,
-        notices: [`岗位成员更名失败：名称不能为空。`],
-      };
-    }
-
-    snapshot.members[member.id] = {
-      ...member,
-      name: nextName,
-    };
+  const member = resolveMemberByHandle(snapshot, roomId, operation.employeeHandle);
+  const nextName = operation.name.trim();
+  if (!member) {
     return {
-      handled: true,
-      notices: [`@${member.handle}（岗位：${member.roleName}）被 ${actorLabel} 更名为 ${nextName}。`],
+      ok: false,
+      notices: [`岗位成员更名失败：未找到成员 @${normalizeHandleToken(operation.employeeHandle)}。`],
+    };
+  }
+  if (!nextName) {
+    return {
+      ok: false,
+      notices: ["岗位成员更名失败：名称不能为空。"],
     };
   }
 
-  return { handled: false };
+  snapshot.members[member.id] = {
+    ...member,
+    name: nextName,
+  };
+  return {
+    ok: true,
+    notices: [`@${member.handle}（岗位：${member.roleName}）被 ${actorLabel} 更名为 ${nextName}。`],
+  };
+}
+
+export function executeRoleStaffingOperation(
+  current: WorkspaceSnapshot,
+  input: {
+    roomId: RoomId;
+    actorLabel: string;
+    operation: RoleStaffingOperation;
+  },
+  context: MutationContext,
+): { snapshot: WorkspaceSnapshot; result: RoleStaffingResult } {
+  const snapshot = cloneSnapshot(current);
+  const room = snapshot.rooms[input.roomId];
+
+  if (!room) {
+    throw new Error(`Unknown room "${input.roomId}"`);
+  }
+
+  const now = context.now();
+  const result = applyRoleStaffingOperationToSnapshot(
+    snapshot,
+    input.roomId,
+    input.operation,
+    input.actorLabel,
+    context,
+  );
+  result.notices.forEach((notice) => {
+    insertSystemRoomMessage(snapshot, {
+      roomId: input.roomId,
+      content: notice,
+      createdAt: now,
+      createId: context.createId,
+    });
+  });
+  snapshot.selection.roomId = room.id;
+  snapshot.selection.projectId = room.projectId;
+
+  return {
+    snapshot,
+    result,
+  };
+}
+
+export function applyRoleStaffingOperation(
+  current: WorkspaceSnapshot,
+  input: {
+    roomId: RoomId;
+    actorLabel: string;
+    operation: RoleStaffingOperation;
+  },
+  context: MutationContext,
+): WorkspaceSnapshot {
+  return executeRoleStaffingOperation(current, input, context).snapshot;
 }
 
 function updateMember(snapshot: WorkspaceSnapshot, member: TeamMember): void {
@@ -1144,7 +1207,7 @@ export function postUserMessage(
   setRoomReadState(snapshot, room.id, now);
   touchRoomActivity(snapshot, room.id, now);
   const roleCommand = !input.directMemberId
-    ? resolveRoleCommand(snapshot, input.roomId, trimmedContent, snapshot.currentUserName, context)
+    ? resolveRoleCommand(snapshot, input.roomId, trimmedContent)
     : { handled: false };
   if (roleCommand.handled) {
     roleCommand.notices?.forEach((notice) => {
@@ -1212,7 +1275,7 @@ export function postMemberMessage(
     }
   }
   const roleCommand = !isDirectMessage
-    ? resolveRoleCommand(snapshot, input.roomId, content, member.name, context)
+    ? resolveRoleCommand(snapshot, input.roomId, content)
     : { handled: false };
   if (roleCommand.handled) {
     roleCommand.notices?.forEach((notice) => {

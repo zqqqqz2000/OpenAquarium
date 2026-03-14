@@ -120,4 +120,32 @@ describe("RoomTeamDialog", () => {
     expect(screen.getByRole("textbox", { name: "Name" })).toHaveDisplayValue(/Member \d+/);
     expect(screen.queryByRole("textbox", { name: "Handle" })).not.toBeInTheDocument();
   });
+
+  it("lets room role templates toggle role-owner state and disables watcher controls when enabled", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+
+    render(
+      <RoomTeamDialog
+        open
+        snapshot={snapshot}
+        room={room}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const roleSwitch = screen.getByRole("switch", { name: "Room team role owner" });
+    expect(roleSwitch).toBeChecked();
+    expect(screen.getByText("Role owner 可以挂员工并接收 `oa_role_*` 扩编操作；同时不能配置 Watch。若要关闭它，必须先移除这个岗位下的员工。")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Room team watcher configured" })).toBeDisabled();
+
+    await user.click(roleSwitch);
+
+    expect(roleSwitch).not.toBeChecked();
+    expect(screen.getByText("关闭后，这个成员会变成普通成员，不再作为岗位 owner 接收扩编。若这个岗位下还有员工，保存时会被阻止。")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Room team watcher configured" })).not.toBeDisabled();
+  });
 });

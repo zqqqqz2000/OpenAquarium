@@ -20,6 +20,9 @@ const TOOL_STATUS_PREFIX = "__oa_tool__";
 export interface MemberToolHost {
   sendGroupMessage(input: { roomId: RoomId; memberId: string; taskId: string; content: string }): Promise<void>;
   sendDirectMessage(input: { roomId: RoomId; memberId: string; taskId: string; targetHandle: string; content: string }): Promise<void>;
+  addRoleEmployee(input: { roomId: RoomId; memberId: string; role: string; employeeHandle: string; reason?: string }): Promise<{ ok: boolean; notices: string[] }>;
+  removeRoleEmployee(input: { roomId: RoomId; memberId: string; role: string; employeeHandle: string; reason?: string }): Promise<{ ok: boolean; notices: string[] }>;
+  renameRoleEmployee(input: { roomId: RoomId; memberId: string; employeeHandle: string; name: string }): Promise<{ ok: boolean; notices: string[] }>;
   runWatcher(input: { watcherId: string }): Promise<void>;
   inspectRoomState(input: { roomId: RoomId }): Promise<string>;
   persistMemberSession?(input: { memberId: string; sessionId?: string }): Promise<void>;
@@ -404,6 +407,58 @@ export class AcpMemberExecutor implements MemberExecutor {
             content,
           });
           return `direct message sent to ${targetHandle.startsWith("@") ? targetHandle : `@${targetHandle}`}`;
+        },
+      }),
+      oa_role_add_employee: tool({
+        description: "Add a new employee under an existing room role owner. The role must be an existing role owner handle shown in the room roster, such as @builder or @checker, not a regular member like @research. This is a structured staffing tool, not a room message. Use a fresh handle without a leading @.",
+        inputSchema: z.object({
+          role: z.string().min(1).describe("Existing room role owner handle, with or without leading @, such as builder or checker."),
+          employeeHandle: z.string().min(1).describe("New employee handle to create, without a leading @."),
+          reason: z.string().min(1).optional(),
+        }),
+        execute: async ({ role, employeeHandle, reason }) => {
+          const result = await this.host.addRoleEmployee({
+            roomId: request.room.id,
+            memberId: request.member.id,
+            role,
+            employeeHandle,
+            reason,
+          });
+          return result;
+        },
+      }),
+      oa_role_remove_employee: tool({
+        description: "Remove an existing employee from an existing room role owner. The role must be an existing role owner handle shown in the room roster. This is a structured staffing tool, not a room message.",
+        inputSchema: z.object({
+          role: z.string().min(1).describe("Existing room role owner handle, with or without leading @, such as builder or checker."),
+          employeeHandle: z.string().min(1).describe("Employee handle to remove, with or without leading @."),
+          reason: z.string().min(1).optional(),
+        }),
+        execute: async ({ role, employeeHandle, reason }) => {
+          const result = await this.host.removeRoleEmployee({
+            roomId: request.room.id,
+            memberId: request.member.id,
+            role,
+            employeeHandle,
+            reason,
+          });
+          return result;
+        },
+      }),
+      oa_role_rename_employee: tool({
+        description: "Rename an existing role employee. This is a structured staffing tool, not a room message.",
+        inputSchema: z.object({
+          employeeHandle: z.string().min(1).describe("Employee handle to rename, with or without leading @."),
+          name: z.string().min(1).describe("New display name."),
+        }),
+        execute: async ({ employeeHandle, name }) => {
+          const result = await this.host.renameRoleEmployee({
+            roomId: request.room.id,
+            memberId: request.member.id,
+            employeeHandle,
+            name,
+          });
+          return result;
         },
       }),
       oa_run_room_watcher: tool({

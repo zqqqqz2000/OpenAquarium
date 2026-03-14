@@ -157,7 +157,7 @@ function buildTemplateGenerationPrompt(
     "- Make each member prompt tell the model to publish brief visible progress updates during longer tasks so the user is not left waiting in silence.",
     "- In generated prompts, make clear that visible room replies and direct messages are rendered as Markdown for the user, including code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas.",
     "- In generated prompts, teach that @handle is only a passive reference and @>handle is the real active assignment syntax.",
-    "- In generated prompts, treat `/role-add`, `/role-remove`, and `/role-rename` as shared capabilities that exist globally, but only authorize them for a member when the prompt explicitly says `允许使用岗位员工命令`; otherwise add `不允许使用岗位员工命令`.",
+    "- In generated prompts, treat `oa_role_add_employee`, `oa_role_remove_employee`, and `oa_role_rename_employee` as shared staffing tools that exist globally, but only authorize them for a member when the prompt explicitly says `允许使用岗位员工工具`; otherwise add `不允许使用岗位员工工具`.",
     "- Use a mix of entry, implementation, research, QA, recorder, incident, or data roles as appropriate to the brief.",
     "- Make allowedSkillIds complementary; do not duplicate every member.",
     "- Prefer 3 to 5 members unless the brief is clearly small or clearly broad.",
