@@ -1175,18 +1175,23 @@ export async function startWorkspaceHttpServer(args: {
   let pendingSnapshot = args.runtime.getSnapshot();
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
   const broadcastSnapshot = (snapshot: typeof pendingSnapshot): void => {
+    const clientCount = [...socketServer.clients].filter((client) => client.readyState === client.OPEN).length;
+    if (clientCount === 0) {
+      return;
+    }
+
     const transportSnapshot = buildTransportSnapshot(snapshot);
     const payload = JSON.stringify({
       type: "snapshot",
       snapshot: transportSnapshot,
     });
-    const clientCount = [...socketServer.clients].filter((client) => client.readyState === client.OPEN).length;
+
     socketServer.clients.forEach((client) => {
       if (client.readyState === client.OPEN) {
         client.send(payload);
       }
     });
-    if ((args.logger?.shouldLog("ws-broadcast", 1000) ?? false) || payload.length > 500_000) {
+    if (args.logger?.shouldLog("ws-broadcast", 2000) ?? false) {
       args.logger?.info("ws-broadcast", {
         bytes: payload.length,
         clients: clientCount,
@@ -1203,7 +1208,7 @@ export async function startWorkspaceHttpServer(args: {
     pendingBroadcastTimer = setTimeout(() => {
       pendingBroadcastTimer = undefined;
       broadcastSnapshot(pendingSnapshot);
-    }, 80);
+    }, 250);
   };
   const unsubscribe = args.runtime.subscribe((snapshot) => {
     scheduleSnapshotBroadcast(snapshot);

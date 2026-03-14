@@ -127,7 +127,7 @@ export function createDiagnosticsLogger(args: {
   const explicitlyEnabled = env.OA_DIAGNOSTICS_ENABLED === "1";
   const runningTests = env.NODE_ENV === "test" || env.VITEST === "true";
 
-  if (!explicitlyEnabled && runningTests) {
+  if (!explicitlyEnabled || runningTests) {
     return new NoopDiagnosticsLogger();
   }
 

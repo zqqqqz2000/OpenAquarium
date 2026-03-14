@@ -188,13 +188,15 @@ export class AcpMemberExecutor implements MemberExecutor {
             switch (chunk.type) {
               case "text-delta":
                 finalContent = `${finalContent}${chunk.text}`;
-                this.logger?.info("acp-stream-text-delta", {
-                  taskId: request.task.id,
-                  memberId: request.member.id,
-                  memberHandle: request.member.handle,
-                  delta: chunk.text,
-                  accumulatedText: finalContent,
-                });
+                if (this.logger?.shouldLog(`acp-stream-text-delta:${request.task.id}`, 1000)) {
+                  this.logger.info("acp-stream-text-delta", {
+                    taskId: request.task.id,
+                    memberId: request.member.id,
+                    memberHandle: request.member.handle,
+                    deltaChars: chunk.text.length,
+                    accumulatedChars: finalContent.length,
+                  });
+                }
                 await callbacks.onDraft(finalContent);
                 return;
               case "tool-call":
@@ -226,12 +228,14 @@ export class AcpMemberExecutor implements MemberExecutor {
                 }
               case "reasoning-delta":
                 if (chunk.text.trim().length > 0) {
-                  this.logger?.info("acp-stream-reasoning-delta", {
-                    taskId: request.task.id,
-                    memberId: request.member.id,
-                    memberHandle: request.member.handle,
-                    delta: chunk.text,
-                  });
+                  if (this.logger?.shouldLog(`acp-stream-reasoning-delta:${request.task.id}`, 1000)) {
+                    this.logger.info("acp-stream-reasoning-delta", {
+                      taskId: request.task.id,
+                      memberId: request.member.id,
+                      memberHandle: request.member.handle,
+                      deltaChars: chunk.text.length,
+                    });
+                  }
                   await callbacks.onStatus(`Reasoning: ${chunk.text}`);
                 }
                 return;
@@ -241,7 +245,6 @@ export class AcpMemberExecutor implements MemberExecutor {
                   taskId: request.task.id,
                   memberId: request.member.id,
                   memberHandle: request.member.handle,
-                  rawValue: typeof chunk.rawValue === "string" ? chunk.rawValue : JSON.stringify(chunk.rawValue),
                   summary: summary ?? null,
                 });
                 if (summary) {

@@ -1486,14 +1486,16 @@ export class WorkspaceRuntime {
           );
           this.scheduleProgressPersistence();
           this.emit();
-          this.logger?.info("task-status", {
-            taskId: args.taskId,
-            roomId: currentTask.roomId,
-            memberId: currentTask.memberId,
-            summary,
-            state: currentTask.status,
-            runningTasks: this.runningTaskIds.size,
-          });
+          if (this.logger?.shouldLog(`task-status:${args.taskId}`, 1000)) {
+            this.logger.info("task-status", {
+              taskId: args.taskId,
+              roomId: currentTask.roomId,
+              memberId: currentTask.memberId,
+              summaryLength: summary.length,
+              state: currentTask.status,
+              runningTasks: this.runningTaskIds.size,
+            });
+          }
           const observer = this.taskObservers.get(args.taskId);
           if (observer) {
             await observer.callbacks.onStatus?.({
