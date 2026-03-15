@@ -293,13 +293,12 @@ function stripMarkdownCodeSegments(content: string): string {
 }
 
 function resolveRoleRouting(snapshot: WorkspaceSnapshot, roomId: RoomId, content: string): ResolvedRoomRoute {
-  const sanitizedContent = stripMarkdownCodeSegments(content);
   const seenTargets = new Set<string>();
   const memberIds: MemberId[] = [];
   const notices: string[] = [];
   let hasAssignments = false;
 
-  for (const match of sanitizedContent.matchAll(ASSIGNMENT_TOKEN_PATTERN)) {
+  for (const match of content.matchAll(ASSIGNMENT_TOKEN_PATTERN)) {
     const rawTarget = match[1];
     if (!rawTarget) {
       continue;
@@ -1446,6 +1445,7 @@ function validateTemplateMembers(members: TeamMemberBlueprint[]): TeamMemberBlue
           intervalMinutes: Math.round(member.watch.intervalMinutes),
           enabledByDefault: member.watch.enabledByDefault,
           persistent: member.watch.persistent ?? false,
+          prompt: member.watch.prompt?.trim() || undefined,
         }
       : undefined;
 
@@ -1500,6 +1500,7 @@ interface NormalizedRoomTeamMemberInput extends Omit<RoomTeamMemberInput, "watch
     enabled: boolean;
     intervalMinutes: number;
     persistent: boolean;
+    prompt?: string;
   };
 }
 
@@ -1518,6 +1519,7 @@ function validateRoomTeamMembers(members: RoomTeamMemberInput[]): NormalizedRoom
           enabled: member.watch.enabled,
           intervalMinutes: Math.round(member.watch.intervalMinutes),
           persistent: member.watch.persistent ?? false,
+          prompt: member.watch.prompt?.trim() || undefined,
         }
       : undefined;
 
@@ -1823,6 +1825,7 @@ export function updateRoomTeam(
       enabled: memberInput.watch.enabled,
       intervalMinutes: memberInput.watch.intervalMinutes,
       persistent: memberInput.watch.persistent,
+      prompt: memberInput.watch.prompt,
       pausedUntilActivity: existingWatcherId ? snapshot.watchers[existingWatcherId]?.pausedUntilActivity ?? false : false,
       lastConsumedMessageId: existingWatcherId ? snapshot.watchers[existingWatcherId]?.lastConsumedMessageId : undefined,
       lastConsumedStateAt: existingWatcherId ? snapshot.watchers[existingWatcherId]?.lastConsumedStateAt : undefined,
@@ -1949,6 +1952,7 @@ export function upsertMemberWatcher(
       enabled: input.enabled,
       intervalMinutes: Math.round(input.intervalMinutes),
       persistent: input.persistent ?? snapshot.watchers[existingWatcherId]?.persistent ?? false,
+      prompt: input.prompt?.trim() || undefined,
     };
     return snapshot;
   }
@@ -1961,6 +1965,7 @@ export function upsertMemberWatcher(
     enabled: input.enabled,
     intervalMinutes: Math.round(input.intervalMinutes),
     persistent: input.persistent ?? false,
+    prompt: input.prompt?.trim() || undefined,
     pausedUntilActivity: false,
   };
   snapshot.rooms[room.id] = {
@@ -2201,33 +2206,35 @@ function findLatestWatcherStateChangeAt(snapshot: WorkspaceSnapshot, watcher: Wa
     })[0]?.createdAt;
 }
 
-function formatWatcherStateDigestLine(snapshot: WorkspaceSnapshot, trace: TaskTraceEntry): string {
-  const stamp = formatTime(trace.createdAt);
-  const memberHandle = snapshot.members[trace.memberId]?.handle ?? trace.memberId;
-  const taskTitle = snapshot.tasks[trace.taskId]?.title ?? trace.title;
-
-  switch (trace.kind) {
-    case "task-started":
-      return `[${stamp}] @${memberHandle} started: ${taskTitle}`;
-    case "interrupted":
-      return `[${stamp}] @${memberHandle} interrupted: ${truncateWatcherStateContent(trace.content)}`;
-    case "draft":
-      return `[${stamp}] @${memberHandle} draft: ${truncateWatcherStateContent(trace.content)}`;
-    case "status":
-      return `[${stamp}] @${memberHandle} status: ${truncateWatcherStateContent(trace.content)}`;
-    case "completed":
-      return `[${stamp}] @${memberHandle} completed: ${truncateWatcherStateContent(trace.content)}`;
-    case "error":
-      return `[${stamp}] @${memberHandle} error: ${truncateWatcherStateContent(trace.content)}`;
-    case "task-prompt":
-      return `[${stamp}] @${memberHandle} prompt refreshed`;
-    default:
-      return `[${stamp}] @${memberHandle} ${String(trace.kind)}: ${truncateWatcherStateContent(trace.content)}`;
+function formatWatcherMemberStateLine(snapshot: WorkspaceSnapshot, roomId: RoomId, memberId: MemberId): string {
+  const member = snapshot.members[memberId];
+  if (!member || member.roomId !== roomId || member.archivedAt) {
+    return `@${memberId}: unavailable`;
   }
+
+  const segments = [`@${member.handle}: ${member.status}`];
+  const activeTask = member.activeTaskId ? snapshot.tasks[member.activeTaskId] : undefined;
+  if (activeTask) {
+    segments.push(`task: ${activeTask.title}`);
+  }
+
+  const latestTrace = Object.values(snapshot.taskTraces)
+    .filter((trace) => trace.roomId === roomId && trace.memberId === member.id)
+    .filter((trace) => !shouldExcludeWatcherStateTrace(snapshot, trace))
+    .sort((left, right) => {
+      const createdAtOrder = right.createdAt.localeCompare(left.createdAt);
+      return createdAtOrder !== 0 ? createdAtOrder : right.id.localeCompare(left.id);
+    })[0];
+  if (latestTrace) {
+    segments.push(`${latestTrace.kind}: ${truncateWatcherStateContent(latestTrace.content)}`);
+  }
+
+  return segments.join(" | ");
 }
 
 function buildWatcherDigestContent(
   snapshot: WorkspaceSnapshot,
+  roomId: RoomId,
   newMessageIds: MessageId[],
   stateChanges: TaskTraceEntry[],
   persistentHeartbeat: boolean,
@@ -2239,10 +2246,11 @@ function buildWatcherDigestContent(
     sections.push(...newMessageIds.map((messageId) => `- ${formatDigestLine(snapshot, messageId)}`));
   }
 
-  if (stateChanges.length > 0) {
-    sections.push("", "[Member state changes]");
-    sections.push(...stateChanges.map((trace) => `- ${formatWatcherStateDigestLine(snapshot, trace)}`));
-  }
+  sections.push("", "[Member state]");
+  sections.push(
+    ...((snapshot.rooms[roomId]?.memberIds ?? [])
+      .map((memberId) => `- ${formatWatcherMemberStateLine(snapshot, roomId, memberId)}`)),
+  );
 
   if (persistentHeartbeat && newMessageIds.length === 0 && stateChanges.length === 0) {
     sections.push("", "[Persistent watch]");
@@ -2344,7 +2352,7 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
     id: context.createId("message"),
     roomId: effectiveWatcher.roomId,
     author: buildSystemAuthor("Watcher"),
-    content: buildWatcherDigestContent(snapshot, newMessageIds, stateChanges, effectiveWatcher.persistent ?? false),
+    content: buildWatcherDigestContent(snapshot, effectiveWatcher.roomId, newMessageIds, stateChanges, effectiveWatcher.persistent ?? false),
     createdAt: now,
     transport: "watch-digest",
     status: "sent",

@@ -261,7 +261,7 @@ export class WorkspaceRuntimeClient {
     return payload.snapshot;
   }
 
-  async upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean }): Promise<WorkspaceSnapshot> {
+  async upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean; prompt?: string }): Promise<WorkspaceSnapshot> {
     const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
       await fetch(`${this.baseUrl}/api/members/${input.memberId}/watcher`, {
         method: "POST",
@@ -270,6 +270,7 @@ export class WorkspaceRuntimeClient {
           enabled: input.enabled,
           intervalMinutes: input.intervalMinutes,
           persistent: input.persistent ?? false,
+          prompt: input.prompt,
         }),
       }),
     );

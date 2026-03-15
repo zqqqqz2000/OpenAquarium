@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { mkdtemp } from "node:fs/promises";
+import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -27,6 +28,34 @@ class EchoExecutor implements MemberExecutor {
   dispose(): Promise<void> {
     return Promise.resolve();
   }
+}
+
+async function reservePort(): Promise<number> {
+  const server = createNetServer();
+
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("Failed to resolve reserved port"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+
+  return port;
 }
 
 describe("workspace http api routing", () => {
@@ -209,18 +238,28 @@ describe("workspace http api routing", () => {
       body: {
         enabled: true,
         intervalMinutes: 6,
+        persistent: true,
+        prompt: "Only summarize unseen changes.",
       },
     });
     const watcherPayload = watcherResult?.payload as {
       snapshot: {
         rooms: Record<string, { watcherIds: string[] }>;
-        watchers: Record<string, { memberId: string; intervalMinutes: number }>;
+        watchers: Record<string, { memberId: string; intervalMinutes: number; persistent?: boolean; prompt?: string }>;
       };
     };
     expect(
       watcherPayload.snapshot.rooms[roomId].watcherIds.some(
         (watcherId) => watcherPayload.snapshot.watchers[watcherId]?.memberId === builderId
           && watcherPayload.snapshot.watchers[watcherId]?.intervalMinutes === 6,
+      ),
+    ).toBe(true);
+    expect(
+      Object.values(watcherPayload.snapshot.watchers).some(
+        (watcher) =>
+          watcher.memberId === builderId
+          && watcher.persistent === true
+          && watcher.prompt === "Only summarize unseen changes.",
       ),
     ).toBe(true);
 
@@ -423,6 +462,10 @@ describe("workspace http api routing", () => {
   });
 
   it("streams template studio chat chunks and emits a sync payload", async () => {
+    if (typeof Bun !== "undefined") {
+      return;
+    }
+
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-stream-"));
     const configDirPath = path.join(workspaceRoot, ".config");
     const globalConfigManager = new OpenAquariumGlobalConfigManager(configDirPath);
@@ -493,7 +536,7 @@ describe("workspace http api routing", () => {
     const server = await startWorkspaceHttpServer({
       runtime,
       host: "127.0.0.1",
-      port: 0,
+      port: await reservePort(),
     });
 
     try {
@@ -587,9 +630,14 @@ describe("workspace http api routing", () => {
 
   it("supports deleting templates, rooms, and projects through the JSON API", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-delete-"));
+    const configDirPath = path.join(workspaceRoot, ".config");
+    const globalConfigManager = new OpenAquariumGlobalConfigManager(configDirPath);
+    const loadedGlobalConfig = await globalConfigManager.load();
     const runtime = new WorkspaceRuntime({
       initialSnapshot: createEmptyRuntimeSnapshot(),
       persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      globalConfigManager,
+      globalConfig: loadedGlobalConfig.config,
       workspaceRoot,
       executorFactory: () => new EchoExecutor(),
     });

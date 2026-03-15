@@ -102,7 +102,7 @@ export interface WorkspaceRemoteStoreState {
     modelProfileId?: string;
   }): Promise<{ assistantMessage: string; modelProfileId: string }>;
   setEntryMember(memberId: string): Promise<void>;
-  upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean }): Promise<void>;
+  upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean; prompt?: string }): Promise<void>;
   generateTemplate(brief: string): Promise<TeamTemplate>;
   replaceSnapshot(snapshot: WorkspaceSnapshot): void;
   replaceRemoteState(payload: { snapshot: WorkspaceSnapshot; globalConfig?: GlobalWorkspaceConfig }): void;
@@ -138,7 +138,7 @@ export interface WorkspaceRemoteClient {
     modelProfileId?: string;
   }): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; assistantMessage: string; modelProfileId: string }>;
   setEntryMember(memberId: string): Promise<WorkspaceSnapshot>;
-  upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean }): Promise<WorkspaceSnapshot>;
+  upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean; prompt?: string }): Promise<WorkspaceSnapshot>;
   toggleWatcher(watcherId: string): Promise<WorkspaceSnapshot>;
   runWatcher(watcherId: string): Promise<WorkspaceSnapshot>;
   generateTemplate(brief: string): Promise<{ template: TeamTemplate; snapshot: WorkspaceSnapshot }>;

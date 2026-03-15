@@ -45,6 +45,7 @@ export interface WatchBlueprint {
   intervalMinutes: number;
   enabledByDefault: boolean;
   persistent?: boolean;
+  prompt?: string;
 }
 
 export interface TeamMemberBlueprint {
@@ -134,6 +135,7 @@ export interface WatchSubscription {
   intervalMinutes: number;
   enabled: boolean;
   persistent?: boolean;
+  prompt?: string;
   pausedUntilActivity?: boolean;
   lastConsumedMessageId?: MessageId;
   lastConsumedStateAt?: string;
@@ -276,6 +278,7 @@ export interface RoomWatcherConfig {
   enabled: boolean;
   intervalMinutes: number;
   persistent?: boolean;
+  prompt?: string;
 }
 
 export interface RoomTeamMemberInput {
@@ -346,4 +349,5 @@ export interface UpsertWatcherInput {
   enabled: boolean;
   intervalMinutes: number;
   persistent?: boolean;
+  prompt?: string;
 }

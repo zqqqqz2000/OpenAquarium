@@ -27,6 +27,7 @@ export interface TemplateMemberDraft {
   watchEnabled: boolean;
   watchPersistent: boolean;
   watchIntervalMinutes: string;
+  watchPrompt: string;
   allowedSkillIdsText: string;
 }
 
@@ -52,6 +53,7 @@ function createWatchBlueprint(draft: TemplateMemberDraft): WatchBlueprint | unde
     intervalMinutes: Math.round(intervalMinutes),
     enabledByDefault: true,
     persistent: draft.watchPersistent,
+    prompt: draft.watchPrompt.trim() || undefined,
   };
 }
 
@@ -106,6 +108,7 @@ function createTemplateMemberDraft(member: TeamMemberBlueprint): TemplateMemberD
     watchEnabled: Boolean(member.watch),
     watchPersistent: member.watch?.persistent ?? false,
     watchIntervalMinutes: member.watch ? String(member.watch.intervalMinutes) : "15",
+    watchPrompt: member.watch?.prompt ?? "",
     allowedSkillIdsText: allowedSkillIds.join("\n"),
   };
 }
@@ -153,6 +156,7 @@ export function addEmptyTemplateMemberDraft(
       watchEnabled: false,
       watchPersistent: false,
       watchIntervalMinutes: sourceMember.watchIntervalMinutes,
+      watchPrompt: "",
       allowedSkillIdsText: "",
     },
   ];

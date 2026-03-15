@@ -514,6 +514,8 @@ export async function handleWorkspaceJsonApiRequest(args: {
       memberId,
       enabled: (body as { enabled: boolean }).enabled,
       intervalMinutes: (body as { intervalMinutes: number }).intervalMinutes,
+      persistent: (body as { persistent?: boolean }).persistent ?? false,
+      prompt: (body as { prompt?: string }).prompt,
     });
     return {
       statusCode: 200,
@@ -1150,12 +1152,13 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing member id" });
           return;
         }
-      const body = await readJson<{ enabled: boolean; intervalMinutes: number; persistent?: boolean }>(request);
+      const body = await readJson<{ enabled: boolean; intervalMinutes: number; persistent?: boolean; prompt?: string }>(request);
         const snapshot = await args.runtime.upsertWatcher({
         memberId,
         enabled: body.enabled,
         intervalMinutes: body.intervalMinutes,
         persistent: body.persistent ?? false,
+        prompt: body.prompt,
       });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;

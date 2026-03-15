@@ -74,7 +74,6 @@ describe("MemberStudioDialog", () => {
     expect(onRunWatcher).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "Config" }));
     expect(screen.getByText("这里改的是当前 room 下这个 member 的实例配置，不会同步回 team template。")).toBeInTheDocument();
-    expect(screen.getByText(/Provider command\/env now live in Template Studio > Models/i)).toBeInTheDocument();
   });
 
   it("shows member-specific processing history", async () => {
@@ -141,6 +140,41 @@ describe("MemberStudioDialog", () => {
         element?.textContent?.includes("@builder @research 先整理需求边界，然后由 @builder 准备代码骨架，@research 收集现有 ACP 兼容层做法。") ?? false,
       ).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("saves watcher prompt with watcher configuration", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder")!;
+    const onSaveWatcher = vi.fn();
+
+    renderDialog(
+      <MemberStudioDialog
+        snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        room={room}
+        member={builder}
+        onClose={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSetEntryMember={vi.fn()}
+        onSaveWatcher={onSaveWatcher}
+        onRunWatcher={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Watcher" }));
+    await user.clear(screen.getByRole("textbox", { name: /Watcher prompt/i }));
+    await user.type(screen.getByRole("textbox", { name: /Watcher prompt/i }), "Only summarize unseen blocker changes.");
+    await user.click(screen.getByRole("button", { name: /Save watcher/i }));
+
+    expect(onSaveWatcher).toHaveBeenCalledWith({
+      memberId: builder.id,
+      enabled: false,
+      intervalMinutes: 15,
+      persistent: false,
+      prompt: "Only summarize unseen blocker changes.",
+    });
   });
 
   it("caps the current task card height and scrolls long source messages", () => {

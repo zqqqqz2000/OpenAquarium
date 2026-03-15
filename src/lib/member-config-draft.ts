@@ -31,6 +31,7 @@ export interface WatcherDraft {
   enabled: boolean;
   intervalMinutes: string;
   persistent?: boolean;
+  prompt: string;
 }
 
 export function splitLines(text: string): string[] {
@@ -87,6 +88,7 @@ export function createWatcherDraft(watcher?: WatchSubscription): WatcherDraft {
     enabled: watcher?.enabled ?? false,
     intervalMinutes: watcher ? String(watcher.intervalMinutes) : "15",
     persistent: watcher?.persistent ?? false,
+    prompt: watcher?.prompt ?? "",
   };
 }
 
@@ -122,6 +124,7 @@ export function buildWatcherConfigInput(memberId: string, draft: WatcherDraft): 
   enabled: boolean;
   intervalMinutes: number;
   persistent?: boolean;
+  prompt?: string;
 } {
   const intervalMinutes = Number(draft.intervalMinutes);
 
@@ -134,5 +137,6 @@ export function buildWatcherConfigInput(memberId: string, draft: WatcherDraft): 
     enabled: draft.enabled,
     intervalMinutes: Math.round(intervalMinutes),
     persistent: draft.persistent ?? false,
+    prompt: draft.prompt.trim() || undefined,
   };
 }

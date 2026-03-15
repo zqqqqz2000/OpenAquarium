@@ -290,6 +290,21 @@ describe("workspace domain", () => {
     expect(handles).toEqual(["builder", "scribe"]);
   });
 
+  it("extracts active assignments from inline code and malformed backtick spans", () => {
+    const context = createRuntimeContext();
+    const snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const mentionIds = extractMentionMemberIds(
+      snapshot,
+      roomId,
+      "切片说明：`file.write` facade`**\n\n`@>builder` 先实现 bridge，下一个再给 `@>scribe` 记要点。",
+    );
+    const handles = mentionIds.map((memberId) => snapshot.members[memberId].handle).sort();
+
+    expect(handles).toEqual(["builder", "scribe"]);
+  });
+
   it("extracts passive references without routing them", () => {
     const context = createRuntimeContext();
     const snapshot = createStartedProjectSnapshot(context);
@@ -395,7 +410,7 @@ describe("workspace domain", () => {
         [builderMain.id]: {
           ...builderMain,
           roleName: undefined,
-        },
+        } as unknown as typeof builderMain,
       },
     };
 
@@ -430,7 +445,7 @@ describe("workspace domain", () => {
         [builderMain.id]: {
           ...builderMain,
           roleId: undefined,
-        },
+        } as unknown as typeof builderMain,
       },
     };
 
@@ -522,6 +537,64 @@ describe("workspace domain", () => {
     expect(addressedIds.map((memberId) => snapshot.members[memberId]?.handle)).toEqual(["builder-4"]);
     expect(latestSystemMessage?.content).toBe("岗位路由已执行：@>builder/builder-4 -> Signal Heron（@builder-4）。");
     expect(Object.values(routed.tasks).some((task) => routed.members[task.memberId]?.handle === "builder-4")).toBe(true);
+  });
+
+  it("routes exact member handles from a member-authored group message to multiple builder workers", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+    const roomId = snapshot.selection.roomId!;
+
+    snapshot = cloneRoomTeamForRoleRouting(
+      snapshot,
+      roomId,
+      {
+        builderHandles: [
+          { handle: "builder", name: "Forge Crab" },
+          { handle: "builder-wt1", name: "Builder Wt1" },
+          { handle: "builder-wt2", name: "Builder Wt2" },
+        ],
+      },
+      context,
+    );
+
+    const lead = snapshot.rooms[roomId]?.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead");
+    if (!lead) {
+      throw new Error("Expected lead member");
+    }
+
+    const content = [
+      "- `@>builder` 继续作为 masking / token vault / controlled restore 最小闭环主责任人。",
+      "- `@>builder-wt1` 只做 file.read -> redact/tokenize -> placeholder。",
+      "- `@>builder-wt2` 只做 file.write restore。",
+    ].join("\n");
+
+    const routed = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: lead.id,
+        content,
+      },
+      context,
+    );
+
+    const postedMessage = (routed.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => routed.messages[messageId])
+      .find((message) => message.author.kind === "member" && message.author.id === lead.id && message.content === content);
+
+    expect(postedMessage?.mentionedMemberIds.map((memberId) => routed.members[memberId]?.handle)).toEqual([
+      "builder",
+      "builder-wt1",
+      "builder-wt2",
+    ]);
+    expect(
+      Object.values(routed.tasks)
+        .filter((task) => task.sourceMessageId === postedMessage?.id)
+        .map((task) => routed.members[task.memberId]?.handle)
+        .sort(),
+    ).toEqual(["builder", "builder-wt1", "builder-wt2"]);
   });
 
   it("answers /role-note and /role-notes with room-only system messages", () => {
@@ -1048,10 +1121,11 @@ describe("workspace domain", () => {
     const latestTrace = latestTraceId ? snapshot.taskTraces[latestTraceId] : undefined;
 
     expect(digestMessages).toHaveLength(1);
-    expect(digestMessages[0].content).toContain("[Member state changes]");
-    expect(digestMessages[0].content).toContain("@lead status: Plan updated (2 step(s))");
+    expect(digestMessages[0].content).toContain("[Member state]");
+    expect(digestMessages[0].content).toContain("@lead: running");
+    expect(digestMessages[0].content).toContain("task:");
+    expect(digestMessages[0].content).toContain("status: Plan updated (2 step(s))");
     expect(latestTrace).toBeDefined();
-    expect(digestMessages[0].content).toContain(`[${formatTime(latestTrace!.createdAt)}] @lead status: Plan updated (2 step(s))`);
     expect(digestMessages[0].content).not.toContain("[Unseen messages]");
     expect(next.watchers[watcherId].lastConsumedStateAt).toBeDefined();
   });
@@ -1191,7 +1265,7 @@ describe("workspace domain", () => {
     expect(snapshot.members[scribe!.id].activeTaskId).toBeUndefined();
   });
 
-  it("does not emit duplicate role notices when a teammate quotes @> syntax inside code spans", () => {
+  it("keeps treating quoted @> syntax inside code spans as active role routing", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);
     const roomId = snapshot.selection.roomId!;
@@ -1230,7 +1304,7 @@ describe("workspace domain", () => {
       .filter((message) => message.author.kind === "system" && message.content === "岗位路由未执行：@>builder 对应岗位当前无人可接。").length;
 
     expect(noticeCountBeforeReply).toBe(1);
-    expect(noticeCountAfterReply).toBe(1);
+    expect(noticeCountAfterReply).toBe(2);
   });
 
   it("updates member config, supports entry-member reassignment, and respects direct-message opt-out", () => {

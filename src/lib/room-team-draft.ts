@@ -32,6 +32,7 @@ export interface RoomTeamMemberDraft {
   watchEnabled: boolean;
   watchPersistent: boolean;
   watchIntervalMinutes: string;
+  watchPrompt: string;
   allowedSkillIdsText: string;
 }
 
@@ -112,6 +113,7 @@ function createRoomTeamMemberDraft(snapshot: WorkspaceSnapshot, room: Room, memb
     watchEnabled: watcher?.enabled ?? false,
     watchPersistent: watcher?.persistent ?? false,
     watchIntervalMinutes: watcher ? String(watcher.intervalMinutes) : "15",
+    watchPrompt: watcher?.prompt ?? "",
     allowedSkillIdsText: allowedSkillIds.join("\n"),
   };
 }
@@ -170,6 +172,7 @@ export function addEmptyRoomTeamMemberDraft(
       watchEnabled: isRoleTemplate ? sourceMember.watchEnabled : false,
       watchPersistent: isRoleTemplate ? sourceMember.watchPersistent : false,
       watchIntervalMinutes: sourceMember.watchIntervalMinutes,
+      watchPrompt: isRoleTemplate ? sourceMember.watchPrompt : "",
       allowedSkillIdsText: isRoleTemplate ? sourceMember.allowedSkillIdsText : "",
     },
   ];
@@ -220,6 +223,7 @@ function buildRoomTeamMemberInput(draft: RoomTeamMemberDraft): RoomTeamMemberInp
           enabled: draft.watchEnabled,
           intervalMinutes: Math.round(intervalMinutes),
           persistent: draft.watchPersistent,
+          prompt: draft.watchPrompt.trim() || undefined,
         }
       : undefined,
   };

@@ -622,6 +622,16 @@ export function RoomTeamDialog(props: {
                               />
                             </label>
                           </div>
+                          <label className="flex flex-col gap-2">
+                            <span className="text-sm font-medium">Watcher prompt</span>
+                            <Textarea
+                              className="min-h-28"
+                              value={activeMember.watchPrompt}
+                              disabled={activeMember.isRole || !activeMember.watchConfigured}
+                              onChange={(event) => patchMemberDraft(activeMember.id, { watchPrompt: event.currentTarget.value })}
+                              placeholder="Optional extra instructions only for watcher-triggered turns."
+                            />
+                          </label>
                           <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
                             {activeMember.isRole
                               ? "Role owner 不允许配置 Watch。先关闭 Role owner，才能在当前 room 为这个成员保存 watcher。"

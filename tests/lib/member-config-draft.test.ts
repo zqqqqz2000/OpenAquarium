@@ -23,7 +23,7 @@ describe("member config draft helpers", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder")!;
-    const legacyBuilder = { ...builder, allowedSkillIds: undefined } as typeof builder;
+    const legacyBuilder = { ...builder, allowedSkillIds: undefined } as unknown as typeof builder;
 
     const draft = createMemberConfigDraft(legacyBuilder);
 
@@ -36,18 +36,21 @@ describe("member config draft helpers", () => {
         enabled: true,
         intervalMinutes: "12",
         persistent: true,
+        prompt: "Only summarize unseen blockers.",
       }),
     ).toEqual({
       memberId: "member_1",
       enabled: true,
       intervalMinutes: 12,
       persistent: true,
+      prompt: "Only summarize unseen blockers.",
     });
     expect(() =>
       buildWatcherConfigInput("member_1", {
         enabled: true,
         intervalMinutes: "0",
         persistent: false,
+        prompt: "",
       }),
     ).toThrow(/positive number/i);
   });

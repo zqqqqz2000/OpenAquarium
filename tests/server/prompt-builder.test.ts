@@ -148,7 +148,7 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("Recent Delta Transcript");
     expect(prompt).toContain("@handle: passive reference only.");
     expect(prompt).toContain("@>handle: active routing.");
-    expect(prompt).toContain("If `@>handle` appears inside inline code, backticks, or fenced code blocks, it is display text only");
+    expect(prompt).toContain("Active routing still works when `@>handle` appears inside backticks or fenced code blocks.");
     expect(prompt).toContain("It does not notify the member, does not route work");
     expect(prompt).toContain("render as Markdown");
     expect(prompt).toContain("Prefer $$...$$ for formulas");
@@ -236,6 +236,96 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("was not posted into the room for others");
     expect(prompt).toContain("这里有一条 watcher 还没见过的新消息。");
     expect(prompt).toContain("member history files:");
+  });
+
+  it("includes watcher-specific prompt only on watcher-triggered turns", () => {
+    const context = createRuntimeContext(710, "2026-03-10T12:46:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const scribe = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((candidate) => candidate.handle === "scribe");
+
+    if (!scribe) {
+      throw new Error("Expected the scribe member");
+    }
+
+    const watcherId = room.watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === scribe.id);
+    if (!watcherId) {
+      throw new Error("Expected a watcher for the scribe member");
+    }
+
+    snapshot = {
+      ...snapshot,
+      watchers: {
+        ...snapshot.watchers,
+        [watcherId]: {
+          ...snapshot.watchers[watcherId],
+          prompt: "Only summarize unseen messages and owner/status changes.",
+        },
+      },
+    };
+
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "watcher prompt should appear here",
+      },
+      context,
+    );
+    snapshot = runWatcher(snapshot, watcherId, context);
+
+    const nextScribe = snapshot.members[scribe.id];
+    const currentTask = nextScribe.activeTaskId ? snapshot.tasks[nextScribe.activeTaskId] : undefined;
+    if (!currentTask) {
+      throw new Error("Expected a watcher task for the scribe member");
+    }
+
+    const watcherPrompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room: snapshot.rooms[room.id],
+      member: nextScribe,
+      task: currentTask,
+      snapshot,
+    });
+
+    expect(watcherPrompt).toContain("[Watcher Prompt]");
+    expect(watcherPrompt).toContain("Only summarize unseen messages and owner/status changes.");
+
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "lead");
+    if (!lead) {
+      throw new Error("Expected the lead member");
+    }
+
+    const regularSnapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>lead regular task",
+        mentionedMemberIds: [lead.id],
+      },
+      createRuntimeContext(711, "2026-03-10T12:47:00.000Z"),
+    );
+    const regularLead = regularSnapshot.members[lead.id];
+    const regularTask = regularLead.activeTaskId ? regularSnapshot.tasks[regularLead.activeTaskId] : undefined;
+    if (!regularTask) {
+      throw new Error("Expected a regular lead task");
+    }
+
+    const regularPrompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room: regularSnapshot.rooms[room.id],
+      member: regularLead,
+      task: regularTask,
+      snapshot: regularSnapshot,
+    });
+
+    expect(regularPrompt).not.toContain("[Watcher Prompt]");
+    expect(regularPrompt).not.toContain("Only summarize unseen messages and owner/status changes.");
   });
 
   it("keeps room transcript visible for regular members", () => {

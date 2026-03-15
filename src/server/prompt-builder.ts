@@ -151,6 +151,23 @@ function buildWatcherContextSections(sourceMessage: ChatMessage, watcherMode?: "
   ];
 }
 
+function buildWatcherPromptSections(sourceMessage: ChatMessage, watcherPrompt?: string): string[] {
+  if (sourceMessage.transport !== "watch-digest") {
+    return [];
+  }
+
+  const normalizedWatcherPrompt = watcherPrompt?.trim();
+  if (!normalizedWatcherPrompt) {
+    return [];
+  }
+
+  return [
+    "",
+    "[Watcher Prompt]",
+    normalizedWatcherPrompt,
+  ];
+}
+
 function findEnabledPersistentWatcher(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember) {
   return Object.values(snapshot.watchers).find(
     (watcher) => watcher.roomId === room.id && watcher.memberId === member.id && watcher.enabled && watcher.persistent,
@@ -179,7 +196,7 @@ function buildMemberReferenceSyntaxSections(): string[] {
     "[Member Reference Syntax]",
     "@handle: passive reference only. Never use plain @handle to route work. Use it when explaining, citing, or comparing members for the user or team. It does not notify the member, does not route work, and does not start a task for them.",
     "@>handle: active routing. That member immediately receives the message as work and may be interrupted to act on it. Use @>handle only when you want that member to start working now.",
-    "Active routing only works in normal message text. If `@>handle` appears inside inline code, backticks, or fenced code blocks, it is display text only and does not route work.",
+    "Active routing still works when `@>handle` appears inside backticks or fenced code blocks. Use normal message text when possible so the assignment stays easy to read.",
   ];
 }
 
@@ -240,6 +257,12 @@ function buildSharedSections(args: {
   const roomStateScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-state"));
   const roomWatchScript = quoteShellToken(getOpenAquariumScriptPath(workspaceRoot, "oa-room-watch"));
   const sourceMessage = snapshot.messages[task.sourceMessageId];
+  const watcherPrompt =
+    sourceMessage.transport === "watch-digest"
+      ? Object.values(snapshot.watchers).find(
+        (watcher) => watcher.memberId === member.id && watcher.roomId === room.id,
+      )?.prompt
+      : undefined;
   const preferredTools = [
     "oa_send_group_message: preferred for visible room replies. Sent content is rendered to the user as Markdown with code fences, Mermaid, math, and CJK support.",
     "oa_send_direct_message: preferred for private teammate DMs and replies to @user. Sent content is rendered as Markdown with code fences, Mermaid, math, and CJK support.",
@@ -303,6 +326,7 @@ function buildSharedSections(args: {
         ? "persistent"
         : undefined,
     ),
+    ...buildWatcherPromptSections(sourceMessage, watcherPrompt),
     "",
     "[Preferred Tools]",
     preferredTools,
@@ -354,7 +378,7 @@ function buildFullPrompt(args: {
     "1. If you need to speak in the room or DM someone, prefer the dedicated ACP tools listed below instead of generic shell commands.",
     "2. `@handle` is only a passive reference for explanation. Never use plain `@handle` to assign work. It does not notify that teammate, does not route work, and does not start a task for them.",
     "3. `@>handle` is an active assignment. That teammate immediately gets the message as work and may be interrupted to act on it.",
-    "4. Active assignments only work in normal message text. If `@>handle` appears inside inline code, backticks, or fenced code blocks, it is display text only and will not route work.",
+    "4. `@>handle` remains an active assignment even inside backticks or fenced code blocks, but prefer normal message text so the routed instruction stays obvious.",
     "5. Do not assume hidden roles. Prompt and runtime rules define your baseline operating behavior, team boundaries, and collaboration rules; available skills are optional directory assets you may enter when useful.",
     "6. Keep room messages concise and actionable, but do not stay silent on long tasks.",
     "7. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
@@ -417,7 +441,7 @@ function buildDeltaPrompt(args: {
     "[Critical Rules]",
     "1. `@handle` is only a passive reference. Never use plain `@handle` to assign work. It does not notify the member, does not route work, and does not start a task.",
     "2. `@>handle` is active routing: that teammate immediately receives the message as work and may be interrupted to act on it.",
-    "3. Active routing only works in normal message text. If `@>handle` appears inside inline code, backticks, or fenced code blocks, it is display text only and will not route work.",
+    "3. `@>handle` remains active routing even inside backticks or fenced code blocks, but prefer normal message text so the routed instruction stays obvious.",
     "4. Send progress updates for work that lasts more than a short turn.",
     "5. Do not leak reasoning or tool narration into user-visible messages.",
     "6. Do not resend the same room or DM content unless room state confirms it is missing.",

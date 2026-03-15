@@ -82,6 +82,26 @@ describe("template config draft helpers", () => {
     });
   });
 
+  it("preserves watcher prompt in template watcher payloads", () => {
+    const snapshot = createSeedWorkspace();
+    const template = snapshot.templates[snapshot.templateOrder[0]];
+    const draft = createTemplateConfigDraft(template);
+    const watcherMember = draft.members.find((member) => member.watchEnabled);
+
+    if (!watcherMember) {
+      throw new Error("Expected a watcher-enabled member");
+    }
+
+    watcherMember.watchPrompt = "Only escalate when there is a new blocker or owner change.";
+
+    const payload = buildTemplateConfigInput(template, draft);
+    const payloadMember = payload.members.find((member) => member.id === watcherMember.id);
+
+    expect(payloadMember?.watch).toMatchObject({
+      prompt: "Only escalate when there is a new blocker or owner change.",
+    });
+  });
+
   it("tolerates legacy members without allowedSkillIds when creating drafts", () => {
     const snapshot = createSeedWorkspace();
     const template = snapshot.templates[snapshot.templateOrder[0]];
@@ -90,7 +110,7 @@ describe("template config draft helpers", () => {
       ...template,
       members: template.members.map((member, index) =>
         index === 0
-          ? ({ ...member, allowedSkillIds: undefined } as typeof member)
+          ? ({ ...member, allowedSkillIds: undefined } as unknown as typeof member)
           : member),
     };
 

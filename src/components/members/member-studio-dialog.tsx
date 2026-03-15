@@ -88,7 +88,7 @@ export function MemberStudioDialog(props: {
   onClose: () => void;
   onSaveConfig: (input: UpdateMemberConfigInput) => void | Promise<void>;
   onSetEntryMember: (memberId: string) => void | Promise<void>;
-  onSaveWatcher: (input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean }) => void | Promise<void>;
+  onSaveWatcher: (input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean; prompt?: string }) => void | Promise<void>;
   onRunWatcher: (watcherId: string) => void;
   onSendDirectMessage?: (content: string, directMemberId: string) => void | Promise<void>;
 }) {
@@ -435,6 +435,15 @@ export function MemberStudioDialog(props: {
                         inputMode="numeric"
                         value={watcherDraft.intervalMinutes}
                         onChange={(event) => patchWatcherDraft({ intervalMinutes: event.currentTarget.value })}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-2">
+                      <span className="text-sm font-medium">Watcher prompt</span>
+                      <Textarea
+                        className="min-h-28"
+                        value={watcherDraft.prompt}
+                        onChange={(event) => patchWatcherDraft({ prompt: event.currentTarget.value })}
+                        placeholder="Optional extra instructions only for watcher-triggered turns."
                       />
                     </label>
                     <div className="grid gap-3 md:grid-cols-2">
