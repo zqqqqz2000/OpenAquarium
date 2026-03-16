@@ -24,7 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
+import { getMemberRoleLabel } from "@/lib/member-display";
 import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
 import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
 import type { RoomTeamSummary } from "@/lib/room-team";
@@ -257,9 +257,10 @@ function SidebarMemberCardSurface(props: {
   latestPreview?: string;
   visible: boolean;
   onToggleVisible?: (memberId: string) => void;
+  titleSuffix?: ReactNode;
   className?: string;
 }) {
-  const { member, room, snapshot, selected = false, latestPreview, visible, onToggleVisible, className } = props;
+  const { member, room, snapshot, selected = false, latestPreview, visible, onToggleVisible, titleSuffix, className } = props;
   const summary = summarizePrompt((member.note?.trim() || member.summary || "").trim(), 140);
   const badges = buildMemberCardBadges(member, room, snapshot);
   const eyeLabel = visible ? `Hide @${member.handle} messages` : `Show @${member.handle} messages`;
@@ -279,7 +280,12 @@ function SidebarMemberCardSurface(props: {
         <MemberAvatar member={member} compact active={selected} showRunningDot />
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2">
-            <p className="m-0 min-w-0 flex-1 truncate text-base font-semibold tracking-tight">@{member.handle}</p>
+            <div className="min-w-0 flex-1">
+              <div className="inline-flex max-w-full items-center gap-2 align-top">
+                <p className="m-0 truncate text-base font-semibold tracking-tight">@{member.handle}</p>
+                {titleSuffix}
+              </div>
+            </div>
             {onToggleVisible ? (
               <button
                 type="button"
@@ -331,52 +337,38 @@ function RoleGroupHoverPreview(props: {
   onToggleVisible: (memberId: string) => void;
 }) {
   const { group, room, snapshot, selectedMemberId, visibleMemberIds, activeRouteSummaryByMemberId, onOpenMember, onToggleVisible } = props;
-  const previewMembers = group.members.slice(0, 3);
+  const previewMember = group.members[0];
   const groupHasSelectedMember = group.members.some((member) => member.id === selectedMemberId);
   const visibleMemberIdSet = new Set(visibleMemberIds);
+
+  if (!previewMember) {
+    return null;
+  }
+
+  const latestPreview = resolveMemberLatestPreview(previewMember, snapshot, activeRouteSummaryByMemberId);
 
   return (
     <HoverCard openDelay={120}>
       <HoverCardTrigger asChild>
         <div
           aria-label={`Role group ${group.roleName}`}
-          className="group relative h-[9.75rem] w-full"
+          className="w-full"
         >
-          {previewMembers.map((member, index) => {
-            const latestPreview = resolveMemberLatestPreview(member, snapshot, activeRouteSummaryByMemberId);
-            const isTopCard = index === 0;
-
-            return (
-              <div
-                key={member.id}
-                aria-hidden={!isTopCard}
-                data-role-group-preview-card={member.handle}
-                className={cn(
-                  "pointer-events-none absolute inset-x-0 top-0 transition-transform duration-150 ease-out group-hover:-translate-y-0.5",
-                )}
-                style={{
-                  left: `${index * 12}px`,
-                  right: `${index * -12}px`,
-                  top: `${index * 10}px`,
-                  zIndex: previewMembers.length - index,
-                }}
-              >
-                <SidebarMemberCardSurface
-                  member={member}
-                  room={room}
-                  snapshot={snapshot}
-                  selected={isTopCard ? groupHasSelectedMember : false}
-                  latestPreview={latestPreview}
-                  visible={visibleMemberIdSet.has(member.id)}
-                  onToggleVisible={isTopCard ? onToggleVisible : undefined}
-                  className={cn(
-                    "overflow-hidden bg-card",
-                    !isTopCard && "border-border/80 shadow-[0_14px_30px_-28px_rgba(15,23,42,0.55)]",
-                  )}
-                />
-              </div>
-            );
-          })}
+          <SidebarMemberCardSurface
+            member={previewMember}
+            room={room}
+            snapshot={snapshot}
+            selected={groupHasSelectedMember}
+            latestPreview={latestPreview}
+            visible={visibleMemberIdSet.has(previewMember.id)}
+            onToggleVisible={onToggleVisible}
+            titleSuffix={
+              <Badge variant="outline" className="shrink-0 px-1.5 text-[10px] font-medium text-muted-foreground">
+                x {group.members.length}
+              </Badge>
+            }
+            className="overflow-hidden bg-card transition-transform duration-150 ease-out hover:-translate-y-0.5"
+          />
         </div>
       </HoverCardTrigger>
       <HoverCardContent side="left" align="start" sideOffset={14} className="w-[min(88vw,320px)] p-2.5">
@@ -873,16 +865,13 @@ export function ChatPane(props: {
           <RoomTopBar
             leftSidebarCollapsed={leftSidebarCollapsed}
             rightSidebarCollapsed={rightSidebarCollapsed}
-            snapshot={snapshot}
             room={room}
             roomTeam={roomTeam}
             members={members}
-            visibleMemberIds={visibleMemberIds}
             runningMembers={runningMembers}
             activeStreamSummary={roomChat.activeStreamSummary}
             onOpenRoomTeam={onOpenRoomTeam}
             onOpenMember={(memberId) => onOpenMember(memberId)}
-            onUpdateRoomSettings={onUpdateRoomSettings}
             onToggleLeftSidebar={onToggleLeftSidebar}
             onToggleRightSidebar={onToggleRightSidebar}
           />
@@ -1049,32 +1038,26 @@ function ShellToolbar(props: {
 function RoomTopBar(props: {
   leftSidebarCollapsed: boolean;
   rightSidebarCollapsed: boolean;
-  snapshot: WorkspaceSnapshot;
   room: Room;
   roomTeam?: RoomTeamSummary;
   members: TeamMember[];
-  visibleMemberIds: string[];
   runningMembers: RunningRoomMemberPreview[];
   activeStreamSummary?: string;
   onOpenRoomTeam?: () => void;
   onOpenMember: (memberId: string) => void;
-  onUpdateRoomSettings?: (input: UpdateRoomSettingsInput) => void;
   onToggleLeftSidebar: () => void;
   onToggleRightSidebar: () => void;
 }) {
   const {
     leftSidebarCollapsed,
     rightSidebarCollapsed,
-    snapshot,
     room,
     roomTeam,
     members,
-    visibleMemberIds,
     runningMembers,
     activeStreamSummary,
     onOpenRoomTeam,
     onOpenMember,
-    onUpdateRoomSettings,
     onToggleLeftSidebar,
     onToggleRightSidebar,
   } =
