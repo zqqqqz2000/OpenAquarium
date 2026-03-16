@@ -22,6 +22,7 @@ export interface RoomDashboardTaskSpan {
   memberHandle: string;
   memberName: string;
   taskTitle: string;
+  focusMessageId?: string;
   status: MemberTask["status"];
   startedAt: string;
   updatedAt: string;
@@ -87,6 +88,15 @@ export function buildRoomDashboardMetrics(
   const roomMessages = (snapshot.messageOrderByRoom[room.id] ?? [])
     .map((messageId) => snapshot.messages[messageId])
     .filter((message) => Boolean(message));
+  const visibleRoomMessages = roomMessages.filter((message) => message.transport === "group" && message.visibility !== "internal");
+  const focusMessageIdByTaskId = visibleRoomMessages.reduce<Record<string, string>>((mapping, message) => {
+    if (!message.taskId || mapping[message.taskId]) {
+      return mapping;
+    }
+
+    mapping[message.taskId] = message.id;
+    return mapping;
+  }, {});
   const replyCountByMemberId = roomMessages.reduce<Record<string, number>>((counts, message) => {
     if (message.author.kind === "member" && room.memberIds.includes(message.author.id) && message.transport === "group") {
       counts[message.author.id] = (counts[message.author.id] ?? 0) + 1;
@@ -144,6 +154,7 @@ export function buildRoomDashboardMetrics(
       memberHandle: member?.handle ?? task.memberId,
       memberName: member?.name ?? task.memberId,
       taskTitle: task.title,
+      focusMessageId: focusMessageIdByTaskId[task.id] ?? task.sourceMessageId,
       status: task.status,
       startedAt: task.startedAt,
       updatedAt: task.updatedAt,

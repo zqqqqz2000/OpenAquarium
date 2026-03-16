@@ -33,8 +33,9 @@ export function RoomDashboard(props: {
   room: Room;
   members: TeamMember[];
   onOpenMember: (memberId: string) => void;
+  onFocusMessage?: (messageId: string) => void;
 }) {
-  const { snapshot, room, members, onOpenMember } = props;
+  const { snapshot, room, members, onOpenMember, onFocusMessage } = props;
   const metrics = buildRoomDashboardMetrics(snapshot, room, members);
   const maxCompletedTasks = Math.max(1, ...metrics.memberSummaries.map((member) => member.completedTaskCount));
 
@@ -88,7 +89,14 @@ export function RoomDashboard(props: {
                     key={span.taskId}
                     type="button"
                     className="w-full rounded-2xl border border-border/70 bg-background/70 px-3 py-3 text-left transition-colors hover:bg-muted/35"
-                    onClick={() => onOpenMember(span.memberId)}
+                    onClick={() => {
+                      if (span.focusMessageId) {
+                        onFocusMessage?.(span.focusMessageId);
+                        return;
+                      }
+
+                      onOpenMember(span.memberId);
+                    }}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
