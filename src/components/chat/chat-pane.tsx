@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
-import { ArrowDown, Bot, FolderKanban, GitBranch, Link2, TerminalSquare, Users } from "lucide-react";
+import { ArrowDown, BarChart3, Bot, FolderKanban, GitBranch, Link2, TerminalSquare, Users } from "lucide-react";
 
 import type {
   ChatMessage,
@@ -12,6 +12,7 @@ import type {
 } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { MessageBubble } from "@/components/chat/message-bubble";
+import { RoomDashboard } from "@/components/chat/room-dashboard";
 import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import { MemberAvatar } from "@/components/members/member-avatar";
 import { MemberHoverPreview } from "@/components/members/member-hover-preview";
@@ -22,6 +23,7 @@ import { getMemberActivitySummary } from "@/components/members/member-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getMemberRoleLabel, getMemberRoleMonogram, getMemberRolePalette } from "@/lib/member-display";
 import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
 import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
@@ -364,11 +366,14 @@ function RoleGroupHoverPreview(props: {
 }
 
 function MemberVisibilityFilter(props: {
+  room: Room;
+  snapshot: WorkspaceSnapshot;
   members: TeamMember[];
   visibleMemberIds: string[];
   onChange: (visibleMemberIds: string[]) => void;
+  onOpenMember: (memberId: string) => void;
 }) {
-  const { members, visibleMemberIds, onChange } = props;
+  const { room, snapshot, members, visibleMemberIds, onChange, onOpenMember } = props;
   const [draftVisibleMemberIds, setDraftVisibleMemberIds] = useState(visibleMemberIds);
 
   useEffect(() => {
@@ -392,30 +397,45 @@ function MemberVisibilityFilter(props: {
         const roleMonogram = getMemberRoleMonogram(member.handle);
 
         return (
-          <button
-            key={member.id}
-            type="button"
-            aria-pressed={checked}
-            aria-label={`Toggle @${member.handle} visibility`}
-            className={cn(
-              "group relative inline-flex h-8 max-w-full items-center gap-1.5 overflow-hidden rounded-full border px-2.5 text-xs font-medium transition-colors",
-              checked
-                ? "border-border/70 bg-background/90 text-foreground shadow-sm hover:border-border hover:bg-background"
-                : "border-border/55 bg-muted/40 text-muted-foreground grayscale hover:bg-muted/60",
-            )}
-            onClick={() => toggleMember(member.id)}
-          >
-            <Avatar size="sm" className="ring-0 after:hidden">
-              <AvatarFallback style={{ backgroundColor: rolePalette.background, color: rolePalette.foreground }}>{roleMonogram}</AvatarFallback>
-            </Avatar>
-            <span className="max-w-20 truncate">{member.handle}</span>
-            {!checked ? (
-              <>
-                <span aria-hidden className="absolute inset-0 bg-background/20" />
-                <span aria-hidden className="pointer-events-none absolute left-1.5 right-1.5 top-1/2 h-px -translate-y-1/2 -rotate-[24deg] bg-foreground/35" />
-              </>
-            ) : null}
-          </button>
+          <HoverCard key={member.id} openDelay={90}>
+            <HoverCardTrigger asChild>
+              <button
+                type="button"
+                aria-pressed={checked}
+                aria-label={`Toggle @${member.handle} visibility`}
+                className={cn(
+                  "group relative inline-flex h-8 max-w-full items-center gap-1.5 overflow-hidden rounded-full border px-2.5 text-xs font-medium transition-colors",
+                  checked
+                    ? "border-border/70 bg-background/90 text-foreground shadow-sm hover:border-border hover:bg-background"
+                    : "border-border/55 bg-muted/40 text-muted-foreground grayscale hover:bg-muted/60",
+                )}
+                onClick={() => toggleMember(member.id)}
+              >
+                <Avatar size="sm" className="ring-0 after:hidden">
+                  <AvatarFallback style={{ backgroundColor: rolePalette.background, color: rolePalette.foreground }}>{roleMonogram}</AvatarFallback>
+                </Avatar>
+                <span className="max-w-20 truncate">{member.handle}</span>
+                {!checked ? (
+                  <>
+                    <span aria-hidden className="absolute inset-0 bg-background/20" />
+                    <span aria-hidden className="pointer-events-none absolute left-1.5 right-1.5 top-1/2 h-px -translate-y-1/2 -rotate-[24deg] bg-foreground/35" />
+                  </>
+                ) : null}
+              </button>
+            </HoverCardTrigger>
+            <HoverCardContent side="bottom" align="start" sideOffset={10} className="w-[min(88vw,320px)] p-2.5">
+              <button type="button" className="w-full text-left" aria-label={`Open @${member.handle} session panel`} onClick={() => onOpenMember(member.id)}>
+                <SidebarMemberCardSurface
+                  member={member}
+                  room={room}
+                  snapshot={snapshot}
+                  selected={false}
+                  latestPreview={resolveMemberLatestPreview(member, snapshot, {})}
+                  className="hover:bg-muted/60"
+                />
+              </button>
+            </HoverCardContent>
+          </HoverCard>
         );
       })}
     </div>
@@ -425,6 +445,7 @@ function MemberVisibilityFilter(props: {
 export function ChatPane(props: {
   leftSidebarCollapsed: boolean;
   rightSidebarCollapsed: boolean;
+  rightSidebarWidth?: number;
   snapshot: WorkspaceSnapshot;
   room?: Room;
   roomTeam?: RoomTeamSummary;
@@ -437,10 +458,12 @@ export function ChatPane(props: {
   onUpdateRoomSettings?: (input: UpdateRoomSettingsInput) => void;
   onToggleLeftSidebar: () => void;
   onToggleRightSidebar: () => void;
+  onRightSidebarResizeStart?: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
   const {
     leftSidebarCollapsed,
     rightSidebarCollapsed,
+    rightSidebarWidth = 372,
     snapshot,
     room,
     roomTeam,
@@ -453,6 +476,7 @@ export function ChatPane(props: {
     onUpdateRoomSettings,
     onToggleLeftSidebar,
     onToggleRightSidebar,
+    onRightSidebarResizeStart = () => undefined,
   } = props;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const previousLayoutKeyRef = useRef<string | undefined>(undefined);
@@ -620,8 +644,9 @@ export function ChatPane(props: {
       <div
         className={cn(
           "relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden",
-          !rightSidebarCollapsed && "xl:grid-cols-[minmax(0,1fr)_minmax(21rem,25rem)] xl:gap-3",
+          !rightSidebarCollapsed && "xl:grid-cols-[minmax(0,1fr)_var(--oa-right-panel)] xl:gap-3",
         )}
+        style={!rightSidebarCollapsed ? ({ "--oa-right-panel": `${rightSidebarWidth}px` } as CSSProperties) : undefined}
       >
         {!rightSidebarCollapsed ? (
           <button
@@ -635,6 +660,7 @@ export function ChatPane(props: {
           <RoomTopBar
             leftSidebarCollapsed={leftSidebarCollapsed}
             rightSidebarCollapsed={rightSidebarCollapsed}
+            snapshot={snapshot}
             room={room}
             roomTeam={roomTeam}
             members={members}
@@ -648,7 +674,7 @@ export function ChatPane(props: {
             onToggleRightSidebar={onToggleRightSidebar}
           />
           <div className="relative min-h-0 flex-1">
-            <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-0.5 py-0.5 md:px-1" onScroll={updateScrollState}>
+            <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-2 overflow-y-auto" onScroll={updateScrollState}>
               {roomChat.messages.map((message) => {
                 const bubble = toBubbleModel(message, snapshot, room, snapshot.currentUserName);
                 const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
@@ -713,6 +739,7 @@ export function ChatPane(props: {
                 .map((route) => [route.memberId, summarizePrompt(route.summary?.trim() ?? "", 120)]),
             )}
             onOpenMember={onOpenMember}
+            onResizeStart={onRightSidebarResizeStart}
           />
         ) : null}
       </div>
@@ -741,6 +768,7 @@ function ShellToolbar(props: {
 function RoomTopBar(props: {
   leftSidebarCollapsed: boolean;
   rightSidebarCollapsed: boolean;
+  snapshot: WorkspaceSnapshot;
   room: Room;
   roomTeam?: RoomTeamSummary;
   members: TeamMember[];
@@ -756,6 +784,7 @@ function RoomTopBar(props: {
   const {
     leftSidebarCollapsed,
     rightSidebarCollapsed,
+    snapshot,
     room,
     roomTeam,
     members,
@@ -814,11 +843,13 @@ function RoomTopBar(props: {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Message filter</span>
             <MemberVisibilityFilter
+              room={room}
+              snapshot={snapshot}
               members={members}
               visibleMemberIds={visibleMemberIds}
               onChange={(nextVisibleMemberIds) => onUpdateRoomSettings?.({ roomId: room.id, visibleMemberIds: nextVisibleMemberIds })}
+              onOpenMember={onOpenMember}
             />
           </div>
           {activeStreamSummary ? <p className="m-0 text-sm text-muted-foreground">{activeStreamSummary}</p> : null}
@@ -836,62 +867,80 @@ function RoomMembersSidebar(props: {
   selectedMemberId?: string;
   activeRouteSummaryByMemberId: Record<string, string>;
   onOpenMember: (memberId: string) => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
-  const { room, snapshot, members, selectedMemberId, activeRouteSummaryByMemberId, onOpenMember } = props;
+  const { room, snapshot, members, selectedMemberId, activeRouteSummaryByMemberId, onOpenMember, onResizeStart } = props;
   const roleGroups = useMemo(() => groupMembersByRole(members), [members]);
+  const [activeTab, setActiveTab] = useState<"members" | "dashboard">("members");
 
   return (
     <aside className="absolute inset-y-0 right-0 z-20 w-[min(23rem,84vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
-      <Card className="flex h-full min-h-0 flex-col border border-border shadow-sm">
+      <Card className="relative flex h-full min-h-0 flex-col border border-border shadow-sm">
         <CardContent className="flex h-full min-h-0 flex-col gap-0 p-0">
-          <div className="shrink-0 border-b border-border px-5 py-3.5">
-            <div className="flex items-center justify-between gap-3">
-              <p className="m-0 flex items-center gap-2 text-lg font-semibold tracking-tight">
-                <Users size={18} />
-                Members
-              </p>
-              <Badge variant="outline">{members.length}</Badge>
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "members" | "dashboard")} className="h-full min-h-0 gap-0">
+            <div className="shrink-0 border-b border-border px-4 py-3">
+              <TabsList variant="line" className="h-auto w-full justify-start rounded-none bg-transparent p-0">
+                <TabsTrigger value="members" className="rounded-none px-2.5 py-2">
+                  <Users size={16} />
+                  Members
+                  <Badge variant="outline" className="ml-1">{members.length}</Badge>
+                </TabsTrigger>
+                <TabsTrigger value="dashboard" className="rounded-none px-2.5 py-2">
+                  <BarChart3 size={16} />
+                  Dashboard
+                </TabsTrigger>
+              </TabsList>
             </div>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-            <div className="flex flex-col gap-2.5">
-              {roleGroups.map((group: RoomRoleGroup) => {
-                if (group.members.length === 0) {
-                  return null;
-                }
+            <TabsContent value="members" className="m-0 min-h-0 overflow-hidden">
+              <div className="h-full min-h-0 overflow-y-auto px-3 py-3">
+                <div className="flex flex-col gap-2.5">
+                  {roleGroups.map((group: RoomRoleGroup) => {
+                    if (group.members.length === 0) {
+                      return null;
+                    }
 
-                if (group.members.length === 1) {
-                  const member = group.members[0];
-                  const latestPreview = resolveMemberLatestPreview(member, snapshot, activeRouteSummaryByMemberId);
+                    if (group.members.length === 1) {
+                      const member = group.members[0];
+                      const latestPreview = resolveMemberLatestPreview(member, snapshot, activeRouteSummaryByMemberId);
 
-                  return (
-                    <SidebarMemberCard
-                      key={group.roleId}
-                      member={member}
-                      room={room}
-                      snapshot={snapshot}
-                      selectedMemberId={selectedMemberId}
-                      latestPreview={latestPreview}
-                      onOpenMember={onOpenMember}
-                    />
-                  );
-                }
+                      return (
+                        <SidebarMemberCard
+                          key={group.roleId}
+                          member={member}
+                          room={room}
+                          snapshot={snapshot}
+                          selectedMemberId={selectedMemberId}
+                          latestPreview={latestPreview}
+                          onOpenMember={onOpenMember}
+                        />
+                      );
+                    }
 
-                return (
-                  <RoleGroupHoverPreview
-                    key={group.roleId}
-                    group={group}
-                    room={room}
-                    snapshot={snapshot}
-                    selectedMemberId={selectedMemberId}
-                    activeRouteSummaryByMemberId={activeRouteSummaryByMemberId}
-                    onOpenMember={onOpenMember}
-                  />
-                );
-              })}
-            </div>
-          </div>
+                    return (
+                      <RoleGroupHoverPreview
+                        key={group.roleId}
+                        group={group}
+                        room={room}
+                        snapshot={snapshot}
+                        selectedMemberId={selectedMemberId}
+                        activeRouteSummaryByMemberId={activeRouteSummaryByMemberId}
+                        onOpenMember={onOpenMember}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            </TabsContent>
+            <TabsContent value="dashboard" className="m-0 min-h-0 overflow-hidden">
+              <div className="h-full min-h-0 overflow-y-auto px-3 py-3">
+                <RoomDashboard snapshot={snapshot} room={room} members={members} onOpenMember={onOpenMember} />
+              </div>
+            </TabsContent>
+          </Tabs>
         </CardContent>
+        <div aria-hidden className="absolute inset-y-0 -left-2 hidden w-4 cursor-col-resize xl:block" onPointerDown={onResizeStart}>
+          <div className="absolute inset-y-4 left-1/2 w-px -translate-x-1/2 rounded-full bg-border/80" />
+        </div>
       </Card>
     </aside>
   );

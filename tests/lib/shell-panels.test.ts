@@ -19,6 +19,7 @@ describe("shell panels", () => {
       leftCollapsed: true,
       leftWidth: 320,
       rightCollapsed: true,
+      rightWidth: 408,
     };
 
     expect(parseShellPanelsState(serializeShellPanelsState(state))).toEqual(state);
@@ -30,6 +31,7 @@ describe("shell panels", () => {
         leftCollapsed: true,
         leftWidth: 304,
         rightCollapsed: false,
+        rightWidth: 372,
       }),
     ).toEqual({
       leftPanel: "0rem",

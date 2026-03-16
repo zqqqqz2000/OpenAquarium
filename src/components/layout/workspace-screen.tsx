@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 
 import type { Room, WorkspaceSnapshot } from "@/domain/model";
 import { ChatPane } from "@/components/chat/chat-pane";
-import { clampLeftPanelWidth, getRoomGridColumns } from "@/lib/shell-panels";
+import { clampLeftPanelWidth, clampRightPanelWidth, getRoomGridColumns } from "@/lib/shell-panels";
 import { buildProjectActivitySummaries } from "@/lib/workspace-activity";
 import { Sidebar } from "@/components/layout/sidebar";
 import { useShellPanels } from "@/components/layout/use-shell-panels";
@@ -128,9 +128,11 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     leftCollapsed,
     leftWidth,
     rightCollapsed,
+    rightWidth,
     toggleLeftCollapsed,
     toggleRightCollapsed,
     setLeftWidth,
+    setRightWidth,
   } = useShellPanels();
 
   useEffect(() => {
@@ -321,10 +323,29 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     window.addEventListener("pointerup", handlePointerUp);
   };
 
+  const startRightSidebarResize = (event: PointerEvent<HTMLDivElement>): void => {
+    const startX = event.clientX;
+    const startWidth = rightWidth;
+
+    const handlePointerMove = (moveEvent: globalThis.PointerEvent): void => {
+      const nextWidth = clampRightPanelWidth(startWidth - (moveEvent.clientX - startX));
+      setRightWidth(nextWidth);
+    };
+
+    const handlePointerUp = (): void => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
+
   const gridColumns = getRoomGridColumns({
     leftCollapsed,
     leftWidth,
     rightCollapsed,
+    rightWidth,
   });
   const gridStyle = {
     "--oa-left-panel": gridColumns.leftPanel,
@@ -375,6 +396,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
         <ChatPane
           leftSidebarCollapsed={leftCollapsed}
           rightSidebarCollapsed={rightCollapsed}
+          rightSidebarWidth={rightWidth}
           snapshot={snapshot}
           room={room}
           roomTeam={roomTeam}
@@ -387,6 +409,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           onUpdateRoomSettings={(input) => void updateRoomSettings(input)}
           onToggleLeftSidebar={toggleLeftCollapsed}
           onToggleRightSidebar={toggleRightCollapsed}
+          onRightSidebarResizeStart={startRightSidebarResize}
         />
       </div>
       <MemberStudioDialog

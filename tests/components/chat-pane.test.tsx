@@ -45,6 +45,7 @@ describe("ChatPane", () => {
     expect(screen.queryByText("Handled by")).not.toBeInTheDocument();
     expect(screen.queryByText("To")).not.toBeInTheDocument();
     expect(screen.queryByText("Room transcript")).not.toBeInTheDocument();
+    expect(screen.queryByText("Message filter")).not.toBeInTheDocument();
     expect(screen.queryByText("团队通常不大，右侧保留更多状态，便于快速切换到具体 member session。")).not.toBeInTheDocument();
     expect(screen.queryByText("成员内部推理只显示为处理状态；只有显式发送到 room 或 direct 的消息才会出现在消息流里。")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /Open @.* session panel/ }).length).toBeGreaterThan(0);
@@ -802,6 +803,39 @@ describe("ChatPane", () => {
 
     expect(builderChip).toHaveTextContent("builder");
     expect(builderChip.querySelector("[data-slot='avatar']")).toBeTruthy();
+  });
+
+  it("switches the right sidebar to dashboard metrics", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          onUpdateRoomSettings={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    await user.click(screen.getByRole("tab", { name: /dashboard/i }));
+
+    expect(screen.getByText("Execution Timeline")).toBeInTheDocument();
+    expect(screen.getByText("Member Load")).toBeInTheDocument();
   });
 
   it("shows a richer empty state before any room is selected", () => {

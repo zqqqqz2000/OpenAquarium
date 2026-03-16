@@ -11,7 +11,6 @@ import { MemberAvatar } from "@/components/members/member-avatar";
 import { MemberIdentityChip } from "@/components/members/member-identity-chip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
 import { badgeToneProps, messageStatusBadgeProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn, formatTime } from "@/lib/utils";
@@ -116,7 +115,7 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
     </>
   );
   const memberCompactMessageClassName = cn(
-    "flex max-w-[min(100%,56rem)] shrink-0 flex-col gap-2 rounded-[1.45rem] border border-[color:var(--tone-paper-border)] px-3.5 py-2.5 text-foreground shadow-none",
+    "flex max-w-[min(100%,56rem)] shrink-0 flex-col gap-2 px-3.5 py-2.5 text-foreground",
     surfaceToneClass("paper"),
   );
 
@@ -126,18 +125,20 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
         data-message-kind="user"
         data-message-surface="compact"
         className={cn(
-          "ml-auto flex max-w-[min(100%,54rem)] shrink-0 flex-col gap-2 rounded-[1.6rem] border border-border/45 bg-accent/22 px-3.5 py-2.5 text-foreground shadow-none",
+          "ml-auto flex max-w-[min(100%,54rem)] shrink-0 flex-col gap-2 px-3.5 py-2.5 text-foreground",
           surfaceToneClass("blueprint"),
         )}
       >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-[color:var(--tone-blueprint-foreground)]">
-              {authorRoleLabel}
-            </span>
-            {metadataBadges}
+        <div className="sticky -top-px z-10 -mx-3.5 bg-[color:var(--tone-blueprint-surface)] px-3.5 py-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-[color:var(--tone-blueprint-foreground)]">
+                {authorRoleLabel}
+              </span>
+              {metadataBadges}
+            </div>
+            <p className="m-0 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{formatTime(message.createdAt)}</p>
           </div>
-          <p className="m-0 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{formatTime(message.createdAt)}</p>
         </div>
         {messageContent}
       </div>
@@ -147,22 +148,24 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
   if (isCompactMember) {
     return (
       <div data-message-kind="member" data-message-surface="compact" className={memberCompactMessageClassName}>
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-            {authorMember ? (
-              <MemberIdentityChip member={authorMember} onClick={onAuthorClick} showRunningDot />
-            ) : (
-              <div className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/70 bg-background/70 px-1.5 py-1 text-left">
-                <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-border bg-card">
-                  <Cpu size={18} />
+        <div className="sticky -top-px z-10 -mx-3.5 bg-[color:var(--tone-paper-surface)] px-3.5 py-1">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              {authorMember ? (
+                <MemberIdentityChip member={authorMember} onClick={onAuthorClick} showRunningDot />
+              ) : (
+                <div className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/70 bg-background/70 px-1.5 py-1 text-left">
+                  <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-border bg-card">
+                    <Cpu size={18} />
+                  </div>
+                  <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em]">{authorRoleLabel}</span>
                 </div>
-                <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em]">{authorRoleLabel}</span>
-              </div>
-            )}
-            {authorName ? <span className="truncate text-xs text-muted-foreground">{authorName}</span> : null}
-            {metadataBadges}
+              )}
+              {authorName ? <span className="truncate text-xs text-muted-foreground">{authorName}</span> : null}
+              {metadataBadges}
+            </div>
+            <p className="m-0 pt-1 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{formatTime(message.createdAt)}</p>
           </div>
-          <p className="m-0 pt-1 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{formatTime(message.createdAt)}</p>
         </div>
         {messageContent}
       </div>
@@ -170,39 +173,41 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
   }
 
   return (
-    <Card
+    <div
       data-message-kind={isSystem ? "system" : "member"}
       data-message-surface="card"
       className={cn(
-        "relative shrink-0 max-w-[min(100%,58rem)] border border-border shadow-sm",
-        isSystem && cn(surfaceToneClass("paper"), "border-l-4 border-l-[color:var(--tone-blueprint-border)]"),
+        "relative shrink-0 max-w-[min(100%,58rem)] px-3.5 py-2.5",
+        isSystem ? surfaceToneClass("paper") : "bg-transparent",
       )}
     >
-      <CardContent className="flex flex-col gap-3 p-3.5">
-        <header className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            {authorMember ? (
-              <MemberAvatar member={authorMember} compact onClick={onAuthorClick} showRunningDot />
-            ) : (
-              <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-border bg-card">
-                <Cpu size={18} />
+      <div className="flex flex-col gap-3">
+        <header className="sticky -top-px z-10 -mx-3.5 bg-[color:var(--card)] px-3.5 py-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              {authorMember ? (
+                <MemberAvatar member={authorMember} compact onClick={onAuthorClick} showRunningDot />
+              ) : (
+                <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-border bg-card">
+                  <Cpu size={18} />
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                  <span className="truncate" style={authorRolePalette ? { color: authorRolePalette.background } : undefined}>
+                    {authorRoleLabel}
+                  </span>
+                  {authorName ? <span className="truncate text-xs text-muted-foreground">{authorName}</span> : null}
+                  {metadataBadges}
+                </div>
+                <p className="m-0 text-xs uppercase tracking-[0.18em] text-muted-foreground">{formatTime(message.createdAt)}</p>
               </div>
-            )}
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                <span className="truncate" style={authorRolePalette ? { color: authorRolePalette.background } : undefined}>
-                  {authorRoleLabel}
-                </span>
-                {authorName ? <span className="truncate text-xs text-muted-foreground">{authorName}</span> : null}
-                {metadataBadges}
-              </div>
-              <p className="m-0 text-xs uppercase tracking-[0.18em] text-muted-foreground">{formatTime(message.createdAt)}</p>
             </div>
           </div>
         </header>
         {messageContent}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
