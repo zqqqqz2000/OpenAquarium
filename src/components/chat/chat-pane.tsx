@@ -891,8 +891,8 @@ function RoomMembersSidebar(props: {
                 </TabsTrigger>
               </TabsList>
             </div>
-            <TabsContent value="members" className="m-0 min-h-0 overflow-hidden">
-              <div className="h-full min-h-0 overflow-y-auto px-3 py-3">
+            <TabsContent value="members" className="m-0 min-h-0 flex-1 overflow-y-auto px-3 py-3">
+              <div className="min-h-full">
                 <div className="flex flex-col gap-2.5">
                   {roleGroups.map((group: RoomRoleGroup) => {
                     if (group.members.length === 0) {
@@ -931,10 +931,8 @@ function RoomMembersSidebar(props: {
                 </div>
               </div>
             </TabsContent>
-            <TabsContent value="dashboard" className="m-0 min-h-0 overflow-hidden">
-              <div className="h-full min-h-0 overflow-y-auto px-3 py-3">
-                <RoomDashboard snapshot={snapshot} room={room} members={members} onOpenMember={onOpenMember} />
-              </div>
+            <TabsContent value="dashboard" className="m-0 min-h-0 flex-1 overflow-y-auto px-3 py-3">
+              <RoomDashboard snapshot={snapshot} room={room} members={members} onOpenMember={onOpenMember} />
             </TabsContent>
           </Tabs>
         </CardContent>

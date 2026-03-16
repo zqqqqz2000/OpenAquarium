@@ -39,7 +39,7 @@ export function RoomDashboard(props: {
   const maxCompletedTasks = Math.max(1, ...metrics.memberSummaries.map((member) => member.completedTaskCount));
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex min-h-full flex-col gap-3">
       <div className="grid gap-3 xl:grid-cols-2">
         <MetricCard
           label="Tasks"
