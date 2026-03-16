@@ -12,7 +12,8 @@ import { getMemberHistoryFilePath, getRoomContextDirectoryPath, getRoomTranscrip
 
 const FULL_PROMPT_TRANSCRIPT_LIMIT = 14;
 const DELTA_PROMPT_TRANSCRIPT_LIMIT = 6;
-export const MEMBER_FULL_PROMPT_REFRESH_INTERVAL = 4;
+const PROJECT_TOPIC_PREVIEW_LIMIT = 600;
+export const MEMBER_FULL_PROMPT_REFRESH_INTERVAL = 12;
 
 type PromptMode = "full" | "delta";
 
@@ -41,16 +42,20 @@ function summarizeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): st
   return `[${formatTime(message.createdAt)}] ${message.author.label} (${message.transport}/${message.status}): ${message.content}${summarizeHandles("assignments", message.mentionedMemberIds, snapshot, "@>")}${summarizeReferenceHandles(message, snapshot)}${recipientSuffix}`;
 }
 
-function describeMember(member: TeamMember): string {
-  const skillList = member.allowedSkillIds.join(", ");
+function summarizeProjectTopic(topic: string): string {
+  const normalized = topic.trim();
+  if (normalized.length <= PROJECT_TOPIC_PREVIEW_LIMIT) {
+    return normalized;
+  }
 
+  return `${normalized.slice(0, PROJECT_TOPIC_PREVIEW_LIMIT)}… (truncated; read room transcript/context files for the full topic if needed)`;
+}
+
+function describeMember(member: TeamMember): string {
   return [
-    `- ${member.name} (@${member.handle})`,
-    `  summary: ${member.summary}`,
-    `  acceptsDirectMessages: ${member.acceptsDirectMessages ? "true" : "false"}`,
-    `  codexThinkingDepth: ${member.codexThinkingDepth ?? "default"}`,
-    `  provider: ${member.provider.label} -> ${member.provider.command} ${member.provider.args.join(" ")}`.trim(),
-    `  allowedSkillIds: ${skillList || "(none)"}`,
+    `- @${member.handle}: ${member.summary}`,
+    `  name: ${member.name}`,
+    `  entry member: ${member.isEntryMember ? "true" : "false"}`,
   ].join("\n");
 }
 
@@ -79,8 +84,21 @@ function getVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room): ChatMe
 }
 
 function getPromptVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember): ChatMessage[] {
-  void member;
-  return getVisibleRoomMessages(snapshot, room);
+  return trimTrailingAuthoredMessages(getVisibleRoomMessages(snapshot, room), member.id);
+}
+
+function trimTrailingAuthoredMessages(messages: ChatMessage[], memberId: string): ChatMessage[] {
+  let endIndex = messages.length;
+
+  while (endIndex > 0) {
+    const candidate = messages[endIndex - 1];
+    if (candidate.author.kind !== "member" || candidate.author.id !== memberId) {
+      break;
+    }
+    endIndex -= 1;
+  }
+
+  return endIndex === messages.length ? messages : messages.slice(0, endIndex);
 }
 
 function sortMemberTasks(snapshot: WorkspaceSnapshot, memberId: string): MemberTask[] {
@@ -125,7 +143,7 @@ function collectDeltaMessages(snapshot: WorkspaceSnapshot, room: Room, member: T
     return deltaMessages.slice(-DELTA_PROMPT_TRANSCRIPT_LIMIT);
   }
 
-  return visibleMessages.slice(-DELTA_PROMPT_TRANSCRIPT_LIMIT);
+  return [];
 }
 
 function formatTaskSourceMessage(sourceMessage: ChatMessage): string {
@@ -177,17 +195,22 @@ function findEnabledPersistentWatcher(snapshot: WorkspaceSnapshot, room: Room, m
 function buildRoomContextFileSections(workspaceRoot: string, room: Room, snapshot: WorkspaceSnapshot, transcriptFilePath?: string): string[] {
   const roomContextDirectoryPath = getRoomContextDirectoryPath(workspaceRoot, room);
   const resolvedTranscriptFilePath = transcriptFilePath ?? getRoomTranscriptFilePath(workspaceRoot, room);
-  const memberHistoryFiles = room.memberIds
+  const memberHistoryCount = room.memberIds
     .map((memberId) => snapshot.members[memberId])
     .filter((member): member is TeamMember => member !== undefined)
-    .map((member) => `@${member.handle}: ${getMemberHistoryFilePath(workspaceRoot, room, member)}`);
+    .length;
+  const exampleMember = room.memberIds
+    .map((memberId) => snapshot.members[memberId])
+    .find((member): member is TeamMember => member !== undefined);
+  const exampleMemberHistoryPath = exampleMember ? getMemberHistoryFilePath(workspaceRoot, room, exampleMember) : undefined;
 
   return [
     "[Shared Room Context]",
     `room context directory: ${roomContextDirectoryPath}`,
     `room transcript file: ${resolvedTranscriptFilePath}`,
-    "member history files:",
-    ...(memberHistoryFiles.length > 0 ? memberHistoryFiles : ["(none)"]),
+    memberHistoryCount > 0
+      ? `member history files: ${memberHistoryCount} file(s) under the room context directory${exampleMemberHistoryPath ? `, e.g. ${exampleMemberHistoryPath}` : ""}`
+      : "member history files: (none)",
   ];
 }
 
@@ -264,18 +287,14 @@ function buildSharedSections(args: {
       )?.prompt
       : undefined;
   const preferredTools = [
-    "oa_send_group_message: preferred for visible room replies. Sent content is rendered to the user as Markdown with code fences, Mermaid, math, and CJK support.",
-    "oa_send_direct_message: preferred for private teammate DMs and replies to @user. Sent content is rendered as Markdown with code fences, Mermaid, math, and CJK support.",
-    "oa_role_add_employee: add a new employee under an existing role owner such as @builder or @checker. `role` must be a role owner, and `employeeHandle` must be a fresh handle without @. Check the returned `ok` field before claiming success.",
-    "oa_role_remove_employee: remove an existing employee from an existing role owner. Check the returned `ok` field before claiming success.",
-    "oa_role_rename_employee: rename an existing role employee. Check the returned `ok` field before claiming success.",
+    "oa_send_group_message: preferred for visible room replies.",
+    "oa_send_direct_message: preferred for private teammate DMs and replies to @user.",
+    "oa_role_add_employee / oa_role_remove_employee / oa_role_rename_employee: structured staffing tools; check the returned `ok` field before claiming success.",
     "oa_room_state: inspect transcript and member/task state before retrying a send.",
     "oa_read_file: read transcript files or source files when you need deeper context.",
     "oa_run_room_watcher: trigger a watcher immediately when needed.",
     `CLI pause fallback for persistent watch: ${roomWatchScript} --watcher <watcher-id> --pause-until-activity`,
-    `CLI group fallback only if the dedicated tools are unavailable: ${roomSendScript} --room ${room.id} --member ${member.id} --scope group --text "your message"`,
-    `CLI direct fallback only if needed: ${roomSendScript} --room ${room.id} --member ${member.id} --scope direct --target @user --text "private message"`,
-    `CLI state fallback: ${roomStateScript} --room ${room.id}`,
+    `CLI fallback examples if the dedicated tools are unavailable: ${roomSendScript} --room ${room.id} --member ${member.id} --scope group --text "your message" | ${roomSendScript} --room ${room.id} --member ${member.id} --scope direct --target @user --text "private message" | ${roomStateScript} --room ${room.id}`,
   ].join("\n");
 
   return [
@@ -302,7 +321,7 @@ function buildSharedSections(args: {
     `project working directory: ${projectWorkingDirectory}`,
     `OpenAquarium runtime root: ${workspaceRoot}`,
     `room: ${room.name}`,
-    `topic: ${room.topic}`,
+    `topic: ${summarizeProjectTopic(room.topic)}`,
     "",
     ...buildRoomContextFileSections(workspaceRoot, room, snapshot, transcriptFilePath),
     "",
@@ -375,23 +394,14 @@ function buildFullPrompt(args: {
     recentMessages || "(none)",
     "",
     "[Communication Rules]",
-    "1. If you need to speak in the room or DM someone, prefer the dedicated ACP tools listed below instead of generic shell commands.",
+    "1. Prefer the dedicated ACP tools for room replies, DMs, watcher actions, and room-state checks.",
     "2. `@handle` is only a passive reference for explanation. Never use plain `@handle` to assign work. It does not notify that teammate, does not route work, and does not start a task for them.",
-    "3. `@>handle` is an active assignment. That teammate immediately gets the message as work and may be interrupted to act on it.",
-    "4. `@>handle` remains an active assignment even inside backticks or fenced code blocks, but prefer normal message text so the routed instruction stays obvious.",
-    "5. Do not assume hidden roles. Prompt and runtime rules define your baseline operating behavior, team boundaries, and collaboration rules; available skills are optional directory assets you may enter when useful.",
-    "6. Keep room messages concise and actionable, but do not stay silent on long tasks.",
-    "7. If work will take more than a short turn, send an early visible progress update, then send another update at meaningful milestones, blockers, or plan changes.",
-    "8. Prefer group messages for user-facing progress updates; use direct messages for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
-    "9. If work is sequential, only use `@>handle` for the member(s) who should act now. Do not route downstream members early just because they will be needed later.",
-    "10. Do not DM teammates just to repeat the same public instruction that is already clear in the room. Use DM only for private coordination, blockers, or a single targeted nudge after checking room state.",
-    "11. If you are a watcher or scribe waiting on upstream replies, stay quiet until the required room messages actually exist; do not proactively chase teammates unless the current task explicitly asks you to.",
-    "12. Once you have completed your scoped visible reply, stop. Do not keep generating follow-up chatter unless a new routed message or blocker requires it.",
-    "13. Do not paste your reasoning, tool narration, or step-by-step plan into room or DM messages.",
-    "14. Do not send the same room or DM content twice. If a send result is unclear, inspect room state first and only retry if the message is actually missing.",
-    "15. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
-    "16. Treat the shared room context directory as the durable source for room transcript and per-member histories. Read the relevant files when watcher context reports unseen messages or member state changes.",
-    "17. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Send plain text when simple is enough, but use valid Markdown when structure, code, links, lists, diagrams, or formulas help. Prefer $$...$$ for formulas.",
+    "3. `@>handle` is an active assignment. That teammate immediately gets the message as work and may be interrupted to act on it, including inside backticks or fenced code blocks.",
+    "4. Keep room messages concise and actionable, but do not stay silent on long tasks. Send an early visible progress update, then continue at meaningful milestones, blockers, or plan changes.",
+    "5. Prefer group messages for user-facing progress updates; use direct messages only for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
+    "6. Do not paste reasoning, tool narration, or step-by-step plans into room or DM messages, and do not resend the same room or DM content unless room state confirms it is missing.",
+    "7. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
+    "8. Treat the shared room context directory as the durable source for older room transcript and member history. Read the files when watcher context or the current transcript is insufficient. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas.",
     ...persistentWatchRules,
     "",
     ...buildAvailableSkillsSection(member, args.workspaceRoot),

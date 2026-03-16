@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { createRuntimeContext } from "@/domain/identity";
-import { postUserMessage, runWatcher } from "@/domain/workspace";
+import { completeMemberTask, postUserMessage, runWatcher } from "@/domain/workspace";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
-import { buildTaskPrompt } from "@/server/prompt-builder";
+import { buildTaskPrompt, MEMBER_FULL_PROMPT_REFRESH_INTERVAL } from "@/server/prompt-builder";
+import type { MemberTask, WorkspaceSnapshot } from "@/domain/model";
 import { getRoomContextDirectoryPath } from "@/server/room-transcript-files";
 
 describe("buildTaskPrompt", () => {
@@ -32,9 +33,9 @@ describe("buildTaskPrompt", () => {
     });
 
     expect(prompt).toContain("do not stay silent on long tasks");
-    expect(prompt).toContain("send an early visible progress update");
+    expect(prompt).toContain("Send an early visible progress update");
     expect(prompt).toContain("Keep the user and team updated with short progress messages");
-    expect(prompt).toContain("rendered to the user as Markdown");
+    expect(prompt).toContain("User-visible room and direct messages render as Markdown");
     expect(prompt).toContain("Mermaid");
     expect(prompt).toContain("Prefer $$...$$ for formulas");
     expect(prompt).toContain("oa_role_add_employee");
@@ -95,6 +96,10 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain(`oa-room-watch --watcher ${watcherId} --pause-until-activity`);
   });
 
+  it("refreshes full prompts every 12 turns", () => {
+    expect(MEMBER_FULL_PROMPT_REFRESH_INTERVAL).toBe(12);
+  });
+
   it("switches to a delta prompt after the first persisted member turn", () => {
     const context = createRuntimeContext(500, "2026-03-10T12:00:00.000Z");
     let snapshot = createSeedWorkspace();
@@ -117,6 +122,21 @@ describe("buildTaskPrompt", () => {
       },
     };
 
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>lead 先做第一轮收口",
+      },
+      context,
+    );
+
+    const firstLeadTaskId = snapshot.members[lead.id].activeTaskId;
+    if (!firstLeadTaskId) {
+      throw new Error("Expected a first lead task");
+    }
+
+    snapshot = completeMemberTask(snapshot, { taskId: firstLeadTaskId }, context);
     snapshot = postUserMessage(
       snapshot,
       {
@@ -159,6 +179,207 @@ describe("buildTaskPrompt", () => {
     expect(prompt).not.toContain(`prompt: ${lead.prompt}`);
   });
 
+  it("does not fall back to older room transcript when a watcher heartbeat has no new visible messages", () => {
+    const context = createRuntimeContext(600, "2026-03-10T12:10:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const scribe = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "scribe");
+
+    if (!scribe) {
+      throw new Error("Expected the scribe member");
+    }
+
+    const watcherId = room.watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === scribe.id);
+    if (!watcherId) {
+      throw new Error("Expected watcher id");
+    }
+
+    snapshot = {
+      ...snapshot,
+      members: {
+        ...snapshot.members,
+        [scribe.id]: {
+          ...snapshot.members[scribe.id],
+          providerSessionId: "session_scribe_1",
+        },
+      },
+      watchers: {
+        ...snapshot.watchers,
+        [watcherId]: {
+          ...snapshot.watchers[watcherId],
+          enabled: true,
+          persistent: true,
+          lastConsumedMessageId: snapshot.messageOrderByRoom[room.id]?.at(-1),
+        },
+      },
+    };
+
+    const digestSnapshot: WorkspaceSnapshot = {
+      ...snapshot,
+      members: {
+        ...snapshot.members,
+        [scribe.id]: {
+          ...snapshot.members[scribe.id],
+          providerSessionId: "session_scribe_1",
+        },
+      },
+      messages: {
+        ...snapshot.messages,
+        heartbeat_digest: {
+          id: "heartbeat_digest",
+          roomId: room.id,
+          author: { kind: "system", id: "system", label: "Watcher" },
+          content: "Watcher activity since last watch:\n\n[Persistent watch]\n- No new room messages or member state changes since the last interval.",
+          createdAt: "2026-03-10T12:11:00.000Z",
+          transport: "watch-digest",
+          status: "sent",
+          visibility: "internal",
+          mentionedMemberIds: [],
+          quotedMemberIds: [],
+          recipientMemberIds: [scribe.id],
+        },
+      },
+      tasks: {
+        ...snapshot.tasks,
+        task_previous_digest: {
+          id: "task_previous_digest",
+          roomId: room.id,
+          memberId: scribe.id,
+          sourceMessageId: "message_0600",
+          title: "Review watcher digest",
+          status: "completed",
+          startedAt: "2026-03-10T12:09:00.000Z",
+          updatedAt: "2026-03-10T12:10:00.000Z",
+        },
+        task_heartbeat: {
+          id: "task_heartbeat",
+          roomId: room.id,
+          memberId: scribe.id,
+          sourceMessageId: "heartbeat_digest",
+          title: "Review watcher digest",
+          status: "running",
+          startedAt: "2026-03-10T12:11:00.000Z",
+          updatedAt: "2026-03-10T12:11:00.000Z",
+        },
+      },
+    };
+    const digestTask = digestSnapshot.tasks.task_heartbeat as MemberTask;
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room,
+      member: digestSnapshot.members[scribe.id],
+      task: digestTask,
+      snapshot: digestSnapshot,
+    });
+
+    const deltaSection = prompt.slice(
+      prompt.indexOf("[Recent Delta Transcript]\n") + "[Recent Delta Transcript]\n".length,
+      prompt.indexOf("\n\n[Critical Rules]"),
+    );
+
+    expect(prompt).toContain("prompt mode: delta");
+    expect(deltaSection.trim()).toBe("(none)");
+  });
+
+  it("filters a trailing self-authored room message out of the prompt transcript", () => {
+    const context = createRuntimeContext(610, "2026-03-10T12:20:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "builder");
+
+    if (!builder) {
+      throw new Error("Expected the builder member");
+    }
+
+    snapshot = {
+      ...snapshot,
+      members: {
+        ...snapshot.members,
+        [builder.id]: {
+          ...snapshot.members[builder.id],
+          providerSessionId: "session_builder_1",
+        },
+      },
+    };
+
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>builder 先补第一版实现说明",
+      },
+      context,
+    );
+
+    const previousBuilderTaskId = snapshot.members[builder.id].activeTaskId;
+    if (!previousBuilderTaskId) {
+      throw new Error("Expected an initial builder task");
+    }
+
+    snapshot = completeMemberTask(snapshot, { taskId: previousBuilderTaskId }, context);
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>builder 补一个实现说明",
+      },
+      context,
+    );
+
+    const activeTaskId = snapshot.members[builder.id].activeTaskId;
+    if (!activeTaskId) {
+      throw new Error("Expected a builder task");
+    }
+
+    const selfMessage = "这是 builder 刚刚自己发出的最后一条消息";
+    snapshot = {
+      ...snapshot,
+      messages: {
+        ...snapshot.messages,
+        message_builder_tail: {
+          id: "message_builder_tail",
+          roomId: room.id,
+          author: { kind: "member", id: builder.id, label: builder.name },
+          content: selfMessage,
+          createdAt: "2026-03-10T12:21:00.000Z",
+          transport: "group",
+          status: "completed",
+          mentionedMemberIds: [],
+          quotedMemberIds: [],
+          recipientMemberIds: [],
+          taskId: activeTaskId,
+        },
+      },
+      messageOrderByRoom: {
+        ...snapshot.messageOrderByRoom,
+        [room.id]: [...(snapshot.messageOrderByRoom[room.id] ?? []), "message_builder_tail"],
+      },
+      tasks: {
+        ...snapshot.tasks,
+        [activeTaskId]: {
+          ...snapshot.tasks[activeTaskId],
+          updatedAt: "2026-03-10T12:20:30.000Z",
+        },
+      },
+    };
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room,
+      member: snapshot.members[builder.id],
+      task: snapshot.tasks[activeTaskId],
+      snapshot,
+    });
+
+    expect(prompt).toContain("prompt mode: delta");
+    expect(prompt).not.toContain(selfMessage);
+  });
+
   it("rewrites OpenAquarium notification commands to absolute paths when a project path is set", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
@@ -187,6 +408,34 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain(`${process.cwd()}/bin/oa-room-send --room ${room.id} --member ${member.id} --scope group`);
     expect(prompt).toContain("[Available Skills]");
     expect(prompt).toContain(`${process.cwd()}/skills/room-send-group/SKILL.md`);
+  });
+
+  it("truncates long room topics in the shared project section", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const member = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "lead");
+    const task = Object.values(snapshot.tasks).find((candidate) => candidate.memberId === member?.id);
+
+    if (!member || !task) {
+      throw new Error("Expected the lead member and its task");
+    }
+
+    const longTopic = `${"超长 topic ".repeat(120)}尾巴`;
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project: snapshot.projects[room.projectId],
+      room: {
+        ...room,
+        topic: longTopic,
+      },
+      member,
+      task,
+      snapshot,
+    });
+
+    expect(prompt).toContain("topic: ");
+    expect(prompt).toContain("truncated; read room transcript/context files for the full topic if needed");
+    expect(prompt).not.toContain(longTopic);
   });
 
   it("includes private unseen watcher context without treating it as a room message", () => {
