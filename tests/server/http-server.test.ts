@@ -462,7 +462,7 @@ describe("workspace http api routing", () => {
   });
 
   it("streams template studio chat chunks and emits a sync payload", async () => {
-    if (typeof Bun !== "undefined") {
+    if ("Bun" in globalThis) {
       return;
     }
 

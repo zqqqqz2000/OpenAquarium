@@ -821,6 +821,81 @@ describe("WorkspaceRuntime", () => {
     ).toBe(true);
   });
 
+  it("reaps a zombie running task when its last progress is older than the inactivity timeout", async () => {
+    const workspaceRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-runtime-zombie-reaper-"),
+    );
+    const staleContext = createRuntimeContext(0, "2026-03-16T10:00:00.000Z");
+    let snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "Zombie Reaper",
+        templateId: "template-product-pod",
+      },
+      staleContext,
+    );
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: snapshot.selection.roomId!,
+        content: "@lead 继续处理",
+      },
+      staleContext,
+    );
+
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: snapshot,
+      persistence: new WorkspacePersistence(
+        path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      workspaceRoot,
+      taskExecutionInactivityTimeoutMs: 40,
+      taskExecutionMaxRetries: 0,
+      executorFactory: () =>
+        new FakeExecutor(async () => {
+          await new Promise<void>(() => undefined);
+        }),
+    });
+    runtimes.push(runtime);
+
+    await waitFor(() => {
+      const current = runtime.getSnapshot();
+      const lead = current.rooms[snapshot.selection.roomId!].memberIds
+        .map((memberId) => current.members[memberId])
+        .find((member) => member.handle === "lead")!;
+      const leadTask = Object.values(current.tasks).find(
+        (task) =>
+          task.roomId === snapshot.selection.roomId! &&
+          task.memberId === lead.id,
+      )!;
+
+      expect(leadTask.status).toBe("completed");
+    }, 300);
+
+    const current = runtime.getSnapshot();
+    const lead = current.rooms[snapshot.selection.roomId!].memberIds
+      .map((memberId) => current.members[memberId])
+      .find((member) => member.handle === "lead")!;
+    const leadTask = Object.values(current.tasks).find(
+      (task) =>
+        task.roomId === snapshot.selection.roomId! &&
+        task.memberId === lead.id,
+    )!;
+    const leadTraceEntries = (
+      current.taskTraceOrderByTask[leadTask.id] ?? []
+    ).map((traceId) => current.taskTraces[traceId]);
+
+    expect(leadTask.status).toBe("completed");
+    expect(
+      leadTraceEntries.some(
+        (entry) =>
+          entry?.kind === "error" &&
+          entry.title === "Task timed out waiting for executor progress" &&
+          entry.content.includes("没有新的进度或完成信号"),
+      ),
+    ).toBe(true);
+  });
+
   it("retries a timed out task and succeeds on a later attempt", async () => {
     vi.useRealTimers();
     const workspaceRoot = await mkdtemp(

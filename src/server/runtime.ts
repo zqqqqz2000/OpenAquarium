@@ -79,6 +79,7 @@ type TemplateGenerator = (brief: string, args: { workspaceRoot: string; referenc
 const STALE_RUNNING_TASK_MAX_AGE_MS = 5 * 60 * 1000;
 const DEFAULT_TASK_EXECUTION_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TASK_EXECUTION_MAX_RETRIES = 5;
+const RUNNING_TASK_REAPER_MAX_INTERVAL_MS = 60 * 1000;
 
 export interface TaskStreamRoute {
   taskId: string;
@@ -414,13 +415,17 @@ export class WorkspaceRuntime {
   private readonly logger?: DiagnosticsLogger;
   private globalConfig: GlobalWorkspaceConfig;
   private readonly executorKeys = new Map<MemberId, string>();
+  private taskReaperClockBaseMs: number;
+  private taskReaperStartedAtMs: number;
   private templateConfigWatcher?: FSWatcher;
+  private runningTaskReaperTimer?: ReturnType<typeof setInterval>;
   private templateConfigReloadTimer: ReturnType<typeof setTimeout> | undefined;
   private templateConfigReloadChain: Promise<void> = Promise.resolve();
   private pendingProgressPersist = false;
   private pendingProgressPersistTimer: ReturnType<typeof setTimeout> | undefined;
   private persistenceChain: Promise<void> = Promise.resolve();
   private flushingPendingWatchers = false;
+  private reconcilingTimedOutTasks = false;
   private activeRoomId?: string;
 
   constructor(args: {
@@ -458,6 +463,9 @@ export class WorkspaceRuntime {
         ? Math.max(0, Math.floor(args.taskExecutionMaxRetries))
         : DEFAULT_TASK_EXECUTION_MAX_RETRIES;
     this.logger = args.logger;
+    this.taskReaperClockBaseMs = Date.parse(getSnapshotTimeStart(this.snapshot) ?? "") || Date.now();
+    this.taskReaperStartedAtMs = Date.now();
+    this.startRunningTaskReaper();
     this.startTemplateConfigWatcher();
     this.executorFactory =
       args.executorFactory ??
@@ -1108,6 +1116,10 @@ export class WorkspaceRuntime {
   }
 
   async dispose(): Promise<void> {
+    if (this.runningTaskReaperTimer) {
+      clearInterval(this.runningTaskReaperTimer);
+      this.runningTaskReaperTimer = undefined;
+    }
     if (this.templateConfigReloadTimer) {
       clearTimeout(this.templateConfigReloadTimer);
       this.templateConfigReloadTimer = undefined;
@@ -1899,6 +1911,113 @@ export class WorkspaceRuntime {
       this.context,
     );
     await this.applySnapshot(previous, next);
+  }
+
+  private async notifyTaskObserverOfError(taskId: string, message: string): Promise<void> {
+    const observer = this.taskObservers.get(taskId);
+    if (!observer) {
+      return;
+    }
+
+    await observer.callbacks.onError?.({
+      ...observer.route,
+      message,
+      messageId: this.snapshot.tasks[taskId]?.draftMessageId,
+    });
+    observer.resolve();
+  }
+
+  private startRunningTaskReaper(): void {
+    if (!this.taskExecutionInactivityTimeoutMs) {
+      return;
+    }
+
+    const intervalMs = Math.min(this.taskExecutionInactivityTimeoutMs, RUNNING_TASK_REAPER_MAX_INTERVAL_MS);
+    this.runningTaskReaperTimer = setInterval(() => {
+      void this.reconcileTimedOutRunningTasks(this.getTaskReaperReferenceTimeMs());
+    }, intervalMs);
+  }
+
+  private getTaskReaperReferenceTimeMs(): number {
+    const latestSnapshotMs = Date.parse(getSnapshotTimeStart(this.snapshot) ?? "");
+
+    if (Number.isFinite(latestSnapshotMs) && latestSnapshotMs !== this.taskReaperClockBaseMs) {
+      this.taskReaperClockBaseMs = latestSnapshotMs;
+      this.taskReaperStartedAtMs = Date.now();
+    }
+
+    const elapsedMs = Date.now() - this.taskReaperStartedAtMs;
+    return this.taskReaperClockBaseMs + Math.max(0, elapsedMs);
+  }
+
+  private async reconcileTimedOutRunningTasks(referenceTimeMs = Date.now()): Promise<void> {
+    if (this.reconcilingTimedOutTasks || !this.taskExecutionInactivityTimeoutMs) {
+      return;
+    }
+
+    const timeoutMs = this.taskExecutionInactivityTimeoutMs;
+    this.reconcilingTimedOutTasks = true;
+    try {
+      const timedOutTasks = Object.values(this.snapshot.tasks).filter((task) => {
+        if (task.status !== "running") {
+          return false;
+        }
+
+        const updatedAtMs = Date.parse(task.updatedAt);
+        if (!Number.isFinite(updatedAtMs)) {
+          return false;
+        }
+
+        const ageMs = referenceTimeMs - updatedAtMs;
+        return ageMs > timeoutMs
+          && (!this.runningTaskIds.has(task.id) || ageMs > STALE_RUNNING_TASK_MAX_AGE_MS);
+      });
+
+      for (const task of timedOutTasks) {
+        const currentTask = this.snapshot.tasks[task.id];
+        if (!currentTask || currentTask.status !== "running") {
+          continue;
+        }
+
+        const member = this.snapshot.members[currentTask.memberId];
+        const timeoutMessage = buildTaskExecutionTimeoutMessage(timeoutMs);
+
+        try {
+          await this.executors.get(currentTask.memberId)?.cancel();
+        } catch (error) {
+          this.logger?.warn("task-reaper-cancel-failed", {
+            taskId: currentTask.id,
+            roomId: currentTask.roomId,
+            memberId: currentTask.memberId,
+            message: getErrorMessage(error as RuntimeError),
+          });
+        }
+
+        await this.completeFailedTask({
+          task: currentTask,
+          member,
+          traceTitle: "Task timed out waiting for executor progress",
+          errorMessage: timeoutMessage,
+        });
+        this.logger?.error("task-reaper-timeout", {
+          taskId: currentTask.id,
+          roomId: currentTask.roomId,
+          memberId: currentTask.memberId,
+          message: timeoutMessage,
+        });
+        this.logger?.info("task-state-change", {
+          taskId: currentTask.id,
+          roomId: currentTask.roomId,
+          memberId: currentTask.memberId,
+          from: "running",
+          to: "completed",
+          reason: "reaper-timeout",
+        });
+        await this.notifyTaskObserverOfError(currentTask.id, timeoutMessage);
+      }
+    } finally {
+      this.reconcilingTimedOutTasks = false;
+    }
   }
 
   private syncWatchers(): void {

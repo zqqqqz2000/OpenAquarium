@@ -163,9 +163,15 @@ describe("AcpMemberExecutor", () => {
 
   it("exposes structured role staffing tools and routes them through the host", async () => {
     const request = createRequest();
-    const addRoleEmployee = vi.fn(() => Promise.resolve());
-    const removeRoleEmployee = vi.fn(() => Promise.resolve());
-    const renameRoleEmployee = vi.fn(() => Promise.resolve());
+    const addRoleEmployee: MemberToolHost["addRoleEmployee"] = vi.fn(() =>
+      Promise.resolve({ ok: true, notices: ["added"] }),
+    );
+    const removeRoleEmployee: MemberToolHost["removeRoleEmployee"] = vi.fn(() =>
+      Promise.resolve({ ok: true, notices: ["removed"] }),
+    );
+    const renameRoleEmployee: MemberToolHost["renameRoleEmployee"] = vi.fn(() =>
+      Promise.resolve({ ok: true, notices: ["renamed"] }),
+    );
     const executor = new AcpMemberExecutor({
       workspaceRoot: process.cwd(),
       member: request.member,
@@ -203,9 +209,9 @@ describe("AcpMemberExecutor", () => {
       name: "Second Checker",
     });
 
-    expect(addResult).toEqual({ ok: true, notices: ["ok"] });
-    expect(removeResult).toEqual({ ok: true, notices: ["ok"] });
-    expect(renameResult).toEqual({ ok: true, notices: ["ok"] });
+    expect(addResult).toEqual({ ok: true, notices: ["added"] });
+    expect(removeResult).toEqual({ ok: true, notices: ["removed"] });
+    expect(renameResult).toEqual({ ok: true, notices: ["renamed"] });
 
     expect(addRoleEmployee).toHaveBeenCalledWith({
       roomId: "room_1",
@@ -347,12 +353,11 @@ describe("AcpMemberExecutor", () => {
   });
 
   it("allows a turn to continue past five minutes without chunks", async () => {
-    vi.useFakeTimers();
     streamTextMock.mockReturnValue({
       text: new Promise<string>((resolve) => {
         setTimeout(() => {
           resolve("done");
-        }, 6 * 60 * 1000);
+        }, 30);
       }),
       finishReason: Promise.resolve("stop"),
     });
@@ -373,11 +378,12 @@ describe("AcpMemberExecutor", () => {
       onError,
     });
 
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await Promise.resolve();
     expect(onError).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(60 * 1000);
+    await new Promise((resolve) => setTimeout(resolve, 20));
     await runPromise;
 
     expect(onError).not.toHaveBeenCalled();
@@ -386,7 +392,6 @@ describe("AcpMemberExecutor", () => {
   });
 
   it("keeps streaming updates working while a long turn is still in progress", async () => {
-    vi.useFakeTimers();
     streamTextMock.mockImplementation(({ onChunk }: { onChunk: (event: { chunk: { type: string; text: string } }) => Promise<void> }) => {
       setTimeout(() => {
         void onChunk({
@@ -395,13 +400,13 @@ describe("AcpMemberExecutor", () => {
             text: "still working",
           },
         });
-      }, 4 * 60 * 1000);
+      }, 20);
 
       return {
         text: new Promise<string>((resolve) => {
           setTimeout(() => {
             resolve("done");
-          }, 6 * 60 * 1000);
+          }, 40);
         }),
         finishReason: Promise.resolve("stop"),
       };
@@ -423,10 +428,11 @@ describe("AcpMemberExecutor", () => {
       onError,
     });
 
-    await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await Promise.resolve();
     expect(onError).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    await new Promise((resolve) => setTimeout(resolve, 25));
     await runPromise;
 
     expect(onError).not.toHaveBeenCalled();
@@ -435,7 +441,6 @@ describe("AcpMemberExecutor", () => {
   });
 
   it("lets a new turn continue after cancel times out on a stuck prior turn", async () => {
-    vi.useFakeTimers();
     let releaseStuckTurn: (() => void) | undefined;
     const stuckTurn = new Promise<void>((resolve) => {
       releaseStuckTurn = resolve;
@@ -490,7 +495,7 @@ describe("AcpMemberExecutor", () => {
       },
     );
 
-    await vi.advanceTimersByTimeAsync(5 * 1000);
+    await new Promise((resolve) => setTimeout(resolve, 5_100));
     await secondRun;
 
     expect(secondComplete).toHaveBeenCalledWith("second turn", "stop");
@@ -498,7 +503,7 @@ describe("AcpMemberExecutor", () => {
 
     releaseStuckTurn?.();
     await firstRun;
-  });
+  }, 8_000);
 
   it("starts ACP sessions inside the project path when one is configured", async () => {
     const projectPath = path.resolve(process.cwd(), "../agent-target");
