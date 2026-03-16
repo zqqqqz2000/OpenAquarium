@@ -846,9 +846,12 @@ export async function startWorkspaceHttpServer(args: {
             id: string;
             name: string;
             handle: string;
+            isRole?: boolean;
             summary: string;
             prompt: string;
             accentTone: "paper" | "postit" | "blueprint" | "correction";
+            modelProfileId?: string;
+            modelId?: string;
             allowedSkillIds: string[];
             provider: {
               kind: "codex-acp" | "generic-acp";
@@ -861,9 +864,12 @@ export async function startWorkspaceHttpServer(args: {
             };
             isEntryMember?: boolean;
             acceptsDirectMessages?: boolean;
+            codexThinkingDepth?: "low" | "mid" | "high" | "extra-high";
             watch?: {
               intervalMinutes: number;
               enabledByDefault: boolean;
+              persistent?: boolean;
+              prompt?: string;
             };
           }>;
         }>(request);

@@ -218,6 +218,55 @@ describe("workspace domain", () => {
     expect(snapshot.watchers[watcherId]?.prompt).toBe("Only summarize unseen messages and owner/status changes.");
   });
 
+  it("preserves role-owner state from the template when creating a room", () => {
+    const context = createRuntimeContext();
+    const baseSnapshot = createWorkspaceSnapshot(defaultTemplates);
+    const template = baseSnapshot.templates["template-product-pod"];
+
+    if (!template) {
+      throw new Error("Expected template-product-pod template");
+    }
+
+    const updatedSnapshot = updateTemplate(baseSnapshot, {
+      templateId: template.id,
+      name: template.name,
+      description: template.description,
+      accentTone: template.accentTone,
+      defaultVisibleMemberBlueprintIds: template.defaultVisibleMemberBlueprintIds,
+      members: template.members.map((member) =>
+        member.handle === "builder"
+          ? {
+              ...member,
+              isRole: true,
+            }
+          : member),
+    });
+
+    const snapshot = createProjectWithRoom(
+      updatedSnapshot,
+      {
+        projectName: "ACP Lab",
+        templateId: template.id,
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId;
+    if (!roomId) {
+      throw new Error("Expected a room id");
+    }
+
+    const builder = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder");
+
+    if (!builder) {
+      throw new Error("Expected builder member");
+    }
+
+    expect(builder.isRole).toBe(true);
+  });
+
   it("interrupts a running member without leaking internal draft text into the room transcript", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);

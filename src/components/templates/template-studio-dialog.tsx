@@ -209,6 +209,10 @@ function isGlobalConfigDraftDirty(globalConfig: GlobalWorkspaceConfig, draft: Gl
   return JSON.stringify(buildGlobalConfigInput(globalConfig, draft)) !== JSON.stringify(buildGlobalConfigInput(globalConfig, createGlobalConfigDraft(globalConfig)));
 }
 
+function buildTemplateSyncKey(template: TeamTemplate): string {
+  return JSON.stringify(buildTemplateConfigInput(template, createTemplateConfigDraft(template)));
+}
+
 function InlineHint(props: { content: string }) {
   return (
     <Tooltip>
@@ -714,6 +718,7 @@ export function TemplateStudioDialog(props: {
   const [savingGlobalConfig, setSavingGlobalConfig] = useState(false);
   const wasOpenRef = useRef(false);
   const previousSelectedTemplateIdRef = useRef<string | undefined>(undefined);
+  const previousTemplateSyncKeyByIdRef = useRef<Record<string, string>>({});
 
   const resetTemplateStudioState = (): void => {
     setActiveTab("templates");
@@ -751,7 +756,26 @@ export function TemplateStudioDialog(props: {
   }, [activeTemplateId, open, selectedTemplateId, templates, templatesById]);
 
   useEffect(() => {
-    setTemplateDrafts(Object.fromEntries(templates.map((template) => [template.id, createTemplateConfigDraft(template)])));
+    const nextTemplateSyncKeyById = Object.fromEntries(
+      templates.map((template) => [template.id, buildTemplateSyncKey(template)]),
+    );
+
+    setTemplateDrafts((current) =>
+      Object.fromEntries(
+        templates.map((template) => {
+          const existingDraft = current[template.id];
+          const previousTemplateSyncKey = previousTemplateSyncKeyByIdRef.current[template.id];
+          const nextTemplateSyncKey = nextTemplateSyncKeyById[template.id];
+
+          if (existingDraft && previousTemplateSyncKey === nextTemplateSyncKey) {
+            return [template.id, existingDraft];
+          }
+
+          return [template.id, createTemplateConfigDraft(template)];
+        }),
+      ),
+    );
+    previousTemplateSyncKeyByIdRef.current = nextTemplateSyncKeyById;
   }, [templates]);
 
   useEffect(() => {

@@ -285,6 +285,49 @@ describe("TemplateStudioDialog", () => {
     expect(screen.getByRole("switch", { name: "Template watcher enabled" })).toBeDisabled();
   });
 
+  it("preserves unsaved role-owner toggles across parent rerenders with equivalent templates", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const templates = snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
+    const template = templates[0];
+
+    const view = renderTemplateStudio(
+      <TemplateStudioDialog
+        open
+        templates={templates}
+        selectedTemplateId={template.id}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSaveGlobalConfig={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("switch", { name: "Template role owner" }));
+
+    expect(screen.getByRole("switch", { name: "Template role owner" })).toBeChecked();
+
+    view.rerender(
+      <TooltipProvider>
+        <TemplateStudioDialog
+          open
+          templates={[...templates]}
+          selectedTemplateId={template.id}
+          globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+          onClose={vi.fn()}
+          onDeleteTemplate={vi.fn()}
+          onSaveConfig={vi.fn()}
+          onSaveGlobalConfig={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "Template role owner" })).toBeChecked();
+    });
+  });
+
   it("supports template chat and global model editing surfaces", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();

@@ -136,4 +136,47 @@ describe("OpenAquariumGlobalConfigManager", () => {
       reloaded.templates[0]?.members.find((member) => member.id === watcherMember.id)?.watch?.prompt,
     ).toBe(watchPrompt);
   });
+
+  it("preserves role-owner state when saving and reloading templates", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-global-config-role-owner-"));
+    const manager = new OpenAquariumGlobalConfigManager(directory);
+    const loaded = await manager.load();
+    const template = loaded.templates[0];
+
+    if (!template) {
+      throw new Error("Expected a template");
+    }
+
+    const targetMember = template.members.find((member) => member.isRole !== true) ?? template.members[0];
+    if (!targetMember) {
+      throw new Error("Expected a template member");
+    }
+
+    const nextTemplates = loaded.templates.map((candidate) =>
+      candidate.id === template.id
+        ? {
+            ...candidate,
+            members: candidate.members.map((member) =>
+              member.id === targetMember.id
+                ? {
+                    ...member,
+                    isRole: true,
+                  }
+                : member),
+          }
+        : candidate,
+    );
+
+    await manager.saveTemplates(nextTemplates);
+
+    const persistedPayload = JSON.parse(await readFile(manager.templatesFilePath, "utf8")) as TeamTemplate[];
+    expect(
+      persistedPayload[0]?.members.find((member) => member.id === targetMember.id)?.isRole,
+    ).toBe(true);
+
+    const reloaded = await manager.load();
+    expect(
+      reloaded.templates[0]?.members.find((member) => member.id === targetMember.id)?.isRole,
+    ).toBe(true);
+  });
 });
