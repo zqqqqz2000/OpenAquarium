@@ -114,6 +114,8 @@ interface WatcherTimerEntry {
   timer: ReturnType<typeof setInterval>;
 }
 
+export type WatcherRunOutcome = "triggered" | "busy" | "disabled" | "baselined" | "idle";
+
 class TaskExecutionTimeoutError extends Error {
   constructor(message: string) {
     super(message);
@@ -999,24 +1001,41 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
-  async runWatcherNow(watcherId: string): Promise<WorkspaceSnapshot> {
+  async runWatcherNow(watcherId: string): Promise<{ snapshot: WorkspaceSnapshot; outcome: WatcherRunOutcome }> {
     const watcher = this.snapshot.watchers[watcherId];
     if (!watcher || !watcher.enabled) {
       this.pendingWatcherRuns.delete(watcherId);
-      return this.snapshot;
+      return { snapshot: this.snapshot, outcome: "disabled" };
     }
 
-    if (this.hasRunningTaskInRoom(watcher.roomId)) {
+    if (this.hasRunningTaskForMember(watcher.memberId)) {
       this.pendingWatcherRuns.add(watcherId);
-      return this.snapshot;
+      return { snapshot: this.snapshot, outcome: "busy" };
     }
 
     this.pendingWatcherRuns.delete(watcherId);
 
     const previous = this.snapshot;
+    const previousWatcher = previous.watchers[watcherId];
+    const previousMessageIds = new Set(Object.keys(previous.messages));
     const next = runWatcher(previous, watcherId, this.context);
     await this.applySnapshot(previous, next);
-    return this.snapshot;
+    const nextWatcher = this.snapshot.watchers[watcherId];
+    const createdDigest = Object.entries(this.snapshot.messages).some(
+      ([messageId, message]) => !previousMessageIds.has(messageId)
+        && message.transport === "watch-digest"
+        && nextWatcher
+        && message.recipientMemberIds.includes(nextWatcher.memberId),
+    );
+    const establishedBaseline = previousWatcher
+      && previousWatcher.lastConsumedMessageId === undefined
+      && previousWatcher.lastConsumedStateAt === undefined
+      && Boolean(nextWatcher?.lastConsumedMessageId || nextWatcher?.lastConsumedStateAt);
+
+    return {
+      snapshot: this.snapshot,
+      outcome: createdDigest ? "triggered" : establishedBaseline ? "baselined" : "idle",
+    };
   }
 
   async listSkillCatalog(): Promise<SkillCatalogEntry[]> {
@@ -1473,11 +1492,8 @@ export class WorkspaceRuntime {
       if (observer && this.snapshot.tasks[taskId]?.status !== "running") {
         observer.resolve();
       }
-      const settledTaskRoomId = this.snapshot.tasks[taskId]?.roomId ?? task.roomId;
       this.runningTaskIds.delete(taskId);
-      if (settledTaskRoomId && !this.hasRunningTaskInRoom(settledTaskRoomId)) {
-        await this.flushPendingWatchers();
-      }
+      await this.flushPendingWatchers();
     }
   }
 
@@ -1933,8 +1949,8 @@ export class WorkspaceRuntime {
     });
   }
 
-  private hasRunningTaskInRoom(roomId: string): boolean {
-    return Object.values(this.snapshot.tasks).some((task) => task.roomId === roomId && task.status === "running");
+  private hasRunningTaskForMember(memberId: string): boolean {
+    return Object.values(this.snapshot.tasks).some((task) => task.memberId === memberId && task.status === "running");
   }
 
   private canRunWatcherNow(watcherId: string): boolean {
@@ -1943,7 +1959,7 @@ export class WorkspaceRuntime {
       return false;
     }
 
-    return !this.hasRunningTaskInRoom(watcher.roomId);
+    return !this.hasRunningTaskForMember(watcher.memberId);
   }
 
   private async flushPendingWatchers(): Promise<void> {

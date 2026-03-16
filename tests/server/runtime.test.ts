@@ -1427,7 +1427,7 @@ describe("WorkspaceRuntime", () => {
     ).toBe(true);
   });
 
-  it("defers watcher runs while the room already has a running task", async () => {
+  it("does not defer watcher runs while another member in the room is busy", async () => {
     const workspaceRoot = await mkdtemp(
       path.join(os.tmpdir(), "oa-runtime-watcher-backoff-"),
     );
@@ -1453,11 +1453,24 @@ describe("WorkspaceRuntime", () => {
       projectName: "Watcher Backoff",
       templateId: "template-product-pod",
     });
+    let snapshot = runtime.getSnapshot();
+    const scribe = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "scribe");
+
+    expect(scribe).toBeDefined();
+    if (!scribe) {
+      throw new Error("Expected scribe member");
+    }
+
     await runtime.sendUserMessage({
       roomId,
       content: "先让 lead 挂起一会儿",
     });
-    const watcherId = runtime.getSnapshot().rooms[roomId]?.watcherIds[0];
+    snapshot = runtime.getSnapshot();
+    const watcherId = snapshot.rooms[roomId]?.watcherIds.find(
+      (candidate) => snapshot.watchers[candidate]?.memberId === scribe.id,
+    );
 
     expect(watcherId).toBeDefined();
     if (!watcherId) {
@@ -1466,23 +1479,23 @@ describe("WorkspaceRuntime", () => {
 
     await runtime.runWatcherNow(watcherId);
 
-    const snapshot = runtime.getSnapshot();
+    snapshot = runtime.getSnapshot();
     const digestMessages = (snapshot.messageOrderByRoom[roomId] ?? [])
       .map((messageId) => snapshot.messages[messageId])
       .filter((message) => message.transport === "watch-digest");
 
     expect(digestMessages).toHaveLength(0);
-    expect(snapshot.watchers[watcherId]?.lastConsumedMessageId).toBeUndefined();
+    expect(snapshot.watchers[watcherId]?.lastConsumedMessageId).toBeDefined();
   });
 
-  it("runs a deferred watcher as soon as the room becomes idle", async () => {
+  it("runs a deferred watcher as soon as the watched member becomes idle", async () => {
     const workspaceRoot = await mkdtemp(
       path.join(os.tmpdir(), "oa-runtime-watcher-catch-up-"),
     );
-    let holdLead = false;
-    let releaseLead: (() => void) | undefined;
-    const leadReleasePromise = new Promise<void>((resolve) => {
-      releaseLead = resolve;
+    let holdScribe = false;
+    let releaseScribe: (() => void) | undefined;
+    const scribeReleasePromise = new Promise<void>((resolve) => {
+      releaseScribe = resolve;
     });
     const runtime = new WorkspaceRuntime({
       initialSnapshot: createEmptyRuntimeSnapshot(),
@@ -1492,8 +1505,8 @@ describe("WorkspaceRuntime", () => {
       workspaceRoot,
       executorFactory: ({ member }) =>
         new FakeExecutor(async (_request, callbacks) => {
-          if (member.handle === "lead" && holdLead) {
-            await leadReleasePromise;
+          if (member.handle === "scribe" && holdScribe) {
+            await scribeReleasePromise;
           }
 
           await callbacks.onComplete(`${member.handle} done`, "end_turn");
@@ -1545,7 +1558,14 @@ describe("WorkspaceRuntime", () => {
 
     await runtime.runWatcherNow(watcherId);
 
-    holdLead = true;
+    holdScribe = true;
+    await runtime.sendUserMessage({
+      roomId,
+      directMemberId: scribe.id,
+      content: "先让 scribe 忙起来",
+    });
+    await flushMicrotasks();
+
     await runtime.sendUserMessage({
       roomId,
       content: "这条消息需要在 busy 结束后被 watcher 补抓到",
@@ -1563,8 +1583,8 @@ describe("WorkspaceRuntime", () => {
       ),
     ).toHaveLength(0);
 
-    holdLead = false;
-    releaseLead?.();
+    holdScribe = false;
+    releaseScribe?.();
     await waitFor(() => {
       snapshot = runtime.getSnapshot();
       const digestMessages = Object.values(snapshot.messages).filter(

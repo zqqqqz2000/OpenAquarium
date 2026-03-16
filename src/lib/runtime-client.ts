@@ -11,6 +11,13 @@ import type {
   WorkspaceSnapshot,
 } from "@/domain/model";
 
+export type WatcherRunOutcome = "triggered" | "busy" | "disabled" | "baselined" | "idle";
+
+export interface WatcherRunResult {
+  snapshot: WorkspaceSnapshot;
+  outcome: WatcherRunOutcome;
+}
+
 export function resolveWorkspaceRuntimeBaseUrl(): string {
   const configured = import.meta.env.VITE_OA_SERVER_URL as string | undefined;
   return configured ?? "http://127.0.0.1:4301";
@@ -295,13 +302,13 @@ export class WorkspaceRuntimeClient {
     return payload.snapshot;
   }
 
-  async runWatcher(watcherId: string): Promise<WorkspaceSnapshot> {
-    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+  async runWatcher(watcherId: string): Promise<WatcherRunResult> {
+    const payload = await parseJson<WatcherRunResult>(
       await fetch(`${this.baseUrl}/api/watchers/${watcherId}/run`, {
         method: "POST",
       }),
     );
-    return payload.snapshot;
+    return payload;
   }
 
   async generateTemplate(brief: string): Promise<{ template: TeamTemplate; snapshot: WorkspaceSnapshot }> {

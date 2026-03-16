@@ -89,4 +89,51 @@ describe("OpenAquariumGlobalConfigManager", () => {
     await expect(manager.saveTemplates(invalidTemplates)).rejects.toThrow();
     await expect(readFile(manager.templatesFilePath, "utf8")).resolves.toBe(originalPayload);
   });
+
+  it("preserves watcher prompt when saving and reloading templates", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-global-config-watch-prompt-"));
+    const manager = new OpenAquariumGlobalConfigManager(directory);
+    const loaded = await manager.load();
+    const template = loaded.templates[0];
+
+    if (!template) {
+      throw new Error("Expected a template");
+    }
+
+    const watcherMember = template.members.find((member) => member.watch);
+    if (!watcherMember?.watch) {
+      throw new Error("Expected a watcher-enabled template member");
+    }
+
+    const watchPrompt = "Only summarize unseen blocker and owner changes.";
+    const nextTemplates = loaded.templates.map((candidate) =>
+      candidate.id === template.id
+        ? {
+            ...candidate,
+            members: candidate.members.map((member) =>
+              member.id === watcherMember.id && member.watch
+                ? {
+                    ...member,
+                    watch: {
+                      ...member.watch,
+                      prompt: watchPrompt,
+                    },
+                  }
+                : member),
+          }
+        : candidate,
+    );
+
+    await manager.saveTemplates(nextTemplates);
+
+    const persistedPayload = JSON.parse(await readFile(manager.templatesFilePath, "utf8")) as TeamTemplate[];
+    expect(
+      persistedPayload[0]?.members.find((member) => member.id === watcherMember.id)?.watch?.prompt,
+    ).toBe(watchPrompt);
+
+    const reloaded = await manager.load();
+    expect(
+      reloaded.templates[0]?.members.find((member) => member.id === watcherMember.id)?.watch?.prompt,
+    ).toBe(watchPrompt);
+  });
 });

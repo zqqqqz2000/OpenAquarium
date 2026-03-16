@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 
 import "../helpers/mock-streamdown-plugins";
 import { MemberStudioDialog } from "@/components/members/member-studio-dialog";
@@ -10,7 +11,15 @@ import { createRuntimeContext } from "@/domain/identity";
 import { postMemberMessage, postUserMessage } from "@/domain/workspace";
 import type { UpdateMemberConfigInput } from "@/domain/model";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
+import type { WatcherRunResult } from "@/lib/runtime-client";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
 describe("MemberStudioDialog", () => {
   function renderDialog(node: ReactElement) {
@@ -50,7 +59,7 @@ describe("MemberStudioDialog", () => {
     await user.clear(screen.getByRole("textbox", { name: /Prompt/i }));
     await user.type(screen.getByRole("textbox", { name: /Prompt/i }), "新的 builder prompt");
     await user.click(screen.getByRole("switch", { name: "Role" }));
-    await user.click(screen.getByRole("button", { name: /Save member config/i }));
+    await user.click(screen.getByRole("button", { name: /^Save$/i }));
     await user.click(screen.getByRole("button", { name: /Make entry member/i }));
     await user.click(screen.getByRole("tab", { name: "Watcher" }));
     await user.clear(screen.getByRole("textbox", { name: /Interval minutes/i }));
@@ -66,6 +75,9 @@ describe("MemberStudioDialog", () => {
       modelProfileId: "model-codex-acp-default",
     });
     expect(savedConfig?.provider.command).toBe(builder.provider.command);
+    expect(toast.success).toHaveBeenCalledWith("Saved", {
+      description: `${builder.name} updated.`,
+    });
     expect(onSetEntryMember).toHaveBeenCalledWith(builder.id);
     expect(screen.getByRole("switch", { name: "Watch" })).toBeDisabled();
     expect(screen.getByRole("switch", { name: "Persistent watch" })).toBeDisabled();
@@ -174,6 +186,114 @@ describe("MemberStudioDialog", () => {
       intervalMinutes: 15,
       persistent: false,
       prompt: "Only summarize unseen blocker changes.",
+    });
+    expect(toast.success).toHaveBeenCalledWith("Saved", {
+      description: `${builder.name} watcher updated.`,
+    });
+  });
+
+  it("shows a toast when saving member config fails", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "builder")!;
+    const onSaveConfig = vi.fn(async () => {
+      throw new Error("Config save failed.");
+    });
+
+    renderDialog(
+      <MemberStudioDialog
+        snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        room={room}
+        member={builder}
+        onClose={vi.fn()}
+        onSaveConfig={onSaveConfig}
+        onSetEntryMember={vi.fn()}
+        onSaveWatcher={vi.fn()}
+        onRunWatcher={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Config" }));
+    await user.click(screen.getByRole("button", { name: /^Save$/i }));
+
+    expect(toast.error).toHaveBeenCalledWith("Save failed", {
+      description: "Config save failed.",
+    });
+    expect(screen.getByText("Config save failed.")).toBeInTheDocument();
+  });
+
+  it("runs watcher now with feedback and keeps it as a secondary action", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const scribe = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "scribe")!;
+    const watcherId = room.watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === scribe.id);
+    const onRunWatcher = vi.fn();
+
+    if (!watcherId) {
+      throw new Error("Expected watcher id");
+    }
+
+    renderDialog(
+      <MemberStudioDialog
+        snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        room={room}
+        member={scribe}
+        onClose={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSetEntryMember={vi.fn()}
+        onSaveWatcher={vi.fn()}
+        onRunWatcher={onRunWatcher}
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Watcher" }));
+    const saveWatcherButton = screen.getByRole("button", { name: /Save watcher/i });
+    const runNowButton = screen.getByRole("button", { name: /Run now/i });
+
+    expect(saveWatcherButton).toHaveAttribute("data-variant", "default");
+    expect(runNowButton).toHaveAttribute("data-variant", "secondary");
+
+    await user.click(runNowButton);
+
+    expect(onRunWatcher).toHaveBeenCalledWith(watcherId);
+    expect(toast.success).toHaveBeenCalledWith("Watcher started", {
+      description: `${scribe.name} watcher is running now.`,
+    });
+  });
+
+  it("shows a deferred toast when the watched member is busy", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const scribe = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "scribe")!;
+    const onRunWatcher = vi.fn<() => Promise<WatcherRunResult>>(async () => ({
+      snapshot,
+      outcome: "busy",
+    }));
+
+    renderDialog(
+      <MemberStudioDialog
+        snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        room={room}
+        member={scribe}
+        onClose={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSetEntryMember={vi.fn()}
+        onSaveWatcher={vi.fn()}
+        onRunWatcher={onRunWatcher}
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Watcher" }));
+    await user.click(screen.getByRole("button", { name: /Run now/i }));
+
+    expect(toast.success).toHaveBeenCalledWith("Watcher deferred", {
+      description: `${scribe.name} is busy. This run will wait until that member becomes idle.`,
     });
   });
 
@@ -387,12 +507,12 @@ describe("MemberStudioDialog", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /Save member config/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Save$/i })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Config" }));
-    expect(screen.getByRole("button", { name: /Save member config/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Save$/i })).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "History" }));
-    expect(screen.queryByRole("button", { name: /Save member config/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Save$/i })).not.toBeInTheDocument();
   });
 });

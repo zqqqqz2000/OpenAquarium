@@ -51,6 +51,7 @@ const persistedTeamMemberBlueprintSchema = z.object({
       intervalMinutes: z.number().int().positive(),
       enabledByDefault: z.boolean(),
       persistent: z.boolean().optional(),
+      prompt: z.string().optional(),
     })
     .optional(),
 });
@@ -160,6 +161,7 @@ const TEMPLATE_JSON_SCHEMA = {
                 intervalMinutes: { type: "integer", minimum: 1 },
                 enabledByDefault: { type: "boolean" },
                 persistent: { type: "boolean" },
+                prompt: { type: "string" },
               },
             },
           },
@@ -248,6 +250,7 @@ function normalizePersistedTemplates(
             intervalMinutes: member.watch.intervalMinutes,
             enabledByDefault: member.watch.enabledByDefault,
             persistent: member.watch.persistent,
+            prompt: member.watch.prompt?.trim() || undefined,
           }
         : undefined,
     })),

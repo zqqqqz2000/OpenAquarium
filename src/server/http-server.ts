@@ -564,10 +564,10 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing watcher id" },
       };
     }
-    const snapshot = await runtime.runWatcherNow(watcherId);
+    const result = await runtime.runWatcherNow(watcherId);
     return {
       statusCode: 200,
-      payload: { snapshot },
+      payload: result,
     };
   }
 
@@ -1195,8 +1195,11 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing watcher id" });
           return;
         }
-        const snapshot = await args.runtime.runWatcherNow(watcherId);
-        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        const result = await args.runtime.runWatcherNow(watcherId);
+        sendJson(response, 200, {
+          snapshot: buildTransportSnapshot(result.snapshot),
+          outcome: result.outcome,
+        });
         return;
       }
 

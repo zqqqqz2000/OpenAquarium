@@ -137,6 +137,8 @@ describe("RoomTeamDialog", () => {
       />,
     );
 
+    await user.click(screen.getByRole("button", { name: /Add role/i }));
+
     const roleSwitch = screen.getByRole("switch", { name: "Room team role owner" });
     expect(roleSwitch).toBeChecked();
     expect(screen.getByText("Role owner 可以挂员工并接收 `oa_role_*` 扩编操作；同时不能配置 Watch。若要关闭它，必须先移除这个岗位下的员工。")).toBeInTheDocument();
@@ -147,5 +149,64 @@ describe("RoomTeamDialog", () => {
     expect(roleSwitch).not.toBeChecked();
     expect(screen.getByText("关闭后，这个成员会变成普通成员，不再作为岗位 owner 接收扩编。若这个岗位下还有员工，保存时会被阻止。")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Room team watcher configured" })).not.toBeDisabled();
+  });
+
+  it("refreshes watcher prompt fields after saving the same room", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const watcherId = room.watcherIds[0];
+
+    if (!watcherId) {
+      throw new Error("Expected a room watcher");
+    }
+
+    const watcher = snapshot.watchers[watcherId];
+    const watcherMember = snapshot.members[watcher.memberId];
+    const nextSnapshot = createSeedWorkspace();
+    const nextRoom = nextSnapshot.rooms[nextSnapshot.selection.roomId!];
+    const nextWatcherId = nextRoom.watcherIds.find((candidate) => nextSnapshot.watchers[candidate]?.memberId === watcher.memberId);
+
+    if (!watcherMember || !nextWatcherId) {
+      throw new Error("Expected watcher member");
+    }
+
+    nextSnapshot.watchers[nextWatcherId] = {
+      ...nextSnapshot.watchers[nextWatcherId],
+      prompt: "Only summarize owner changes after save.",
+    };
+
+    const { rerender } = render(
+      <RoomTeamDialog
+        open
+        snapshot={snapshot}
+        room={room}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const watcherMemberButton = screen.getByText(watcherMember.name).closest("button");
+    if (!watcherMemberButton) {
+      throw new Error("Expected watcher member button");
+    }
+
+    await user.click(watcherMemberButton);
+
+    expect(screen.getByRole("textbox", { name: /Watcher prompt/i })).toHaveValue(watcher.prompt ?? "");
+
+    rerender(
+      <RoomTeamDialog
+        open
+        snapshot={nextSnapshot}
+        room={nextRoom}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: /Watcher prompt/i })).toHaveValue("Only summarize owner changes after save.");
   });
 });

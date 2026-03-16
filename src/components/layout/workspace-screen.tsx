@@ -400,7 +400,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
         onSaveConfig={(input) => void updateMemberConfig(input)}
         onSetEntryMember={(targetMemberId) => void setEntryMember(targetMemberId)}
         onSaveWatcher={(input) => void upsertWatcher(input)}
-        onRunWatcher={(watcherId) => void runWatcher(watcherId)}
+        onRunWatcher={(watcherId) => runWatcher(watcherId)}
         onSendDirectMessage={(content, directMemberId) => void sendUserMessage(content, directMemberId)}
       />
       <TemplateStudioDialog

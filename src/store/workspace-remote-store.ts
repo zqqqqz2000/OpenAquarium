@@ -13,7 +13,7 @@ import type {
 } from "@/domain/model";
 import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
-import { WorkspaceRuntimeClient } from "@/lib/runtime-client";
+import { WorkspaceRuntimeClient, type WatcherRunResult } from "@/lib/runtime-client";
 
 function mergeIncomingSnapshot(current: WorkspaceSnapshot, incoming: WorkspaceSnapshot): WorkspaceSnapshot {
   const selectedProjectId =
@@ -89,7 +89,7 @@ export interface WorkspaceRemoteStoreState {
   updateRoomSettings(input: UpdateRoomSettingsInput): Promise<void>;
   sendUserMessage(content: string, directMemberId?: string): Promise<void>;
   toggleWatcherSchedule(watcherId: string): Promise<void>;
-  runWatcher(watcherId: string): Promise<void>;
+  runWatcher(watcherId: string): Promise<WatcherRunResult>;
   updatePrompt(memberId: string, prompt: string): Promise<void>;
   updateMemberConfig(input: UpdateMemberConfigInput): Promise<void>;
   updateRoomTeam(input: UpdateRoomTeamInput): Promise<WorkspaceSnapshot>;
@@ -140,7 +140,7 @@ export interface WorkspaceRemoteClient {
   setEntryMember(memberId: string): Promise<WorkspaceSnapshot>;
   upsertWatcher(input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean; prompt?: string }): Promise<WorkspaceSnapshot>;
   toggleWatcher(watcherId: string): Promise<WorkspaceSnapshot>;
-  runWatcher(watcherId: string): Promise<WorkspaceSnapshot>;
+  runWatcher(watcherId: string): Promise<WatcherRunResult>;
   generateTemplate(brief: string): Promise<{ template: TeamTemplate; snapshot: WorkspaceSnapshot }>;
   connect(onSnapshot: (snapshot: WorkspaceSnapshot) => void, onConnectionChange: (connected: boolean) => void): () => void;
 }
@@ -277,10 +277,11 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
       }));
     },
     async runWatcher(watcherId) {
-      const snapshot = await runMutation(set, () => client.runWatcher(watcherId));
+      const result = await runMutation(set, () => client.runWatcher(watcherId));
       set((state) => ({
-        snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
+        snapshot: mergeIncomingSnapshot(state.snapshot, result.snapshot),
       }));
+      return result;
     },
     async updatePrompt(memberId, prompt) {
       const snapshot = await runMutation(set, () => client.updatePrompt(memberId, prompt));

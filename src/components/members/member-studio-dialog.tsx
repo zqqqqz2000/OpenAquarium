@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { Clock3, Settings2, Star } from "lucide-react";
+import { toast } from "sonner";
 
 import type { GlobalWorkspaceConfig, Room, TeamMember, UpdateMemberConfigInput, WorkspaceSnapshot } from "@/domain/model";
 import { buildMemberCliCommands } from "@/domain/tooling";
@@ -42,6 +43,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
+import type { WatcherRunResult } from "@/lib/runtime-client";
 import { getMemberHistory } from "@/lib/message-feed";
 import { badgeToneProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
@@ -89,7 +91,7 @@ export function MemberStudioDialog(props: {
   onSaveConfig: (input: UpdateMemberConfigInput) => void | Promise<void>;
   onSetEntryMember: (memberId: string) => void | Promise<void>;
   onSaveWatcher: (input: { memberId: string; enabled: boolean; intervalMinutes: number; persistent?: boolean; prompt?: string }) => void | Promise<void>;
-  onRunWatcher: (watcherId: string) => void;
+  onRunWatcher: (watcherId: string) => void | Promise<WatcherRunResult | void>;
   onSendDirectMessage?: (content: string, directMemberId: string) => void | Promise<void>;
 }) {
   const {
@@ -162,33 +164,89 @@ export function MemberStudioDialog(props: {
     }
   };
 
-  const saveConfig = (): void => {
+  const saveConfig = async (): Promise<void> => {
     try {
       setErrorByMember((current) => ({
         ...current,
         [member.id]: undefined,
       }));
-      void onSaveConfig(buildMemberConfigInput(member, configDraft));
+      await onSaveConfig(buildMemberConfigInput(member, configDraft));
+      toast.success("Saved", {
+        description: `${member.name} updated.`,
+      });
     } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
       setErrorByMember((current) => ({
         ...current,
-        [member.id]: caughtError instanceof Error ? caughtError.message : String(caughtError),
+        [member.id]: message,
       }));
+      toast.error("Save failed", {
+        description: message,
+      });
     }
   };
 
-  const saveWatcher = (): void => {
+  const saveWatcher = async (): Promise<void> => {
     try {
       setErrorByMember((current) => ({
         ...current,
         [member.id]: undefined,
       }));
-      void onSaveWatcher(buildWatcherConfigInput(member.id, watcherDraft));
+      await onSaveWatcher(buildWatcherConfigInput(member.id, watcherDraft));
+      toast.success("Saved", {
+        description: `${member.name} watcher updated.`,
+      });
     } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
       setErrorByMember((current) => ({
         ...current,
-        [member.id]: caughtError instanceof Error ? caughtError.message : String(caughtError),
+        [member.id]: message,
       }));
+      toast.error("Save failed", {
+        description: message,
+      });
+    }
+  };
+
+  const runWatcherNow = async (): Promise<void> => {
+    if (!watcher) {
+      return;
+    }
+
+    try {
+      const result = await onRunWatcher(watcher.id);
+      switch (result?.outcome) {
+        case "busy":
+          toast.success("Watcher deferred", {
+            description: `${member.name} is busy. This run will wait until that member becomes idle.`,
+          });
+          return;
+        case "disabled":
+          toast.error("Watcher is disabled", {
+            description: `Enable ${member.name}'s watcher before running it manually.`,
+          });
+          return;
+        case "baselined":
+          toast.success("Watcher primed", {
+            description: `${member.name} established a watcher baseline. The next run will inspect newer activity.`,
+          });
+          return;
+        case "idle":
+          toast.success("Watcher checked", {
+            description: `${member.name} had no new activity to process.`,
+          });
+          return;
+        case "triggered":
+        default:
+          toast.success("Watcher started", {
+            description: `${member.name} watcher is running now.`,
+          });
+      }
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
+      toast.error("Watcher run failed", {
+        description: message,
+      });
     }
   };
 
@@ -240,7 +298,7 @@ export function MemberStudioDialog(props: {
                     </Button>
                   ) : null}
                   {watcher ? (
-                    <Button size="sm" onClick={() => onRunWatcher(watcher.id)}>
+                    <Button size="sm" variant="secondary" onClick={() => void runWatcherNow()}>
                       Run watcher now
                     </Button>
                   ) : null}
@@ -416,7 +474,7 @@ export function MemberStudioDialog(props: {
                       ) : (
                         <p className="m-0 text-sm text-muted-foreground">保存后只更新当前 room 里的这个 member 实例。</p>
                       )}
-                      <Button onClick={saveConfig}>Save member config</Button>
+                      <Button onClick={() => void saveConfig()}>Save</Button>
                     </div>
                   </CardContent>
                 </Card>
@@ -478,11 +536,11 @@ export function MemberStudioDialog(props: {
                         : "Persistent watch 会等首个 interval 到达后才触发；之后即使没有新房间消息，也会产出 heartbeat digest。若期间出现新消息或成员状态变化，digest 会带上这些增量。"}
                     </div>
                     <div className="flex flex-wrap justify-end gap-2">
-                      <Button size="sm" variant="secondary" onClick={saveWatcher} disabled={configDraft.isRole}>
+                      <Button size="sm" onClick={() => void saveWatcher()} disabled={configDraft.isRole}>
                         Save watcher
                       </Button>
                       {watcher ? (
-                        <Button size="sm" onClick={() => onRunWatcher(watcher.id)}>
+                        <Button size="sm" variant="secondary" onClick={() => void runWatcherNow()}>
                           Run now
                         </Button>
                       ) : null}

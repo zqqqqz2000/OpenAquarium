@@ -129,6 +129,8 @@ export function RoomTeamDialog(props: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const seededRoomIdRef = useRef<string | undefined>(undefined);
+  const seededRoomSignatureRef = useRef<string | undefined>(undefined);
+  const lastSavedSignatureRef = useRef<string | undefined>(undefined);
 
   const roomSeedDraft = useMemo(
     () => (open && room ? createRoomTeamDraft(snapshot, room) : undefined),
@@ -139,16 +141,30 @@ export function RoomTeamDialog(props: {
       return;
     }
 
-    if (seededRoomIdRef.current === room.id) {
+    const nextSeedSignature = JSON.stringify(buildRoomTeamInput(room, roomSeedDraft));
+    const currentDraftSignature = draft ? JSON.stringify(buildRoomTeamInput(room, draft)) : undefined;
+    const draftIsDirty =
+      currentDraftSignature !== undefined
+      && seededRoomSignatureRef.current !== undefined
+      && currentDraftSignature !== seededRoomSignatureRef.current;
+    const shouldPreserveLocalDraft =
+      seededRoomIdRef.current === room.id
+      && nextSeedSignature !== seededRoomSignatureRef.current
+      && draftIsDirty
+      && lastSavedSignatureRef.current !== nextSeedSignature;
+
+    if (shouldPreserveLocalDraft || seededRoomSignatureRef.current === nextSeedSignature) {
       return;
     }
 
     const nextDraft = roomSeedDraft;
     seededRoomIdRef.current = room.id;
+    seededRoomSignatureRef.current = nextSeedSignature;
+    lastSavedSignatureRef.current = undefined;
     setDraft(roomSeedDraft);
     setActiveMemberId((current) => (current && nextDraft.members.some((member) => member.id === current) ? current : nextDraft.members[0]?.id));
     setError(undefined);
-  }, [open, room, roomSeedDraft]);
+  }, [draft, open, room, roomSeedDraft]);
 
   useEffect(() => {
     if (open) {
@@ -156,6 +172,8 @@ export function RoomTeamDialog(props: {
     }
 
     seededRoomIdRef.current = undefined;
+    seededRoomSignatureRef.current = undefined;
+    lastSavedSignatureRef.current = undefined;
   }, [open]);
 
   const activeMember = draft?.members.find((member) => member.id === activeMemberId) ?? draft?.members[0];
@@ -282,8 +300,10 @@ export function RoomTeamDialog(props: {
     try {
       setSaving(true);
       setError(undefined);
+      lastSavedSignatureRef.current = JSON.stringify(buildRoomTeamInput(room, draft));
       await onSave(buildRoomTeamInput(room, draft));
     } catch (nextError) {
+      lastSavedSignatureRef.current = undefined;
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setSaving(false);
