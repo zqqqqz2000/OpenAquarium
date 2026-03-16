@@ -185,6 +185,39 @@ describe("workspace domain", () => {
     ).toBe(true);
   });
 
+  it("copies watcher prompt from the template when creating a room", () => {
+    const context = createRuntimeContext();
+    const snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "ACP Lab",
+        templateId: "template-product-pod",
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId;
+    if (!roomId) {
+      throw new Error("Expected a room id");
+    }
+
+    const room = snapshot.rooms[roomId];
+    const scribe = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "scribe");
+
+    if (!scribe) {
+      throw new Error("Expected scribe member");
+    }
+
+    const watcherId = room.watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === scribe.id);
+    if (!watcherId) {
+      throw new Error("Expected scribe watcher");
+    }
+
+    expect(snapshot.watchers[watcherId]?.prompt).toBe("Only summarize unseen messages and owner/status changes.");
+  });
+
   it("interrupts a running member without leaking internal draft text into the room transcript", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);

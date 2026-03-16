@@ -935,6 +935,7 @@ function instantiateWatcher(
     intervalMinutes: blueprint.watch.intervalMinutes,
     enabled: blueprint.watch.enabledByDefault,
     persistent: blueprint.watch.persistent ?? false,
+    prompt: blueprint.watch.prompt,
     pausedUntilActivity: false,
   };
 }
