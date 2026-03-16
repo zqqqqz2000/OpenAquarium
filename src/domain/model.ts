@@ -163,6 +163,13 @@ export interface ChatMessage {
   taskId?: TaskId;
 }
 
+export interface RoomMessageHistoryPage {
+  roomId: RoomId;
+  messages: ChatMessage[];
+  hasMore: boolean;
+  nextCursor?: MessageId;
+}
+
 export interface MemberTask {
   id: TaskId;
   roomId: RoomId;

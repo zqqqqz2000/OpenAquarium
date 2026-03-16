@@ -98,14 +98,17 @@ export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: R
   };
 }
 
-export function mapRoomMessagesToUIMessages(snapshot: WorkspaceSnapshot, room: Room): WorkspaceUIMessage[] {
+export function getVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room): ChatMessage[] {
   const template = snapshot.templates[room.templateId];
   const visibleMemberIds = resolveRoomVisibleMemberIdSet(snapshot, room, template);
 
   return (snapshot.messageOrderByRoom[room.id] ?? [])
     .map((messageId) => snapshot.messages[messageId])
     .filter((message): message is ChatMessage => Boolean(message) && isVisibleMainRoomMessage(message, visibleMemberIds))
-    .map((message) => mapDomainMessageToUIMessage(snapshot, room, message));
+}
+
+export function mapRoomMessagesToUIMessages(snapshot: WorkspaceSnapshot, room: Room): WorkspaceUIMessage[] {
+  return getVisibleRoomMessages(snapshot, room).map((message) => mapDomainMessageToUIMessage(snapshot, room, message));
 }
 
 export function getUIMessageText(message: WorkspaceUIMessage): string {

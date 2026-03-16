@@ -4,6 +4,7 @@ import { watch, type FSWatcher } from "node:fs";
 import type {
   GlobalWorkspaceConfig,
   ProviderBinding,
+  RoomMessageHistoryPage,
   TeamMember,
   TeamTemplate,
   TemplateStudioModelCatalog,
@@ -64,6 +65,7 @@ import { TemplateStudioChatService, type TemplateStudioChatServiceLike } from ".
 import { generateTemplateFromBrief } from "./template-generator";
 import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
 import { getRoomTranscriptFilePath, syncRoomTranscriptFiles } from "./room-transcript-files";
+import { loadRoomMessageHistoryPage, syncRoomMessageHistoryFiles } from "./room-message-history";
 import { normalizeProjectPath, resolveProjectWorkingDirectory } from "./project-paths";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
@@ -592,6 +594,11 @@ export class WorkspaceRuntime {
       previous: createWorkspaceSnapshot(cloneTemplates(bootSnapshot), bootSnapshot.currentUserName),
       next: bootSnapshot,
     });
+    await syncRoomMessageHistoryFiles({
+      workspaceRoot: args.workspaceRoot,
+      previous: createWorkspaceSnapshot(cloneTemplates(bootSnapshot), bootSnapshot.currentUserName),
+      next: bootSnapshot,
+    });
     runtime.syncWatchers();
     runtime.dispatchNewTasks(
       createWorkspaceSnapshot(cloneTemplates(bootSnapshot), bootSnapshot.currentUserName),
@@ -606,6 +613,25 @@ export class WorkspaceRuntime {
 
   getGlobalConfig(): GlobalWorkspaceConfig {
     return this.globalConfig;
+  }
+
+  async getRoomMessageHistoryPage(input: {
+    roomId: string;
+    beforeMessageId?: string;
+    limit?: number;
+  }): Promise<RoomMessageHistoryPage> {
+    const room = this.snapshot.rooms[input.roomId];
+    if (!room) {
+      throw new Error(`Unknown room "${input.roomId}"`);
+    }
+
+    return loadRoomMessageHistoryPage({
+      workspaceRoot: this.workspaceRoot,
+      snapshot: this.snapshot,
+      room,
+      beforeMessageId: input.beforeMessageId,
+      limit: input.limit,
+    });
   }
 
   subscribe(listener: SnapshotListener): () => void {
@@ -1146,6 +1172,11 @@ export class WorkspaceRuntime {
 
     this.cleanupRemovedRuntimeState(previous, prepared);
     await syncRoomTranscriptFiles({
+      workspaceRoot: this.workspaceRoot,
+      previous,
+      next: prepared,
+    });
+    await syncRoomMessageHistoryFiles({
       workspaceRoot: this.workspaceRoot,
       previous,
       next: prepared,

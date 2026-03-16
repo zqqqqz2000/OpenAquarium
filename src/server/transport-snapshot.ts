@@ -2,7 +2,7 @@ import type { WorkspaceSnapshot } from "@/domain/model";
 import { compactWorkspaceSnapshot, type WorkspaceSnapshotCompactionLimits } from "./workspace-snapshot-compact";
 
 export const DEFAULT_TRANSPORT_SNAPSHOT_LIMITS: WorkspaceSnapshotCompactionLimits = {
-  maxMessagesPerRoom: 60,
+  maxMessagesPerRoom: 240,
   maxCompletedTasksPerRoom: 24,
   maxCompletedTaskTraces: 8,
   maxRunningTaskStatusTraces: 12,

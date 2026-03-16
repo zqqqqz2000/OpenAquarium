@@ -319,9 +319,7 @@ describe("TemplateStudioDialog", () => {
     );
 
     await user.click(screen.getByRole("tab", { name: /Chat/i }));
-    expect(
-      screen.getAllByText((_, node) => node?.textContent?.includes("默认修改 Product Pod。要新建 template，直接说。") ?? false).length,
-    ).toBeGreaterThan(0);
+    expect(screen.queryByText("Team Builder")).not.toBeInTheDocument();
     expect(screen.getByText(/直接说要改什么就行/i)).toBeInTheDocument();
     expect(screen.queryByText(/The model can read/i)).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "Make builder more QA focused");
@@ -482,9 +480,7 @@ describe("TemplateStudioDialog", () => {
     expect(screen.getByRole("textbox", { name: /Template name/i })).toHaveValue("Incident Pod");
 
     await user.click(screen.getByRole("tab", { name: /Chat/i }));
-    expect(
-      screen.getAllByText((_, node) => node?.textContent?.includes("默认修改 Incident Pod。要新建 template，直接说。") ?? false).length,
-    ).toBeGreaterThan(0);
+    expect(screen.queryByText("Team Builder")).not.toBeInTheDocument();
 
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "Tighten the incident workflow");
     await user.click(screen.getByRole("button", { name: /Send change request/i }));

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
-import { ArrowDown, BarChart3, Bot, FolderKanban, GitBranch, Link2, TerminalSquare, Users } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { ArrowDown, BarChart3, Bot, Eye, EyeOff, FolderKanban, GitBranch, Link2, TerminalSquare, Users } from "lucide-react";
 
 import type {
   ChatMessage,
@@ -11,7 +12,7 @@ import type {
   WorkspaceSnapshot,
 } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
-import { MessageBubble } from "@/components/chat/message-bubble";
+import { MessageBubble, MessageBubbleMeta } from "@/components/chat/message-bubble";
 import { RoomDashboard } from "@/components/chat/room-dashboard";
 import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import { MemberAvatar } from "@/components/members/member-avatar";
@@ -28,7 +29,7 @@ import { getMemberRoleLabel, getMemberRoleMonogram, getMemberRolePalette } from 
 import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
 import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
 import type { RoomTeamSummary } from "@/lib/room-team";
-import { getUIMessageText, type WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
+import { getUIMessageText, getVisibleRoomMessages, mapDomainMessageToUIMessage, type WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
 import {
   getMessageHandlers,
   getMessageMentionHandles,
@@ -36,6 +37,7 @@ import {
   getMessageRecipientHandles,
   type MessageHandlerSummary,
 } from "@/lib/message-feed";
+import { WorkspaceRuntimeClient } from "@/lib/runtime-client";
 import { badgeToneProps, compactBadgeClassName } from "@/lib/ui-tone";
 import { cn, summarizePrompt } from "@/lib/utils";
 
@@ -81,6 +83,8 @@ interface RoomRoleGroup {
   roleName: string;
   members: TeamMember[];
 }
+
+const HISTORY_PAGE_SIZE = 80;
 
 function buildMemberCardBadges(member: TeamMember, room: Room, snapshot: WorkspaceSnapshot): string[] {
   const badges: string[] = [];
@@ -390,38 +394,53 @@ function MemberVisibilityFilter(props: {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5" aria-label="Visible members filter">
+    <div className="flex flex-wrap items-center gap-2" aria-label="Visible members filter">
+      <span className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Members</span>
       {members.map((member) => {
         const checked = visibleMemberIdSet.has(member.id);
         const rolePalette = getMemberRolePalette(member.handle);
-        const roleMonogram = getMemberRoleMonogram(member.handle);
+        const eyeLabel = checked ? `Hide @${member.handle} messages` : `Show @${member.handle} messages`;
 
         return (
           <HoverCard key={member.id} openDelay={90}>
             <HoverCardTrigger asChild>
-              <button
-                type="button"
-                aria-pressed={checked}
-                aria-label={`Toggle @${member.handle} visibility`}
+              <div
                 className={cn(
-                  "group relative inline-flex h-8 max-w-full items-center gap-1.5 overflow-hidden rounded-full border px-2.5 text-xs font-medium transition-colors",
+                  "inline-flex h-8 max-w-full items-center gap-1 overflow-hidden rounded-full border pl-2 pr-1 text-xs font-medium transition-colors",
                   checked
-                    ? "border-border/70 bg-background/90 text-foreground shadow-sm hover:border-border hover:bg-background"
-                    : "border-border/55 bg-muted/40 text-muted-foreground grayscale hover:bg-muted/60",
+                    ? "border-border/70 bg-background/90 text-foreground shadow-sm"
+                    : "border-border/55 bg-muted/40 text-muted-foreground",
                 )}
-                onClick={() => toggleMember(member.id)}
               >
-                <Avatar size="sm" className="ring-0 after:hidden">
-                  <AvatarFallback style={{ backgroundColor: rolePalette.background, color: rolePalette.foreground }}>{roleMonogram}</AvatarFallback>
-                </Avatar>
-                <span className="max-w-20 truncate">{member.handle}</span>
-                {!checked ? (
-                  <>
-                    <span aria-hidden className="absolute inset-0 bg-background/20" />
-                    <span aria-hidden className="pointer-events-none absolute left-1.5 right-1.5 top-1/2 h-px -translate-y-1/2 -rotate-[24deg] bg-foreground/35" />
-                  </>
-                ) : null}
-              </button>
+                <button
+                  type="button"
+                  aria-label={`Open @${member.handle} session panel`}
+                  className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-transparent py-1 text-left"
+                  onClick={() => onOpenMember(member.id)}
+                >
+                  <Avatar size="sm" className="ring-0 after:hidden">
+                    <AvatarFallback style={{ backgroundColor: rolePalette.background, color: rolePalette.foreground }}>
+                      {getMemberRoleMonogram(member.handle)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="max-w-24 truncate">{member.name}</span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={checked}
+                  aria-label={`Toggle @${member.handle} visibility`}
+                  title={eyeLabel}
+                  className={cn(
+                    "inline-flex size-7 items-center justify-center rounded-full border transition-colors",
+                    checked
+                      ? "border-border/70 bg-background text-foreground hover:bg-muted/50"
+                      : "border-border/50 bg-muted/50 text-muted-foreground hover:bg-muted/70",
+                  )}
+                  onClick={() => toggleMember(member.id)}
+                >
+                  {checked ? <Eye size={14} /> : <EyeOff size={14} />}
+                </button>
+              </div>
             </HoverCardTrigger>
             <HoverCardContent side="bottom" align="start" sideOffset={10} className="w-[min(88vw,320px)] p-2.5">
               <button type="button" className="w-full text-left" aria-label={`Open @${member.handle} session panel`} onClick={() => onOpenMember(member.id)}>
@@ -480,63 +499,240 @@ export function ChatPane(props: {
   } = props;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const previousLayoutKeyRef = useRef<string | undefined>(undefined);
+  const previousLiveLatestMessageIdRef = useRef<string | undefined>(undefined);
+  const historyBootstrapCursorRef = useRef<string | undefined>(undefined);
+  const pendingInitialBottomAlignRef = useRef(false);
+  const pendingPrependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | undefined>(undefined);
+  const historyRequestIdRef = useRef(0);
+  const runtimeClient = useMemo(() => new WorkspaceRuntimeClient(), []);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+  const [transcriptScrollTop, setTranscriptScrollTop] = useState(0);
+  const [historyMessages, setHistoryMessages] = useState<ChatMessage[]>([]);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | undefined>(undefined);
   const roomChat = useRoomChat({
     room,
     members,
     snapshot,
   });
   const roomId = room?.id;
-  const latestMessageId = roomChat.messages.at(-1)?.id;
+  const visibleMemberIds = room ? resolveRoomVisibleMemberIds(snapshot, room, snapshot.templates[room.templateId]) : [];
+  const historyScopeKey = `${roomId ?? "no-room"}:${visibleMemberIds.join(",")}`;
+  const liveRoomMessages = useMemo(() => (room ? getVisibleRoomMessages(snapshot, room) : []), [room, snapshot]);
+  historyBootstrapCursorRef.current = liveRoomMessages[0]?.id;
+  const transcriptDomainMessages = useMemo(
+    () => mergeVisibleRoomMessages(historyMessages, liveRoomMessages),
+    [historyMessages, liveRoomMessages],
+  );
+  const transcriptMessages = useMemo(
+    () => (room ? transcriptDomainMessages.map((message) => mapDomainMessageToUIMessage(snapshot, room, message)) : []),
+    [room, snapshot, transcriptDomainMessages],
+  );
+  const latestLiveMessageId = liveRoomMessages.at(-1)?.id;
   const layoutKey = `${roomId ?? "no-room"}:${leftSidebarCollapsed ? "left-closed" : "left-open"}:${rightSidebarCollapsed ? "right-closed" : "right-open"}`;
   const runningMembers = buildRunningRoomMemberPreviews({
     members,
     snapshot,
     activeRoutes: roomChat.activeRoutes,
   });
-  const visibleMemberIds = room ? resolveRoomVisibleMemberIds(snapshot, room, snapshot.templates[room.templateId]) : [];
-  const updateScrollState = (): void => {
+  const messageVirtualizer = useVirtualizer({
+    count: transcriptMessages.length,
+    getScrollElement: () => transcriptRef.current,
+    estimateSize: () => 220,
+    overscan: 8,
+    getItemKey: (index) => transcriptMessages[index]?.id ?? index,
+  });
+  const virtualRows = messageVirtualizer.getVirtualItems();
+  const stickyVirtualRow = virtualRows.find((row) => row.end > transcriptScrollTop + 4) ?? virtualRows[0];
+  const stickyMessage = stickyVirtualRow ? transcriptMessages[stickyVirtualRow.index] : undefined;
+  const stickyBubble = stickyMessage && room ? toBubbleModel(stickyMessage, snapshot, room, snapshot.currentUserName) : undefined;
+  const updateScrollState = useCallback((): void => {
     const container = transcriptRef.current;
     if (!container) {
       return;
     }
 
+    setTranscriptScrollTop(container.scrollTop);
     const bottomGap = container.scrollHeight - container.clientHeight - container.scrollTop;
     setShowScrollToLatest(bottomGap > 32);
-  };
-  const scrollTranscriptToLatest = (behavior: ScrollBehavior = "smooth"): void => {
+  }, []);
+  const scrollTranscriptToLatest = useCallback((behavior: ScrollBehavior = "smooth"): void => {
     const container = transcriptRef.current;
     if (!container) {
       return;
     }
 
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior,
+    if (transcriptMessages.length > 0) {
+      messageVirtualizer.scrollToIndex(transcriptMessages.length - 1, {
+        align: "end",
+        behavior,
+      });
+    }
+
+    window.requestAnimationFrame(() => {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior,
+      });
+      setShowScrollToLatest(false);
+      updateScrollState();
     });
-    setShowScrollToLatest(false);
-  };
+  }, [messageVirtualizer, transcriptMessages.length, updateScrollState]);
 
   useEffect(() => {
+    historyRequestIdRef.current += 1;
+    const requestId = historyRequestIdRef.current;
+    pendingInitialBottomAlignRef.current = true;
+    pendingPrependAnchorRef.current = undefined;
+    setHistoryMessages([]);
+    setHistoryHasMore(false);
+    setHistoryError(undefined);
+
     if (!roomId) {
+      setHistoryLoading(false);
       return;
     }
 
+    setHistoryLoading(true);
+    void runtimeClient
+      .getRoomMessageHistory({
+        roomId,
+        beforeMessageId: historyBootstrapCursorRef.current,
+        limit: HISTORY_PAGE_SIZE,
+      })
+      .then((page) => {
+        if (historyRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        setHistoryMessages(page.messages);
+        setHistoryHasMore(page.hasMore);
+        setHistoryError(undefined);
+      })
+      .catch((error) => {
+        if (historyRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        setHistoryMessages([]);
+        setHistoryHasMore(false);
+        setHistoryError(error instanceof Error ? error.message : "Failed to load room history.");
+      })
+      .finally(() => {
+        if (historyRequestIdRef.current === requestId) {
+          setHistoryLoading(false);
+        }
+      });
+  }, [historyScopeKey, roomId, runtimeClient]);
+
+  useEffect(() => {
+    if (!roomId || transcriptMessages.length === 0 || !pendingInitialBottomAlignRef.current) {
+      return;
+    }
+
+    pendingInitialBottomAlignRef.current = false;
+    previousLayoutKeyRef.current = layoutKey;
+    previousLiveLatestMessageIdRef.current = latestLiveMessageId;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        scrollTranscriptToLatest("auto");
+      });
+    });
+  }, [layoutKey, latestLiveMessageId, roomId, scrollTranscriptToLatest, transcriptMessages.length]);
+
+  useEffect(() => {
+    const pendingAnchor = pendingPrependAnchorRef.current;
     const container = transcriptRef.current;
-    if (!container) {
+    if (!pendingAnchor || !container) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      container.scrollTo({
+        top: pendingAnchor.scrollTop + (container.scrollHeight - pendingAnchor.scrollHeight),
+        behavior: "auto",
+      });
+      updateScrollState();
+      window.requestAnimationFrame(() => {
+        container.scrollTo({
+          top: pendingAnchor.scrollTop + (container.scrollHeight - pendingAnchor.scrollHeight),
+          behavior: "auto",
+        });
+        pendingPrependAnchorRef.current = undefined;
+        updateScrollState();
+      });
+    });
+  }, [scrollTranscriptToLatest, transcriptMessages.length, updateScrollState]);
+
+  useEffect(() => {
+    if (!roomId || transcriptMessages.length === 0 || pendingInitialBottomAlignRef.current || pendingPrependAnchorRef.current) {
       return;
     }
 
     const layoutChanged = previousLayoutKeyRef.current !== layoutKey;
+    const liveLatestChanged = previousLiveLatestMessageIdRef.current !== latestLiveMessageId;
     previousLayoutKeyRef.current = layoutKey;
-    if (layoutChanged || !showScrollToLatest) {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: layoutChanged ? "auto" : "smooth",
+    previousLiveLatestMessageIdRef.current = latestLiveMessageId;
+
+    if ((layoutChanged || liveLatestChanged) && !showScrollToLatest) {
+      window.requestAnimationFrame(() => {
+        scrollTranscriptToLatest(layoutChanged ? "auto" : "smooth");
       });
+      return;
     }
+
     window.requestAnimationFrame(updateScrollState);
-  }, [layoutKey, latestMessageId, roomId, showScrollToLatest]);
+  }, [layoutKey, latestLiveMessageId, roomId, scrollTranscriptToLatest, showScrollToLatest, transcriptMessages.length, updateScrollState]);
+
+  const loadEarlierMessages = (): void => {
+    if (!room || historyLoading) {
+      return;
+    }
+
+    const requestId = ++historyRequestIdRef.current;
+    const container = transcriptRef.current;
+    if (container) {
+      pendingPrependAnchorRef.current = {
+        scrollHeight: container.scrollHeight,
+        scrollTop: container.scrollTop,
+      };
+    }
+
+    setHistoryLoading(true);
+    setHistoryError(undefined);
+    void runtimeClient
+      .getRoomMessageHistory({
+        roomId: room.id,
+        beforeMessageId: transcriptDomainMessages[0]?.id,
+        limit: HISTORY_PAGE_SIZE,
+      })
+      .then((page) => {
+        if (historyRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        if (page.messages.length === 0) {
+          pendingPrependAnchorRef.current = undefined;
+        }
+
+        setHistoryMessages((currentMessages) => mergeVisibleRoomMessages(page.messages, currentMessages));
+        setHistoryHasMore(page.hasMore);
+      })
+      .catch((error) => {
+        if (historyRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        pendingPrependAnchorRef.current = undefined;
+        setHistoryError(error instanceof Error ? error.message : "Failed to load earlier messages.");
+      })
+      .finally(() => {
+        if (historyRequestIdRef.current === requestId) {
+          setHistoryLoading(false);
+        }
+      });
+  };
 
   if (!room) {
     const templateCount = snapshot.templateOrder.length;
@@ -674,36 +870,97 @@ export function ChatPane(props: {
             onToggleRightSidebar={onToggleRightSidebar}
           />
           <div className="relative min-h-0 flex-1">
-            <div ref={transcriptRef} className="flex h-full min-h-0 flex-1 flex-col gap-2 overflow-y-auto" onScroll={updateScrollState}>
-              {roomChat.messages.map((message) => {
-                const bubble = toBubbleModel(message, snapshot, room, snapshot.currentUserName);
-                const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
-
-                return (
-                  <MessageBubble
-                    key={bubble.message.id}
-                    message={bubble.message}
-                    authorMember={authorMember}
-                    mentionedHandles={bubble.mentionedHandles}
-                    quotedHandles={bubble.quotedHandles}
-                    recipientHandles={bubble.recipientHandles}
-                    handlerSummaries={bubble.handlerSummaries}
-                    onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
+            {historyHasMore || historyError ? (
+              <div className="mb-2 flex flex-col gap-2 px-1">
+                {historyHasMore ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    disabled={historyLoading}
+                    onClick={loadEarlierMessages}
+                  >
+                    {historyLoading ? "Loading earlier messages..." : "Load earlier messages"}
+                  </Button>
+                ) : null}
+                {historyError ? <p className="m-0 text-xs text-destructive">{historyError}</p> : null}
+              </div>
+            ) : null}
+            {transcriptScrollTop > 8 && stickyBubble ? (
+              <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
+                <div className="pointer-events-auto bg-background/95 backdrop-blur-sm">
+                  <MessageBubbleMeta
+                    message={stickyBubble.message}
+                    authorMember={stickyBubble.authorMemberId ? roomChat.activeMembersById[stickyBubble.authorMemberId] : undefined}
+                    mentionedHandles={stickyBubble.mentionedHandles}
+                    quotedHandles={stickyBubble.quotedHandles}
+                    recipientHandles={stickyBubble.recipientHandles}
+                    handlerSummaries={stickyBubble.handlerSummaries}
                   />
-                );
-              })}
-              {roomChat.messages.length === 0 ? (
+                </div>
+              </div>
+            ) : null}
+            <div ref={transcriptRef} className="h-full min-h-0 overflow-y-auto" onScroll={updateScrollState}>
+              {historyLoading && transcriptMessages.length === 0 ? (
+                <Card className="border border-border shadow-none">
+                  <CardContent className="flex items-center gap-4 p-5">
+                    <Bot size={28} />
+                    <p className="m-0 text-sm text-muted-foreground">正在加载完整消息历史…</p>
+                  </CardContent>
+                </Card>
+              ) : transcriptMessages.length === 0 ? (
                 <Card className="border border-border shadow-none">
                   <CardContent className="flex items-center gap-4 p-5">
                     <Bot size={28} />
                     <p className="m-0 text-sm text-muted-foreground">还没有消息。发送第一句话开始。</p>
                   </CardContent>
                 </Card>
-              ) : null}
+              ) : (
+                <div
+                  className="relative w-full"
+                  style={{
+                    height: `${messageVirtualizer.getTotalSize()}px`,
+                  }}
+                >
+                  {virtualRows.map((virtualRow) => {
+                    const message = transcriptMessages[virtualRow.index];
+                    if (!message) {
+                      return null;
+                    }
+
+                    const bubble = toBubbleModel(message, snapshot, room, snapshot.currentUserName);
+                    const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
+
+                    return (
+                      <div
+                        key={virtualRow.key}
+                        ref={messageVirtualizer.measureElement}
+                        data-index={virtualRow.index}
+                        className="absolute top-0 left-0 w-full py-1"
+                        style={{
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                      >
+                        <MessageBubble
+                          key={bubble.message.id}
+                          message={bubble.message}
+                          authorMember={authorMember}
+                          mentionedHandles={bubble.mentionedHandles}
+                          quotedHandles={bubble.quotedHandles}
+                          recipientHandles={bubble.recipientHandles}
+                          handlerSummaries={bubble.handlerSummaries}
+                          onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             {showScrollToLatest ? (
               <Button
-                className="absolute right-2 bottom-2 shadow-lg"
+                className="absolute right-2 bottom-2 z-30 shadow-lg"
                 size="sm"
                 type="button"
                 onClick={() => scrollTranscriptToLatest()}
@@ -942,6 +1199,19 @@ function RoomMembersSidebar(props: {
       </Card>
     </aside>
   );
+}
+
+function mergeVisibleRoomMessages(historyMessages: ChatMessage[], liveMessages: ChatMessage[]): ChatMessage[] {
+  const mergedById = new Map<string, ChatMessage>();
+
+  historyMessages.forEach((message) => {
+    mergedById.set(message.id, message);
+  });
+  liveMessages.forEach((message) => {
+    mergedById.set(message.id, message);
+  });
+
+  return [...mergedById.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
 }
 
 function inferMessageStatus(message: WorkspaceUIMessage): ChatMessage["status"] {

@@ -60,8 +60,9 @@ export async function handleWorkspaceJsonApiRequest(args: {
   method: string;
   pathname: string;
   body?: JsonPayload;
+  searchParams?: URLSearchParams;
 }): Promise<{ statusCode: number; payload: JsonPayload } | undefined> {
-  const { runtime, method, pathname, body } = args;
+  const { runtime, method, pathname, body, searchParams } = args;
 
   if (method === "GET" && pathname === "/api/state") {
     return {
@@ -88,6 +89,30 @@ export async function handleWorkspaceJsonApiRequest(args: {
     return {
       statusCode: 200,
       payload: { skills: await runtime.listSkillCatalog() },
+    };
+  }
+
+  const roomHistoryMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/history$/u);
+  if (method === "GET" && roomHistoryMatch) {
+    const [, roomId] = roomHistoryMatch;
+    if (!roomId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing room id" },
+      };
+    }
+
+    const beforeMessageId = searchParams?.get("before") ?? undefined;
+    const limitParam = searchParams?.get("limit");
+    const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
+
+    return {
+      statusCode: 200,
+      payload: await runtime.getRoomMessageHistoryPage({
+        roomId,
+        beforeMessageId,
+        limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
+      }),
     };
   }
 
@@ -628,6 +653,29 @@ export async function startWorkspaceHttpServer(args: {
 
       if (request.method === "GET" && url.pathname === "/api/skills") {
         sendJson(response, 200, { skills: await args.runtime.listSkillCatalog() });
+        return;
+      }
+
+      const roomHistoryMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/history$/u);
+      if (request.method === "GET" && roomHistoryMatch) {
+        const [, roomId] = roomHistoryMatch;
+        if (!roomId) {
+          sendJson(response, 400, { error: "Missing room id" });
+          return;
+        }
+
+        const beforeMessageId = url.searchParams.get("before") ?? undefined;
+        const limitParam = url.searchParams.get("limit");
+        const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
+        sendJson(
+          response,
+          200,
+          await args.runtime.getRoomMessageHistoryPage({
+            roomId,
+            beforeMessageId,
+            limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
+          }),
+        );
         return;
       }
 

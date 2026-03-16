@@ -9,6 +9,7 @@ import { DefaultChatTransport } from "ai";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
+import { getVisibleRoomMessages } from "@/lib/chat/workspace-ui-message";
 import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import { OpenAquariumGlobalConfigManager } from "@/server/global-config";
 import { WorkspacePersistence } from "@/server/persistence";
@@ -626,6 +627,56 @@ describe("workspace http api routing", () => {
       statusCode: 400,
       payload: { error: "firstPrompt is no longer supported. Create the room first, then send the first message." },
     });
+  });
+
+  it("returns cursor-paged room history through the JSON API", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-history-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "History API",
+      templateId: "template-product-pod",
+    });
+
+    await runtime.sendUserMessage({ roomId: created.roomId, content: "history api first" });
+    await runtime.sendUserMessage({ roomId: created.roomId, content: "history api second" });
+    await runtime.sendUserMessage({ roomId: created.roomId, content: "history api third" });
+
+    const snapshot = runtime.getSnapshot();
+    const room = snapshot.rooms[created.roomId];
+    if (!room) {
+      throw new Error("Expected room");
+    }
+
+    const visibleMessages = getVisibleRoomMessages(snapshot, room);
+    const beforeMessageId = visibleMessages.at(-1)?.id;
+    if (!beforeMessageId) {
+      throw new Error("Expected visible messages");
+    }
+
+    const historyResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "GET",
+      pathname: `/api/rooms/${created.roomId}/history`,
+      searchParams: new URLSearchParams({
+        before: beforeMessageId,
+        limit: "2",
+      }),
+    });
+    const historyPayload = historyResult?.payload as {
+      messages: Array<{ id: string }>;
+      hasMore: boolean;
+    };
+
+    expect(historyResult?.statusCode).toBe(200);
+    expect(historyPayload.messages.map((message) => message.id)).toEqual(visibleMessages.slice(-3, -1).map((message) => message.id));
+    expect(historyPayload.hasMore).toBe(visibleMessages.length > 3);
   });
 
   it("supports deleting templates, rooms, and projects through the JSON API", async () => {

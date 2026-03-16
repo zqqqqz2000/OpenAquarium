@@ -4,7 +4,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type ChatTransport } from "ai";
 import { toast } from "sonner";
 
-import { ArrowUp, Bot, LoaderCircle, MessageSquare, Plus, Save, Settings2, Sparkles, Star, Trash2, X } from "lucide-react";
+import { ArrowUp, LoaderCircle, MessageSquare, Plus, Save, Settings2, Sparkles, Star, Trash2, X } from "lucide-react";
 
 import type {
   GlobalWorkspaceConfig,
@@ -70,7 +70,6 @@ import { cn } from "@/lib/utils";
 
 const ACCENT_TONES = ["paper", "postit", "blueprint", "correction"] as const;
 const CODEX_THINKING_DEPTHS = ["low", "mid", "high", "extra-high"] as const;
-
 function supportsCodexThinkingDepth(args: {
   modelProfileId?: string;
   globalConfig: GlobalWorkspaceConfig;
@@ -520,18 +519,6 @@ function TemplateStudioChatPanel(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 pt-4">
-      <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Bot size={18} />
-            <p className="m-0 text-base font-semibold tracking-tight">Team Builder</p>
-          </div>
-          <p className="m-0 text-sm leading-6 text-muted-foreground">
-            默认修改 <span className="font-medium">{template.name}</span>。要新建 template，直接说。
-          </p>
-        </div>
-      </section>
-
       <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
         <div ref={chatLogRootRef} className="min-h-0 flex-1">
           <ScrollArea className="h-full pr-1" data-testid="template-chat-log" aria-live="polite">

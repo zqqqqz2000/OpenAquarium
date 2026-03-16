@@ -1,5 +1,6 @@
 import type {
   GlobalWorkspaceConfig,
+  RoomMessageHistoryPage,
   TemplateStudioModelCatalog,
   UpdateRoomSettingsInput,
   UpdateRoomTeamInput,
@@ -137,6 +138,22 @@ export class WorkspaceRuntimeClient {
       }),
     );
     return payload.snapshot;
+  }
+
+  async getRoomMessageHistory(input: {
+    roomId: string;
+    beforeMessageId?: string;
+    limit?: number;
+  }): Promise<RoomMessageHistoryPage> {
+    const url = new URL(`${this.baseUrl}/api/rooms/${input.roomId}/history`);
+    if (input.beforeMessageId) {
+      url.searchParams.set("before", input.beforeMessageId);
+    }
+    if (typeof input.limit === "number") {
+      url.searchParams.set("limit", String(input.limit));
+    }
+
+    return parseJson(await fetch(url));
   }
 
   async updatePrompt(memberId: string, prompt: string): Promise<WorkspaceSnapshot> {
