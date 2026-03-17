@@ -1,4 +1,4 @@
-import type { MemberTask, Room, TeamMember, WorkspaceSnapshot } from "@/domain/model";
+import type { ChatMessage, MemberTask, Room, TeamMember, WorkspaceSnapshot } from "@/domain/model";
 
 export interface RoomDashboardMemberSummary {
   memberId: string;
@@ -21,6 +21,9 @@ export interface RoomDashboardTaskSpan {
   memberId: string;
   memberHandle: string;
   memberName: string;
+  sourceActorLabel: string;
+  sourcePreview: string;
+  messageLine: string;
   taskTitle: string;
   focusMessageId?: string;
   status: MemberTask["status"];
@@ -43,8 +46,104 @@ export interface RoomDashboardMetrics {
   executionTimeline: RoomDashboardTaskSpan[];
 }
 
+const TASK_ASSIGNMENT_PATTERN = /@>([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)?)/gu;
+const TASK_MESSAGE_MAX_LENGTH = 96;
+
 function toTimestamp(value: string): number {
   return new Date(value).getTime();
+}
+
+function normalizeSingleLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function summarizeLine(value: string, maxLength = TASK_MESSAGE_MAX_LENGTH): string {
+  const normalized = normalizeSingleLine(value);
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  if (maxLength <= 3) {
+    return ".".repeat(Math.max(maxLength, 0));
+  }
+
+  return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function normalizeTargetToken(value: string): string {
+  return value.trim().replace(/^[@>]+/u, "").toLowerCase();
+}
+
+function matchesTaskTarget(member: TeamMember | undefined, rawTarget: string): boolean {
+  if (!member) {
+    return false;
+  }
+
+  const normalizedTarget = normalizeTargetToken(rawTarget);
+  if (!normalizedTarget) {
+    return false;
+  }
+
+  const [roleOrHandle, explicitHandle] = normalizedTarget.split("/", 2);
+  const normalizedHandle = normalizeTargetToken(member.handle);
+  const normalizedRoleName = normalizeTargetToken(member.roleName);
+  const normalizedRoleId = normalizeTargetToken(member.roleId);
+
+  if (explicitHandle) {
+    return explicitHandle === normalizedHandle;
+  }
+
+  return roleOrHandle === normalizedHandle || roleOrHandle === normalizedRoleName || roleOrHandle === normalizedRoleId;
+}
+
+function resolveSourceActorLabel(snapshot: WorkspaceSnapshot, message?: ChatMessage): string {
+  if (!message) {
+    return "Unknown";
+  }
+
+  if (message.author.kind === "member") {
+    const member = snapshot.members[message.author.id];
+    return member ? member.handle : message.author.label;
+  }
+
+  return message.author.label;
+}
+
+function extractSourcePreview(message: ChatMessage | undefined, member: TeamMember | undefined): string {
+  if (!message) {
+    return "";
+  }
+
+  const trimmedContent = message.content.trim();
+  if (!trimmedContent) {
+    return "";
+  }
+
+  for (const match of trimmedContent.matchAll(TASK_ASSIGNMENT_PATTERN)) {
+    const rawTarget = match[1];
+    if (!rawTarget || !matchesTaskTarget(member, rawTarget)) {
+      continue;
+    }
+
+    const assignmentEndIndex = match.index + match[0].length;
+    const nextLineBreakIndex = trimmedContent.indexOf("\n", assignmentEndIndex);
+    const segment = trimmedContent
+      .slice(assignmentEndIndex, nextLineBreakIndex === -1 ? undefined : nextLineBreakIndex)
+      .replace(/^[\s，,、:：-]+/u, "")
+      .trim();
+
+    if (segment.length > 0) {
+      return segment;
+    }
+  }
+
+  const [firstLine = trimmedContent] = trimmedContent.split(/\r?\n/u);
+  return firstLine.trim();
+}
+
+function buildMessageLine(sourcePreview: string): string {
+  return summarizeLine(sourcePreview);
 }
 
 function computeTaskDurationMs(task: MemberTask): number {
@@ -146,13 +245,18 @@ export function buildRoomDashboardMetrics(
   const executionTimeline = roomTaskEntries.map<RoomDashboardTaskSpan>((task, index) => {
     const taskDurationMs = computeTaskDurationMs(task);
     const member = snapshot.members[task.memberId];
+    const sourceMessage = snapshot.messages[task.sourceMessageId];
     const offsetMs = minStartedAt ? Math.max(0, toTimestamp(task.startedAt) - toTimestamp(minStartedAt)) : 0;
+    const sourcePreview = extractSourcePreview(sourceMessage, member);
 
     return {
       taskId: task.id,
       memberId: task.memberId,
       memberHandle: member?.handle ?? task.memberId,
       memberName: member?.name ?? task.memberId,
+      sourceActorLabel: resolveSourceActorLabel(snapshot, sourceMessage),
+      sourcePreview,
+      messageLine: buildMessageLine(sourcePreview),
       taskTitle: task.title,
       focusMessageId: focusMessageIdByTaskId[task.id] ?? task.sourceMessageId,
       status: task.status,

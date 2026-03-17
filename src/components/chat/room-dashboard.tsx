@@ -99,12 +99,9 @@ export function RoomDashboard(props: {
                     }}
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="m-0 truncate text-sm font-semibold">
-                          #{span.order} @{span.memberHandle}
-                        </p>
-                        <p className="m-0 mt-1 truncate text-xs text-muted-foreground">{span.taskTitle}</p>
-                      </div>
+                      <p className="m-0 min-w-0 flex-1 truncate text-sm font-semibold">
+                        #{span.order} {span.sourceActorLabel} @{span.memberHandle}
+                      </p>
                       <div className="flex shrink-0 items-center gap-2">
                         <Badge variant={tone.variant} className={tone.className}>
                           {span.status}
@@ -112,6 +109,9 @@ export function RoomDashboard(props: {
                         <Badge variant="outline">{formatDurationLabel(span.durationMs)}</Badge>
                       </div>
                     </div>
+                    <p className="m-0 mt-1 truncate text-xs text-muted-foreground" title={span.sourcePreview}>
+                      {span.messageLine}
+                    </p>
                     <div className="mt-3 h-2 rounded-full bg-muted/65">
                       <div
                         className={cn(
