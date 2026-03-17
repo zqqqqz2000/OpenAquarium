@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { postMemberMessage } from "@/domain/workspace";
+import { postMemberMessage, postSystemMessage } from "@/domain/workspace";
 import { createRuntimeContext } from "@/domain/identity";
 import { mapRoomMessagesToUIMessages } from "@/lib/chat/workspace-ui-message";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
@@ -61,5 +61,26 @@ describe("workspace-ui-message mapping", () => {
     const messages = mapRoomMessagesToUIMessages(snapshot, room);
 
     expect(messages.some((message) => message.parts.some((part) => part.type === "text" && part.text.includes("Legacy watcher digest")))).toBe(false);
+  });
+
+  it("shows room status messages in the main room transcript", () => {
+    const context = createRuntimeContext();
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+
+    snapshot = postSystemMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        label: "Task status",
+        transport: "status",
+        content: "@lead 任务执行失败：当前任务在 300 秒内没有新的进度或完成信号。",
+      },
+      context,
+    );
+
+    const messages = mapRoomMessagesToUIMessages(snapshot, room);
+
+    expect(messages.some((message) => message.metadata?.transport === "status" && message.parts.some((part) => part.type === "text" && part.text.includes("任务执行失败")))).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import type { ChatMessage, MemberTask, Project, Room, TeamMember, WorkspaceSnapshot } from "../domain/model";
 import { extractAddressedMemberIds } from "../domain/workspace";
 import { resolveAvailableSkills } from "./skills";
-import { isVisibleMainRoomMessage } from "../lib/message-visibility";
+import { isVisibleMemberRoomMessage } from "../lib/message-visibility";
 import { formatTime } from "../lib/utils";
 import {
   getOpenAquariumScriptPath,
@@ -80,7 +80,7 @@ function describeMemberHandles(room: Room, snapshot: WorkspaceSnapshot): string 
 function getVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room): ChatMessage[] {
   return (snapshot.messageOrderByRoom[room.id] ?? [])
     .map((messageId) => snapshot.messages[messageId])
-    .filter((message): message is ChatMessage => Boolean(message) && isVisibleMainRoomMessage(message));
+    .filter((message): message is ChatMessage => Boolean(message) && isVisibleMemberRoomMessage(message));
 }
 
 function getPromptVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember): ChatMessage[] {

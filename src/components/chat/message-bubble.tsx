@@ -29,7 +29,7 @@ export interface MessageBubbleProps {
 function MessageBubbleBadges(props: { message: ChatMessage; contextBadges: ContextBadge[] }) {
   const { message, contextBadges } = props;
   const transportLabel =
-    message.transport === "direct" ? "Direct" : message.transport === "watch-digest" ? "Watcher" : "Room";
+    message.transport === "direct" ? "Direct" : message.transport === "watch-digest" ? "Watcher" : message.transport === "status" ? "Status" : "Room";
   const transportIcon =
     message.transport === "direct" ? <Lock size={14} /> : message.transport === "watch-digest" ? <PencilLine size={14} /> : <Megaphone size={14} />;
   const transportBadge =

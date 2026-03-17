@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createRuntimeContext } from "@/domain/identity";
-import { completeMemberTask, postUserMessage, runWatcher } from "@/domain/workspace";
+import { completeMemberTask, postSystemMessage, postUserMessage, runWatcher } from "@/domain/workspace";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { buildTaskPrompt, MEMBER_FULL_PROMPT_REFRESH_INTERVAL } from "@/server/prompt-builder";
 import type { MemberTask, WorkspaceSnapshot } from "@/domain/model";
@@ -667,5 +667,54 @@ describe("buildTaskPrompt", () => {
 
     expect(prompt).toContain("[Recent Room Transcript]");
     expect(prompt).toContain(monitorVisibleMessage);
+  });
+
+  it("excludes room status messages from member prompts", () => {
+    const context = createRuntimeContext(830, "2026-03-10T13:20:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "lead");
+
+    if (!lead) {
+      throw new Error("Expected the lead member");
+    }
+
+    const statusContent = "@lead 任务执行失败：当前任务在 300 秒内没有新的进度或完成信号。";
+    snapshot = postSystemMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        label: "Task status",
+        transport: "status",
+        content: statusContent,
+      },
+      context,
+    );
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>lead 继续处理当前问题",
+      },
+      context,
+    );
+
+    const nextLead = snapshot.members[lead.id];
+    const currentTask = nextLead.activeTaskId ? snapshot.tasks[nextLead.activeTaskId] : undefined;
+    if (!currentTask) {
+      throw new Error("Expected an active lead task");
+    }
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room: snapshot.rooms[room.id],
+      member: nextLead,
+      task: currentTask,
+      snapshot,
+    });
+
+    expect(prompt).not.toContain(statusContent);
   });
 });

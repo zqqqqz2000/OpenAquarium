@@ -163,7 +163,7 @@ export function ChatComposer(props: {
   };
 
   return (
-    <div className={cn("overflow-visible rounded-[1.75rem] border border-border/70 bg-card/95 shadow-sm", className)}>
+    <div className={cn("relative z-10 overflow-visible rounded-[1.75rem] border border-border/70 bg-card shadow-sm", className)}>
       <div className={cn("flex flex-col gap-2 p-3 md:p-3.5", contentClassName)}>
         <div className="relative">
           <Textarea

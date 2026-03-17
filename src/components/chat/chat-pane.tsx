@@ -908,7 +908,7 @@ export function ChatPane(props: {
                 </div>
               </div>
             ) : null}
-            <div ref={transcriptRef} className="h-full min-h-0 overflow-y-auto" onScroll={updateScrollState}>
+            <div ref={transcriptRef} className="h-full min-h-0 overflow-y-auto pb-4" onScroll={updateScrollState}>
               {historyLoading && transcriptMessages.length === 0 ? (
                 <Card className="border border-border shadow-none">
                   <CardContent className="flex items-center gap-4 p-5">

@@ -20,14 +20,14 @@ export function isVisibleRoomMessage(message: ChatMessage): boolean {
   return resolveMessageVisibility(message) === "public";
 }
 
-export function isVisibleMainRoomMessage(
+function isVisiblePublicNonDirectRoomMessage(message: ChatMessage): boolean {
+  return isVisibleRoomMessage(message) && message.transport !== "direct";
+}
+
+function isVisibleForRoomMemberSelection(
   message: ChatMessage,
   visibleMemberIds?: ReadonlySet<MemberId>,
 ): boolean {
-  if (!isVisibleRoomMessage(message) || message.transport === "direct") {
-    return false;
-  }
-
   if (message.author.kind !== "member") {
     return true;
   }
@@ -37,4 +37,26 @@ export function isVisibleMainRoomMessage(
   }
 
   return visibleMemberIds.has(message.author.id);
+}
+
+export function isVisibleMainRoomMessage(
+  message: ChatMessage,
+  visibleMemberIds?: ReadonlySet<MemberId>,
+): boolean {
+  if (!isVisiblePublicNonDirectRoomMessage(message)) {
+    return false;
+  }
+
+  return isVisibleForRoomMemberSelection(message, visibleMemberIds);
+}
+
+export function isVisibleMemberRoomMessage(
+  message: ChatMessage,
+  visibleMemberIds?: ReadonlySet<MemberId>,
+): boolean {
+  if (!isVisiblePublicNonDirectRoomMessage(message) || message.transport === "status") {
+    return false;
+  }
+
+  return isVisibleForRoomMemberSelection(message, visibleMemberIds);
 }

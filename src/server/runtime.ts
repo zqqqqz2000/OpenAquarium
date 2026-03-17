@@ -27,6 +27,7 @@ import {
   extractMentionMemberIds,
   postMemberMessage,
   postMemberDraft,
+  postSystemMessage,
   postUserMessage,
   pauseWatcherUntilActivity as pauseWatcherUntilActivityInWorkspace,
   runWatcher,
@@ -69,6 +70,7 @@ import { loadRoomMessageHistoryPage, syncRoomMessageHistoryFiles } from "./room-
 import { normalizeProjectPath, resolveProjectWorkingDirectory } from "./project-paths";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
+import { isVisibleMemberRoomMessage } from "../lib/message-visibility";
 import { CODEX_ACP_THINKING_DEPTH_ENV_KEY } from "../lib/acp/providers/codex-session";
 import { createDefaultGlobalWorkspaceConfig, findProviderModelProfile, resolveProviderBindingFromProfile } from "../lib/provider-model-profiles";
 import { resolveRoomTeamSummary } from "../lib/room-team";
@@ -200,13 +202,11 @@ function buildTaskExecutionRetryMessage(args: { timeoutMs: number; retryAttempt:
   return `当前任务在 ${seconds} 秒内没有新的进度或完成信号，已判定为卡死，正在重试（${args.retryAttempt}/${args.maxRetries}）。`;
 }
 
-function buildVisibleTaskFailureContent(message: string): string {
-  const compactMessage = message
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/@([\p{L}\p{N}_-]+)/gu, "at $1");
+function buildVisibleTaskFailureContent(member: Pick<TeamMember, "handle">, message: string): string {
+  const compactMessage = message.replace(/\s+/g, " ").trim();
+  const prefix = `@${member.handle} 任务执行失败`;
 
-  return compactMessage.length > 0 ? `任务执行失败：${compactMessage}` : "任务执行失败。";
+  return compactMessage.length > 0 ? `${prefix}：${compactMessage}` : `${prefix}。`;
 }
 
 const TOOL_STATUS_PREFIX = "__oa_tool__";
@@ -1108,12 +1108,16 @@ export class WorkspaceRuntime {
     const projectWorkingDirectory = project ? resolveProjectWorkingDirectory(project, this.workspaceRoot) : this.workspaceRoot;
 
     const transcript = (this.snapshot.messageOrderByRoom[roomId] ?? [])
-      .slice(-20)
       .map((messageId) => {
         const message = this.snapshot.messages[messageId];
-        return message ? `[${message.createdAt}] ${message.author.label}: ${message.content}` : undefined;
+        if (!message || !isVisibleMemberRoomMessage(message)) {
+          return undefined;
+        }
+
+        return `[${message.createdAt}] ${message.author.label}: ${message.content}`;
       })
       .filter((line): line is string => Boolean(line))
+      .slice(-20)
       .join("\n");
 
     const roomTeam = resolveRoomTeamSummary(this.snapshot, room);
@@ -1922,20 +1926,18 @@ export class WorkspaceRuntime {
       },
       this.context,
     );
-    const snapshotWithVisibleFailure = postMemberMessage(
+    const snapshotWithStatusMessage = postSystemMessage(
       snapshotWithTrace,
       {
         roomId: args.task.roomId,
-        memberId: args.member.id,
-        taskId: args.task.id,
-        content: buildVisibleTaskFailureContent(args.errorMessage),
-        mentionedMemberIds: [],
-        quotedMemberIds: [],
+        label: "Task status",
+        transport: "status",
+        content: buildVisibleTaskFailureContent(args.member, args.errorMessage),
       },
       this.context,
     );
     const next = completeMemberTask(
-      snapshotWithVisibleFailure,
+      snapshotWithStatusMessage,
       {
         taskId: args.task.id,
       },

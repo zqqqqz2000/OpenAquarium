@@ -19,7 +19,7 @@ import type {
   MemberExecutorFactory,
 } from "@/server/executor";
 import { WorkspacePersistence } from "@/server/persistence";
-import { getRoomTranscriptFilePath } from "@/server/room-transcript-files";
+import { getMemberHistoryFilePath, getRoomTranscriptFilePath } from "@/server/room-transcript-files";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
 
 class FakeExecutor implements MemberExecutor {
@@ -526,7 +526,7 @@ describe("WorkspaceRuntime", () => {
     ).toBeUndefined();
   });
 
-  it("publishes a room-visible failure message when the executor reports an error", async () => {
+  it("publishes executor-reported failures as room status without exposing them to members", async () => {
     const workspaceRoot = await mkdtemp(
       path.join(os.tmpdir(), "oa-runtime-error-message-"),
     );
@@ -576,6 +576,13 @@ describe("WorkspaceRuntime", () => {
         getRoomTranscriptFilePath(workspaceRoot, room),
         "utf8",
       );
+      const memberHistory = await readFile(
+        getMemberHistoryFilePath(workspaceRoot, room, lead),
+        "utf8",
+      );
+      const roomState = (
+        runtime as unknown as { describeRoomState: (roomId: string) => string }
+      ).describeRoomState(roomId);
 
       expect(leadTask.status).toBe("completed");
       expect(
@@ -589,13 +596,20 @@ describe("WorkspaceRuntime", () => {
       expect(
         roomMessages.some(
           (message) =>
-            message.author.kind === "member" &&
+            message.author.kind === "system" &&
+            message.transport === "status" &&
             message.content ===
-              "任务执行失败：executor reported at builder failure with details",
+              "@lead 任务执行失败：executor reported @builder failure with details",
         ),
       ).toBe(true);
-      expect(transcript).toContain(
-        "任务执行失败：executor reported at builder failure with details",
+      expect(transcript).not.toContain(
+        "@lead 任务执行失败：executor reported @builder failure with details",
+      );
+      expect(memberHistory).not.toContain(
+        "executor reported @builder failure",
+      );
+      expect(roomState).not.toContain(
+        "@lead 任务执行失败：executor reported @builder failure with details",
       );
       expect(
         Object.values(snapshot.tasks).some(
@@ -605,7 +619,7 @@ describe("WorkspaceRuntime", () => {
     });
   });
 
-  it("captures an error trace when execution crashes before ACP completes", async () => {
+  it("publishes crash failures as room status without exposing them to members", async () => {
     const workspaceRoot = await mkdtemp(
       path.join(os.tmpdir(), "oa-runtime-crash-"),
     );
@@ -648,6 +662,13 @@ describe("WorkspaceRuntime", () => {
         getRoomTranscriptFilePath(workspaceRoot, room),
         "utf8",
       );
+      const memberHistory = await readFile(
+        getMemberHistoryFilePath(workspaceRoot, room, lead),
+        "utf8",
+      );
+      const roomState = (
+        runtime as unknown as { describeRoomState: (roomId: string) => string }
+      ).describeRoomState(roomId);
 
       expect(leadTask.status).toBe("completed");
       expect(
@@ -660,11 +681,14 @@ describe("WorkspaceRuntime", () => {
       expect(
         roomMessages.some(
           (message) =>
-            message.author.kind === "member" &&
-            message.content === "任务执行失败：executor crashed at builder",
+            message.author.kind === "system" &&
+            message.transport === "status" &&
+            message.content === "@lead 任务执行失败：executor crashed @builder",
         ),
       ).toBe(true);
-      expect(transcript).toContain("任务执行失败：executor crashed at builder");
+      expect(transcript).not.toContain("@lead 任务执行失败：executor crashed @builder");
+      expect(memberHistory).not.toContain("executor crashed @builder");
+      expect(roomState).not.toContain("@lead 任务执行失败：executor crashed @builder");
       expect(
         Object.values(snapshot.tasks).some(
           (task) => snapshot.members[task.memberId]?.handle === "builder",
@@ -744,7 +768,8 @@ describe("WorkspaceRuntime", () => {
     expect(
       roomMessages.some(
         (message) =>
-          message.author.kind === "member" &&
+          message.author.kind === "system" &&
+          message.transport === "status" &&
           message.content.includes(
             "Executor returned without reporting completion or failure.",
           ),
@@ -805,6 +830,21 @@ describe("WorkspaceRuntime", () => {
     const leadTraceEntries = (
       snapshot.taskTraceOrderByTask[leadTask.id] ?? []
     ).map((traceId) => snapshot.taskTraces[traceId]);
+    const room = snapshot.rooms[created.roomId];
+    const transcript = await readFile(
+      getRoomTranscriptFilePath(workspaceRoot, room),
+      "utf8",
+    );
+    const memberHistory = await readFile(
+      getMemberHistoryFilePath(workspaceRoot, room, lead),
+      "utf8",
+    );
+    const roomMessages = (
+      snapshot.messageOrderByRoom[created.roomId] ?? []
+    ).map((messageId) => snapshot.messages[messageId]);
+    const roomState = (
+      runtime as unknown as { describeRoomState: (roomId: string) => string }
+    ).describeRoomState(created.roomId);
 
     expect(leadTask.status).toBe("completed");
     expect(observedErrors[0]).toContain("没有新的进度或完成信号");
@@ -819,6 +859,17 @@ describe("WorkspaceRuntime", () => {
           entry.content.includes("没有新的进度或完成信号"),
       ),
     ).toBe(true);
+    expect(
+      roomMessages.some(
+        (message) =>
+          message.author.kind === "system" &&
+          message.transport === "status" &&
+          message.content.includes("没有新的进度或完成信号"),
+      ),
+    ).toBe(true);
+    expect(transcript).not.toContain("没有新的进度或完成信号");
+    expect(memberHistory).not.toContain("没有新的进度或完成信号");
+    expect(roomState).not.toContain("没有新的进度或完成信号");
   });
 
   it("reaps a zombie running task when its last progress is older than the inactivity timeout", async () => {

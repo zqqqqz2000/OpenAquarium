@@ -16,6 +16,9 @@ import type {
   RoomId,
   Room,
   RoomTeamMemberInput,
+  MessageStatus,
+  MessageTransport,
+  MessageVisibility,
   TaskId,
   TaskTraceEntry,
   TemplateId,
@@ -149,15 +152,20 @@ function insertSystemRoomMessage(snapshot: WorkspaceSnapshot, args: {
   content: string;
   createdAt: string;
   createId: MutationContext["createId"];
+  label?: string;
+  transport?: Extract<MessageTransport, "group" | "status">;
+  status?: MessageStatus;
+  visibility?: MessageVisibility;
 }): void {
   insertMessage(snapshot, {
     id: args.createId("message"),
     roomId: args.roomId,
-    author: buildSystemAuthor("System"),
+    author: buildSystemAuthor(args.label ?? "System"),
     content: args.content,
     createdAt: args.createdAt,
-    transport: "group",
-    status: "sent",
+    transport: args.transport ?? "group",
+    status: args.status ?? "sent",
+    visibility: args.visibility,
     mentionedMemberIds: [],
     quotedMemberIds: [],
     recipientMemberIds: [],
@@ -1293,6 +1301,44 @@ export function postMemberMessage(
   return snapshot;
 }
 
+export function postSystemMessage(
+  current: WorkspaceSnapshot,
+  input: {
+    roomId: RoomId;
+    content: string;
+    label?: string;
+    transport?: Extract<MessageTransport, "group" | "status">;
+    status?: MessageStatus;
+    visibility?: MessageVisibility;
+  },
+  context: MutationContext,
+): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const room = snapshot.rooms[input.roomId];
+
+  if (!room) {
+    throw new Error(`Unknown room "${input.roomId}"`);
+  }
+
+  const content = input.content.trim();
+  if (content.length === 0) {
+    return snapshot;
+  }
+
+  insertSystemRoomMessage(snapshot, {
+    roomId: room.id,
+    content,
+    createdAt: context.now(),
+    createId: context.createId,
+    label: input.label,
+    transport: input.transport,
+    status: input.status,
+    visibility: input.visibility,
+  });
+
+  return snapshot;
+}
+
 export function postMemberDraft(
   current: WorkspaceSnapshot,
   input: PostMemberDraftInput,
@@ -2176,6 +2222,7 @@ function shouldExcludeFromWatcherDigest(snapshot: WorkspaceSnapshot, messageId: 
   return (
     message.visibility === "internal"
     || message.transport === "watch-digest"
+    || message.transport === "status"
     || isWatcherTaskOutput(snapshot, message)
     || isTemplateAckMessage(message)
     || isDigestLikeMessageContent(message.content)

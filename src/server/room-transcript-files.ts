@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { ChatMessage, Room, TeamMember, WorkspaceSnapshot } from "../domain/model";
 import { getMemberSessionEntries, type MemberSessionEntry } from "../lib/member-session-feed";
-import { isVisibleMainRoomMessage } from "../lib/message-visibility";
+import { isVisibleMemberRoomMessage } from "../lib/message-visibility";
 
 function formatHandles(prefix: string, memberIds: string[], snapshot: WorkspaceSnapshot, marker = "@"): string[] {
   if (memberIds.length === 0) {
@@ -35,7 +35,7 @@ function formatTranscriptEntry(snapshot: WorkspaceSnapshot, message: ChatMessage
 function getVisibleMainRoomMessages(snapshot: WorkspaceSnapshot, roomId: string): ChatMessage[] {
   return (snapshot.messageOrderByRoom[roomId] ?? [])
     .map((messageId) => snapshot.messages[messageId])
-    .filter((message): message is ChatMessage => Boolean(message) && isVisibleMainRoomMessage(message));
+    .filter((message): message is ChatMessage => Boolean(message) && isVisibleMemberRoomMessage(message));
 }
 
 export function getRoomContextDirectoryPath(workspaceRoot: string, room: Room): string {
@@ -114,6 +114,11 @@ function formatMemberHistoryEntry(entry: MemberSessionEntry): string {
   return `${lines.join("\n")}\n`;
 }
 
+function shouldExportMemberHistoryEntry(entry: MemberSessionEntry): boolean {
+  // Runtime failure traces are internal status and should not become member-readable context.
+  return entry.type !== "trace" || entry.traceKind !== "error";
+}
+
 async function ensureMemberHistoryFile(
   filePath: string,
   snapshot: WorkspaceSnapshot,
@@ -126,6 +131,7 @@ async function ensureMemberHistoryFile(
   } catch {
     await mkdir(path.dirname(filePath), { recursive: true });
     const entries = getMemberSessionEntries(snapshot, room, member)
+      .filter(shouldExportMemberHistoryEntry)
       .map((entry) => formatMemberHistoryEntry(entry))
       .join("");
     const header = [
@@ -181,9 +187,12 @@ export async function syncRoomTranscriptFiles(args: {
           }
 
           const previousMember = previous.members[member.id];
-          const previousEntries = previousMember ? getMemberSessionEntries(previous, room, previousMember) : [];
+          const previousEntries = previousMember
+            ? getMemberSessionEntries(previous, room, previousMember).filter(shouldExportMemberHistoryEntry)
+            : [];
           const previousEntryIds = new Set(previousEntries.map((entry) => entry.id));
           const nextEntries = getMemberSessionEntries(next, room, member)
+            .filter(shouldExportMemberHistoryEntry)
             .filter((entry) => !previousEntryIds.has(entry.id))
             .map((entry) => formatMemberHistoryEntry(entry))
             .join("");
