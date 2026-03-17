@@ -25,7 +25,7 @@ export function JsonEditor(props: {
   return (
     <div
       className={cn(
-        "oa-json-editor relative overflow-hidden rounded-lg border border-transparent bg-transparent text-sm transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+        "oa-json-editor overflow-hidden rounded-lg border border-transparent bg-transparent text-sm transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
         className,
       )}
     >
@@ -33,7 +33,7 @@ export function JsonEditor(props: {
         ref={preRef}
         aria-hidden="true"
         className={cn(
-          "oa-json-editor__surface pointer-events-none min-h-28 overflow-auto px-2.5 py-2.5",
+          "oa-json-editor__surface pointer-events-none min-h-28 overflow-auto",
           value.length === 0 && "opacity-70",
         )}
       >
@@ -56,7 +56,7 @@ export function JsonEditor(props: {
           preRef.current.scrollTop = event.currentTarget.scrollTop;
           preRef.current.scrollLeft = event.currentTarget.scrollLeft;
         }}
-        className="oa-json-editor__textarea absolute inset-0 min-h-28 w-full resize-y bg-transparent px-2.5 py-2.5"
+        className="oa-json-editor__textarea min-h-28 w-full resize-y bg-transparent"
       />
     </div>
   );
