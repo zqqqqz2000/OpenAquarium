@@ -1,6 +1,7 @@
-import { startTransition, useEffect, useState, type CSSProperties, type PointerEvent } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useState, type CSSProperties, type PointerEvent } from "react";
 
 import { useNavigate } from "@tanstack/react-router";
+import { shallow } from "zustand/shallow";
 
 import type { Room, WorkspaceSnapshot } from "@/domain/model";
 import { ChatPane } from "@/components/chat/chat-pane";
@@ -95,29 +96,115 @@ function resolveFallbackRoomRoute(snapshot: WorkspaceSnapshot): { projectId: str
   return undefined;
 }
 
+interface WorkspaceSidebarData {
+  projects: ReturnType<typeof buildProjectActivitySummaries>[number]["project"][];
+  roomsByProject: Record<string, Room[]>;
+  projectActivityById: Record<string, ReturnType<typeof buildProjectActivitySummaries>[number]>;
+  roomActivityById: ReturnType<typeof buildRoomActivityIndex>;
+  projectUnreadCountById: Record<string, number>;
+  roomUnreadCountById: Record<string, number>;
+  projectRunningMembersById: Record<string, ReturnType<typeof buildRunningMemberPreviewsForRoom>>;
+  roomRunningMembersById: Record<string, ReturnType<typeof buildRunningMemberPreviewsForRoom>>;
+}
+
+function buildRoomActivityIndex(projectSummaries: ReturnType<typeof buildProjectActivitySummaries>) {
+  return Object.fromEntries(
+    projectSummaries.flatMap((summary) => summary.rooms.map((roomSummary) => [roomSummary.room.id, roomSummary])),
+  ) as Record<string, ReturnType<typeof buildProjectActivitySummaries>[number]["rooms"][number]>;
+}
+
+function buildWorkspaceSidebarData(snapshot: WorkspaceSnapshot): WorkspaceSidebarData {
+  const projectSummaries = buildProjectActivitySummaries(snapshot);
+  const projects = projectSummaries.map((summary) => summary.project);
+  const roomsByProject = Object.fromEntries(
+    projectSummaries.map((summary) => [summary.project.id, summary.rooms.map((roomSummary) => roomSummary.room)]),
+  ) as Record<string, Room[]>;
+  const projectActivityById = Object.fromEntries(
+    projectSummaries.map((summary) => [summary.project.id, summary]),
+  ) as Record<string, ReturnType<typeof buildProjectActivitySummaries>[number]>;
+  const roomActivityById = buildRoomActivityIndex(projectSummaries);
+  const roomUnreadCountById = Object.fromEntries(
+    Object.values(snapshot.rooms).map((candidateRoom) => [candidateRoom.id, candidateRoom.unreadMemberMessageCount ?? 0]),
+  ) as Record<string, number>;
+  const projectUnreadCountById = Object.fromEntries(
+    projects.map((projectEntry) => [
+      projectEntry.id,
+      (roomsByProject[projectEntry.id] ?? []).reduce(
+        (count, candidateRoom) => count + (roomUnreadCountById[candidateRoom.id] ?? 0),
+        0,
+      ),
+    ]),
+  ) as Record<string, number>;
+  const roomRunningMembersById = Object.fromEntries(
+    Object.values(snapshot.rooms).map((candidateRoom) => [candidateRoom.id, buildRunningMemberPreviewsForRoom(snapshot, candidateRoom)]),
+  ) as Record<string, ReturnType<typeof buildRunningMemberPreviewsForRoom>>;
+  const projectRunningMembersById = Object.fromEntries(
+    projects.map((projectEntry) => [
+      projectEntry.id,
+      (roomsByProject[projectEntry.id] ?? []).flatMap((candidateRoom) => roomRunningMembersById[candidateRoom.id] ?? []),
+    ]),
+  ) as Record<string, ReturnType<typeof buildRunningMemberPreviewsForRoom>>;
+
+  return {
+    projects,
+    roomsByProject,
+    projectActivityById,
+    roomActivityById,
+    projectUnreadCountById,
+    roomUnreadCountById,
+    projectRunningMembersById,
+    roomRunningMembersById,
+  };
+}
+
 export function WorkspaceScreen(props: { projectId?: string; roomId?: string; memberId?: string }) {
   const { projectId, roomId, memberId } = props;
   const navigate = useNavigate();
   const snapshot = useWorkspaceStore((state) => state.snapshot);
-  const globalConfig = useWorkspaceStore((state) => state.globalConfig);
-  const loading = useWorkspaceStore((state) => state.loading);
-  const connected = useWorkspaceStore((state) => state.connected);
-  const error = useWorkspaceStore((state) => state.error);
-  const deleteProject = useWorkspaceStore((state) => state.deleteProject);
-  const deleteRoom = useWorkspaceStore((state) => state.deleteRoom);
-  const deleteTemplate = useWorkspaceStore((state) => state.deleteTemplate);
-  const selectRoom = useWorkspaceStore((state) => state.selectRoom);
-  const selectMember = useWorkspaceStore((state) => state.selectMember);
-  const runWatcher = useWorkspaceStore((state) => state.runWatcher);
-  const updateMemberConfig = useWorkspaceStore((state) => state.updateMemberConfig);
-  const updateRoomSettings = useWorkspaceStore((state) => state.updateRoomSettings);
-  const updateRoomTeam = useWorkspaceStore((state) => state.updateRoomTeam);
-  const updateTemplate = useWorkspaceStore((state) => state.updateTemplate);
-  const updateGlobalConfig = useWorkspaceStore((state) => state.updateGlobalConfig);
-  const replaceRemoteState = useWorkspaceStore((state) => state.replaceRemoteState);
-  const setEntryMember = useWorkspaceStore((state) => state.setEntryMember);
-  const upsertWatcher = useWorkspaceStore((state) => state.upsertWatcher);
-  const sendUserMessage = useWorkspaceStore((state) => state.sendUserMessage);
+  const {
+    globalConfig,
+    loading,
+    connected,
+    error,
+    deleteProject,
+    deleteRoom,
+    deleteTemplate,
+    selectRoom,
+    selectMember,
+    runWatcher,
+    updateMemberConfig,
+    updateRoomSettings,
+    updateRoomTeam,
+    updateTemplate,
+    updateGlobalConfig,
+    replaceRemoteState,
+    setEntryMember,
+    upsertWatcher,
+    sendUserMessage,
+  } = useWorkspaceStore(
+    (state) => ({
+      globalConfig: state.globalConfig,
+      loading: state.loading,
+      connected: state.connected,
+      error: state.error,
+      deleteProject: state.deleteProject,
+      deleteRoom: state.deleteRoom,
+      deleteTemplate: state.deleteTemplate,
+      selectRoom: state.selectRoom,
+      selectMember: state.selectMember,
+      runWatcher: state.runWatcher,
+      updateMemberConfig: state.updateMemberConfig,
+      updateRoomSettings: state.updateRoomSettings,
+      updateRoomTeam: state.updateRoomTeam,
+      updateTemplate: state.updateTemplate,
+      updateGlobalConfig: state.updateGlobalConfig,
+      replaceRemoteState: state.replaceRemoteState,
+      setEntryMember: state.setEntryMember,
+      upsertWatcher: state.upsertWatcher,
+      sendUserMessage: state.sendUserMessage,
+    }),
+    shallow,
+  );
   const [templateStudioOpen, setTemplateStudioOpen] = useState(false);
   const [roomTeamOpen, setRoomTeamOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | undefined>(undefined);
@@ -134,6 +221,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     setLeftWidth,
     setRightWidth,
   } = useShellPanels();
+  const deferredSnapshot = useDeferredValue(snapshot);
 
   useEffect(() => {
     if (projectId && roomId) {
@@ -152,38 +240,28 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const selectedRoomId = roomId ?? snapshot.selection.roomId ?? roomIds[0];
   const room = selectedRoomId ? snapshot.rooms[selectedRoomId] : undefined;
   const template = room ? snapshot.templates[room.templateId] : undefined;
-  const roomTeam = room ? resolveRoomTeamSummary(snapshot, room) : undefined;
-  const members = room ? room.memberIds.map((memberId) => snapshot.members[memberId]) : [];
+  const roomTeam = useMemo(
+    () => (room ? resolveRoomTeamSummary(snapshot, room) : undefined),
+    [room, snapshot.members, snapshot.templates],
+  );
+  const members = useMemo(
+    () => (room ? room.memberIds.map((candidateMemberId) => snapshot.members[candidateMemberId]).filter(Boolean) : []),
+    [room, snapshot.members],
+  );
   const routedMember = memberId ? members.find((candidate) => candidate.id === memberId) : undefined;
   const selectedMemberId = routedMember?.id ?? snapshot.selection.memberId;
-  const projectSummaries = buildProjectActivitySummaries(snapshot);
-  const projects = projectSummaries.map((summary) => summary.project);
-  const roomsByProject = Object.fromEntries(projectSummaries.map((summary) => [summary.project.id, summary.rooms.map((room) => room.room)])) as Record<
-    string,
-    Room[]
-  >;
-  const projectActivityById = Object.fromEntries(projectSummaries.map((summary) => [summary.project.id, summary]));
-  const roomActivityById = Object.fromEntries(
-    projectSummaries.flatMap((summary) => summary.rooms.map((roomSummary) => [roomSummary.room.id, roomSummary])),
+  const sidebarData = useMemo(
+    () => buildWorkspaceSidebarData(deferredSnapshot),
+    [
+      deferredSnapshot.members,
+      deferredSnapshot.projectOrder,
+      deferredSnapshot.projects,
+      deferredSnapshot.roomOrderByProject,
+      deferredSnapshot.rooms,
+      deferredSnapshot.taskTraces,
+      deferredSnapshot.tasks,
+    ],
   );
-  const roomUnreadCountById = Object.fromEntries(
-    Object.values(snapshot.rooms).map((candidateRoom) => [candidateRoom.id, candidateRoom.unreadMemberMessageCount ?? 0]),
-  ) as Record<string, number>;
-  const projectUnreadCountById = Object.fromEntries(
-    projects.map((projectEntry) => [
-      projectEntry.id,
-      (roomsByProject[projectEntry.id] ?? []).reduce((count, candidateRoom) => count + (roomUnreadCountById[candidateRoom.id] ?? 0), 0),
-    ]),
-  ) as Record<string, number>;
-  const roomRunningMembersById = Object.fromEntries(
-    Object.values(snapshot.rooms).map((candidateRoom) => [candidateRoom.id, buildRunningMemberPreviewsForRoom(snapshot, candidateRoom)]),
-  ) as Record<string, ReturnType<typeof buildRunningMemberPreviewsForRoom>>;
-  const projectRunningMembersById = Object.fromEntries(
-    projects.map((projectEntry) => [
-      projectEntry.id,
-      (roomsByProject[projectEntry.id] ?? []).flatMap((candidateRoom) => roomRunningMembersById[candidateRoom.id] ?? []),
-    ]),
-  ) as Record<string, ReturnType<typeof buildRunningMemberPreviewsForRoom>>;
   const openMemberStudio = (targetMemberId: string): void => {
     selectMember(targetMemberId);
     if (!selectedProjectId || !selectedRoomId) {
@@ -364,14 +442,14 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
         ) : null}
         <Sidebar
           collapsed={leftCollapsed}
-          projects={projects}
-          roomsByProject={roomsByProject}
-          projectActivityById={projectActivityById}
-          roomActivityById={roomActivityById}
-          projectUnreadCountById={projectUnreadCountById}
-          roomUnreadCountById={roomUnreadCountById}
-          projectRunningMembersById={projectRunningMembersById}
-          roomRunningMembersById={roomRunningMembersById}
+          projects={sidebarData.projects}
+          roomsByProject={sidebarData.roomsByProject}
+          projectActivityById={sidebarData.projectActivityById}
+          roomActivityById={sidebarData.roomActivityById}
+          projectUnreadCountById={sidebarData.projectUnreadCountById}
+          roomUnreadCountById={sidebarData.roomUnreadCountById}
+          projectRunningMembersById={sidebarData.projectRunningMembersById}
+          roomRunningMembersById={sidebarData.roomRunningMembersById}
           activeProjectId={selectedProjectId}
           activeRoomId={selectedRoomId}
           templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}

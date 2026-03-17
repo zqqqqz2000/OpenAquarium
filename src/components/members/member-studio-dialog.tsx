@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Clock3, Settings2, Star } from "lucide-react";
 import { toast } from "sonner";
@@ -113,6 +113,10 @@ export function MemberStudioDialog(props: {
   const [errorByMember, setErrorByMember] = useState<Record<string, string | undefined>>({});
   const [activeTab, setActiveTab] = useState("session");
   const globalConfig = incomingGlobalConfig ?? createDefaultGlobalWorkspaceConfig();
+  const memberHistory = useMemo(
+    () => (room && member && activeTab === "history" ? getMemberHistory(snapshot, room, member) : []),
+    [activeTab, member, room, snapshot],
+  );
 
   if (!room || !member) {
     return null;
@@ -121,7 +125,6 @@ export function MemberStudioDialog(props: {
   const activeTask = member.activeTaskId ? snapshot.tasks[member.activeTaskId] : undefined;
   const watcher = getWatcherForMember(room, snapshot, member.id);
   const cliCommands = buildMemberCliCommands(room, member);
-  const memberHistory = getMemberHistory(snapshot, room, member);
   const configDraft = configDrafts[member.id] ?? createMemberConfigDraft(member);
   const watcherDraft = watcherDrafts[member.id] ?? createWatcherDraft(watcher);
   const memberError = errorByMember[member.id];

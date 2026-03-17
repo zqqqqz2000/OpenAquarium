@@ -109,4 +109,37 @@ describe("workspace remote store", () => {
     expect(store.getState().globalConfig.directory).toBe("/tmp/stream-sync");
     expect(store.getState().error).toBeUndefined();
   });
+
+  it("reuses the current snapshot tree when an incoming snapshot is value-identical", () => {
+    const initialSnapshot = createSeedWorkspace();
+    const store = createWorkspaceRemoteStore(createClient(createDefaultWorkspaceSnapshot()));
+
+    store.getState().replaceSnapshot(initialSnapshot);
+    const previousSnapshot = store.getState().snapshot;
+
+    store.getState().replaceSnapshot(structuredClone(initialSnapshot));
+
+    expect(store.getState().snapshot).toBe(previousSnapshot);
+  });
+
+  it("keeps untouched branches stable when a streamed snapshot changes one member", () => {
+    const initialSnapshot = createSeedWorkspace();
+    const store = createWorkspaceRemoteStore(createClient(createDefaultWorkspaceSnapshot()));
+
+    store.getState().replaceSnapshot(initialSnapshot);
+    const previousSnapshot = store.getState().snapshot;
+    const targetRoomId = previousSnapshot.selection.roomId!;
+    const targetMemberId = previousSnapshot.rooms[targetRoomId]!.memberIds[0]!;
+    const nextSnapshot = structuredClone(initialSnapshot);
+    nextSnapshot.members[targetMemberId] = {
+      ...nextSnapshot.members[targetMemberId],
+      status: nextSnapshot.members[targetMemberId]?.status === "running" ? "idle" : "running",
+    };
+
+    store.getState().replaceSnapshot(nextSnapshot);
+
+    expect(store.getState().snapshot).not.toBe(previousSnapshot);
+    expect(store.getState().snapshot.rooms[targetRoomId]).toBe(previousSnapshot.rooms[targetRoomId]);
+    expect(store.getState().snapshot.members[targetMemberId]).not.toBe(previousSnapshot.members[targetMemberId]);
+  });
 });

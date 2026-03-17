@@ -1,7 +1,6 @@
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 
 import { RootLayout } from "@/app/root-layout";
-import { WorkspaceScreen } from "@/components/layout/workspace-screen";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -10,25 +9,19 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: () => <WorkspaceScreen />,
+  component: () => null,
 });
 
 const roomRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/projects/$projectId/rooms/$roomId",
-  component: () => {
-    const params = roomRoute.useParams();
-    return <WorkspaceScreen projectId={params.projectId} roomId={params.roomId} />;
-  },
+  component: () => null,
 });
 
 const memberStudioRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/projects/$projectId/rooms/$roomId/members/$memberId",
-  component: () => {
-    const params = memberStudioRoute.useParams();
-    return <WorkspaceScreen projectId={params.projectId} roomId={params.roomId} memberId={params.memberId} />;
-  },
+  component: () => null,
 });
 
 const routeTree = rootRoute.addChildren([indexRoute, roomRoute, memberStudioRoute]);

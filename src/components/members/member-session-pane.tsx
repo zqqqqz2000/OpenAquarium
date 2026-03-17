@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDown,
   Bot,
@@ -482,13 +483,25 @@ export function MemberSessionPane(props: {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const previousMemberIdRef = useRef<string | undefined>(undefined);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+  const deferredSnapshot = useDeferredValue(snapshot);
+  const deferredRoom = deferredSnapshot.rooms[room.id] ?? room;
+  const deferredMember = deferredSnapshot.members[member.id] ?? member;
   const sessionEntries = useMemo(
-    () => getMemberSessionTimelineEntries(snapshot, room, member),
-    [member, room, snapshot],
+    () => getMemberSessionTimelineEntries(deferredSnapshot, deferredRoom, deferredMember),
+    [deferredMember, deferredRoom, deferredSnapshot],
   );
-  const activeTask = member.activeTaskId ? snapshot.tasks[member.activeTaskId] : undefined;
+  const activeTask = deferredMember.activeTaskId ? deferredSnapshot.tasks[deferredMember.activeTaskId] : undefined;
   const canSendDirectMessage = typeof onSendDirectMessage === "function";
   const latestEntryMarker = buildLatestEntryMarker(sessionEntries.at(-1));
+  const shouldVirtualize = sessionEntries.length > 40;
+  const sessionVirtualizer = useVirtualizer({
+    count: sessionEntries.length,
+    getScrollElement: () => transcriptRef.current,
+    estimateSize: () => 260,
+    overscan: 4,
+    getItemKey: (index) => sessionEntries[index]?.id ?? index,
+  });
+  const virtualRows = sessionVirtualizer.getVirtualItems();
 
   const updateScrollState = (): void => {
     const container = transcriptRef.current;
@@ -504,6 +517,13 @@ export function MemberSessionPane(props: {
     const container = transcriptRef.current;
     if (!container) {
       return;
+    }
+
+    if (shouldVirtualize && sessionEntries.length > 0) {
+      sessionVirtualizer.scrollToIndex(sessionEntries.length - 1, {
+        align: "end",
+        behavior,
+      });
     }
 
     container.scrollTo({
@@ -549,23 +569,6 @@ export function MemberSessionPane(props: {
         <div className="relative min-h-0 flex-1">
           <div ref={transcriptRef} className="h-full min-h-0 overflow-y-auto px-0 py-1" onScroll={updateScrollState}>
             <div className="flex flex-col gap-3">
-              {sessionEntries.map((entry) =>
-                entry.type === "message" ? (
-                  <MessageBubble
-                    key={entry.id}
-                    message={entry.message}
-                    authorMember={entry.message.author.kind === "member" ? snapshot.members[entry.message.author.id] : undefined}
-                    mentionedHandles={entry.mentionedHandles}
-                    quotedHandles={entry.quotedHandles}
-                    recipientHandles={entry.recipientHandles}
-                    handlerSummaries={entry.handlerSummaries}
-                    contextBadges={entry.contextBadges}
-                    onAuthorClick={entry.message.author.kind === "member" && onOpenMember ? () => onOpenMember(entry.message.author.id) : undefined}
-                  />
-                ) : (
-                  <SessionActivityBubble key={entry.id} member={member} entry={entry} onOpenMember={onOpenMember} />
-                ),
-              )}
               {sessionEntries.length === 0 ? (
                 <Card className="border-dashed shadow-none">
                   <CardContent className="p-5">
@@ -574,7 +577,87 @@ export function MemberSessionPane(props: {
                     </p>
                   </CardContent>
                 </Card>
-              ) : null}
+              ) : shouldVirtualize ? (
+                <div
+                  className="relative w-full"
+                  style={{
+                    height: `${sessionVirtualizer.getTotalSize()}px`,
+                  }}
+                >
+                  {virtualRows.map((virtualRow) => {
+                    const entry = sessionEntries[virtualRow.index];
+                    if (!entry) {
+                      return null;
+                    }
+
+                    return (
+                      <div
+                        key={virtualRow.key}
+                        ref={sessionVirtualizer.measureElement}
+                        data-index={virtualRow.index}
+                        className="absolute top-0 left-0 w-full py-1"
+                        style={{
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                      >
+                        {entry.type === "message" ? (
+                          <MessageBubble
+                            message={entry.message}
+                            authorMember={
+                              entry.message.author.kind === "member"
+                                ? deferredSnapshot.members[entry.message.author.id]
+                                : undefined
+                            }
+                            mentionedHandles={entry.mentionedHandles}
+                            quotedHandles={entry.quotedHandles}
+                            recipientHandles={entry.recipientHandles}
+                            handlerSummaries={entry.handlerSummaries}
+                            contextBadges={entry.contextBadges}
+                            onAuthorClick={
+                              entry.message.author.kind === "member" && onOpenMember
+                                ? () => onOpenMember(entry.message.author.id)
+                                : undefined
+                            }
+                          />
+                        ) : (
+                          <SessionActivityBubble member={deferredMember} entry={entry} onOpenMember={onOpenMember} />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                sessionEntries.map((entry) =>
+                  entry.type === "message" ? (
+                    <MessageBubble
+                      key={entry.id}
+                      message={entry.message}
+                      authorMember={
+                        entry.message.author.kind === "member"
+                          ? deferredSnapshot.members[entry.message.author.id]
+                          : undefined
+                      }
+                      mentionedHandles={entry.mentionedHandles}
+                      quotedHandles={entry.quotedHandles}
+                      recipientHandles={entry.recipientHandles}
+                      handlerSummaries={entry.handlerSummaries}
+                      contextBadges={entry.contextBadges}
+                      onAuthorClick={
+                        entry.message.author.kind === "member" && onOpenMember
+                          ? () => onOpenMember(entry.message.author.id)
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    <SessionActivityBubble
+                      key={entry.id}
+                      member={deferredMember}
+                      entry={entry}
+                      onOpenMember={onOpenMember}
+                    />
+                  ),
+                )
+              )}
             </div>
           </div>
           {showScrollToLatest ? (

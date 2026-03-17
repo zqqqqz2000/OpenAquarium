@@ -15,6 +15,54 @@ import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { WorkspaceRuntimeClient, type WatcherRunResult } from "@/lib/runtime-client";
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function shareIncomingValue<T>(current: T, incoming: T): T {
+  if (Object.is(current, incoming)) {
+    return current;
+  }
+
+  if (Array.isArray(current) && Array.isArray(incoming)) {
+    let changed = current.length !== incoming.length;
+    const next = incoming.map((item, index) => {
+      const sharedItem = shareIncomingValue(current[index], item);
+      if (!Object.is(sharedItem, current[index])) {
+        changed = true;
+      }
+      return sharedItem;
+    });
+
+    return changed ? (next as T) : current;
+  }
+
+  if (isPlainObject(current) && isPlainObject(incoming)) {
+    const currentKeys = Object.keys(current);
+    const incomingKeys = Object.keys(incoming);
+    let changed = currentKeys.length !== incomingKeys.length;
+    const next: Record<string, unknown> = {};
+
+    for (const key of incomingKeys) {
+      if (!Object.prototype.hasOwnProperty.call(current, key)) {
+        changed = true;
+        next[key] = incoming[key];
+        continue;
+      }
+
+      const sharedValue = shareIncomingValue(current[key], incoming[key]);
+      if (!Object.is(sharedValue, current[key])) {
+        changed = true;
+      }
+      next[key] = sharedValue;
+    }
+
+    return changed ? (next as T) : current;
+  }
+
+  return incoming;
+}
+
 function mergeIncomingSnapshot(current: WorkspaceSnapshot, incoming: WorkspaceSnapshot): WorkspaceSnapshot {
   const selectedProjectId =
     current.selection.projectId && incoming.projects[current.selection.projectId]
@@ -30,16 +78,17 @@ function mergeIncomingSnapshot(current: WorkspaceSnapshot, incoming: WorkspaceSn
   const memberStillVisible =
     selectedMemberId && selectedRoomId ? incoming.rooms[selectedRoomId]?.memberIds.includes(selectedMemberId) : false;
   const roomProjectId = selectedRoomId ? incoming.rooms[selectedRoomId]?.projectId : undefined;
-
-  return {
-    ...incoming,
-    selection: {
-      ...incoming.selection,
-      projectId: roomProjectId ?? selectedProjectId,
-      roomId: selectedRoomId,
-      memberId: memberStillVisible ? selectedMemberId : incoming.selection.memberId,
-    },
+  const mergedSelection = {
+    ...incoming.selection,
+    projectId: roomProjectId ?? selectedProjectId,
+    roomId: selectedRoomId,
+    memberId: memberStillVisible ? selectedMemberId : incoming.selection.memberId,
   };
+
+  return shareIncomingValue(current, {
+    ...incoming,
+    selection: mergedSelection,
+  });
 }
 
 type RemoteStoreError = Error | { message?: string } | string | number | boolean | null | undefined;
@@ -175,7 +224,7 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
         const { snapshot, globalConfig } = await client.getState();
         set((state) => ({
           snapshot: mergeIncomingSnapshot(state.snapshot, snapshot),
-          globalConfig: globalConfig ?? state.globalConfig,
+          globalConfig: globalConfig ? shareIncomingValue(state.globalConfig, globalConfig) : state.globalConfig,
           loading: false,
           connected: true,
           error: undefined,
@@ -324,14 +373,14 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
       const result = await runMutation(set, () => client.updateGlobalConfig(input));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, result.snapshot),
-        globalConfig: result.globalConfig ?? state.globalConfig,
+        globalConfig: result.globalConfig ? shareIncomingValue(state.globalConfig, result.globalConfig) : state.globalConfig,
       }));
     },
     async sendTemplateStudioChat(input) {
       const result = await runMutation(set, () => client.sendTemplateStudioChat(input));
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, result.snapshot),
-        globalConfig: result.globalConfig ?? state.globalConfig,
+        globalConfig: result.globalConfig ? shareIncomingValue(state.globalConfig, result.globalConfig) : state.globalConfig,
       }));
       return {
         assistantMessage: result.assistantMessage,
@@ -367,7 +416,7 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
     replaceRemoteState(payload) {
       set((state) => ({
         snapshot: mergeIncomingSnapshot(state.snapshot, payload.snapshot),
-        globalConfig: payload.globalConfig ?? state.globalConfig,
+        globalConfig: payload.globalConfig ? shareIncomingValue(state.globalConfig, payload.globalConfig) : state.globalConfig,
         loading: false,
         error: undefined,
       }));
