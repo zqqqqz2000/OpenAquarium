@@ -1135,8 +1135,8 @@ export function TemplateStudioDialog(props: {
           </DialogHeader>
         </div>
 
-        <div className="grid min-h-0 gap-0 overflow-hidden p-3 lg:grid-cols-[300px_minmax(0,1fr)] lg:p-4">
-          <div className="flex min-h-0 flex-col overflow-hidden border-b border-border/60 pb-3 lg:border-r lg:border-b-0 lg:pb-0 lg:pr-4">
+        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:grid lg:gap-0 lg:overflow-hidden lg:p-4 lg:[grid-template-columns:300px_minmax(0,1fr)]">
+          <div className="flex shrink-0 min-h-0 flex-col overflow-visible border-b border-border/60 pb-3 lg:border-r lg:border-b-0 lg:overflow-hidden lg:pb-0 lg:pr-4">
             <section className="shrink-0 border-b border-border/60 pb-4" data-testid="template-summary-card">
               <div className="space-y-3">
                 <div className="space-y-2">
@@ -1152,13 +1152,13 @@ export function TemplateStudioDialog(props: {
               </div>
             </section>
 
-            <section className="flex min-h-0 flex-1 flex-col pt-4">
+            <section className="flex flex-col pt-4 lg:min-h-0 lg:flex-1">
               <div className="flex items-center justify-between gap-3">
                 <p className="m-0 text-base font-semibold tracking-tight">Team templates</p>
                 <Badge variant="outline">{templates.length}</Badge>
               </div>
               {templateDeleteError ? <p className="m-0 mt-3 text-sm text-destructive">{templateDeleteError}</p> : null}
-              <ScrollArea className="mt-3 min-h-0 flex-1" data-testid="template-list-scroll">
+              <ScrollArea className="mt-3 lg:min-h-0 lg:flex-1" data-testid="template-list-scroll">
                 <div className="flex flex-col gap-2 pr-3">
                   {templates.map((template) => {
                     const tone = badgeToneProps(template.accentTone);
@@ -1201,7 +1201,7 @@ export function TemplateStudioDialog(props: {
             </section>
           </div>
 
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-col overflow-hidden lg:pl-4">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex shrink-0 min-h-0 flex-col overflow-visible lg:overflow-hidden lg:pl-4 lg:pt-0">
             <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b bg-transparent p-0">
               <TabsTrigger value="templates" className="rounded-none px-3 py-2">
                 <Settings2 size={16} />
@@ -1217,13 +1217,13 @@ export function TemplateStudioDialog(props: {
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="templates" className="m-0 min-h-0 overflow-hidden">
+            <TabsContent value="templates" className="m-0 overflow-visible lg:min-h-0 lg:overflow-hidden">
               {!selectedTemplate || !selectedTemplateDraft ? (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a team template to edit.</div>
               ) : (
-                <div className="grid h-full min-h-0 gap-4 pt-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-                  <section className="min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
-                    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+                <div className="grid gap-4 pt-4 lg:h-full lg:min-h-0 xl:grid-cols-[280px_minmax(0,1fr)]">
+                  <section className="overflow-visible rounded-2xl border border-border/70 bg-background/70 px-4 py-4 lg:min-h-0 lg:overflow-hidden">
+                    <div className="flex flex-col gap-3 overflow-visible lg:h-full lg:min-h-0 lg:overflow-hidden">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="m-0 text-base font-semibold tracking-tight">Team template members</p>
@@ -1284,8 +1284,8 @@ export function TemplateStudioDialog(props: {
                     </div>
                   </section>
 
-                  <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
-                    <ScrollArea className="min-h-0 h-full" data-testid="template-detail-scroll">
+                  <div className="grid overflow-visible lg:min-h-0 lg:grid-rows-[minmax(0,1fr)_auto] lg:overflow-hidden">
+                    <ScrollArea className="lg:min-h-0 lg:h-full" data-testid="template-detail-scroll">
                       <div className="flex flex-col gap-4 pr-3 pb-4">
                       <section className="rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
                         <div className="flex flex-col gap-4">
@@ -1549,7 +1549,7 @@ export function TemplateStudioDialog(props: {
               )}
             </TabsContent>
 
-            <TabsContent value="builder" forceMount className="m-0 min-h-0 overflow-hidden data-[state=inactive]:hidden">
+            <TabsContent value="builder" forceMount className="m-0 overflow-visible data-[state=inactive]:hidden lg:min-h-0 lg:overflow-hidden">
               {!selectedTemplate ? (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a team template to open Team Builder.</div>
               ) : (
@@ -1603,10 +1603,10 @@ export function TemplateStudioDialog(props: {
               )}
             </TabsContent>
 
-            <TabsContent value="providers" className="m-0 min-h-0 overflow-hidden">
-              <div className="grid h-full min-h-0 gap-4 pt-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-                <section className="min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-background/70 px-4 py-4">
-                  <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+            <TabsContent value="providers" className="m-0 overflow-visible lg:min-h-0 lg:overflow-hidden">
+              <div className="grid gap-4 pt-4 lg:h-full lg:min-h-0 xl:grid-cols-[280px_minmax(0,1fr)]">
+                <section className="overflow-visible rounded-2xl border border-border/70 bg-background/70 px-4 py-4 lg:min-h-0 lg:overflow-hidden">
+                  <div className="flex flex-col gap-3 overflow-visible lg:h-full lg:min-h-0 lg:overflow-hidden">
                     <div className="flex items-center justify-between gap-3">
                       <p className="m-0 text-base font-semibold tracking-tight">Provider profiles</p>
                       <Button
@@ -1667,7 +1667,7 @@ export function TemplateStudioDialog(props: {
                   </div>
                 </section>
 
-                <ScrollArea className="min-h-0 h-full" data-testid="template-model-detail-scroll">
+                <ScrollArea className="lg:min-h-0 lg:h-full" data-testid="template-model-detail-scroll">
                   <div className="flex flex-col gap-4 pr-3 pb-4">
                     {activeModelProfile ? (
                       <ModelProfileEditor
