@@ -6,6 +6,7 @@ import type {
   UpdateMemberConfigInput,
   WatchSubscription,
 } from "@/domain/model";
+import type { JsonValue } from "@/lib/json";
 import { normalizeAllowedSkillIds } from "@/lib/skills";
 
 export interface ProviderConfigDraftFields {
@@ -50,19 +51,40 @@ export function splitCapabilities(text: string): string[] {
 
 export function parseEnvText(text: string): Record<string, string> {
   return splitLines(text).reduce<Record<string, string>>((env, line) => {
-    const separatorIndex = line.indexOf("=");
+    const equalsIndex = line.indexOf("=");
+    const colonIndex = line.indexOf(":");
+    const separatorIndex =
+      equalsIndex > 0 ? equalsIndex : colonIndex > 0 ? colonIndex : -1;
     if (separatorIndex <= 0) {
-      throw new Error(`Invalid env line "${line}". Use KEY=VALUE.`);
+      return env;
     }
 
     const key = line.slice(0, separatorIndex).trim();
     const value = line.slice(separatorIndex + 1).trim();
     if (!key) {
-      throw new Error(`Invalid env line "${line}". Missing key.`);
+      return env;
     }
     env[key] = value;
     return env;
   }, {});
+}
+
+export function parseJsonObjectText(text: string): { [key: string]: JsonValue } {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as JsonValue;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+
+    return parsed;
+  } catch {
+    return {};
+  }
 }
 
 export function parseAllowedSkillIdsText(text: string): string[] {

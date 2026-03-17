@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { GlobalWorkspaceConfig, TemplateStudioModelCatalog } from "@/domain/model";
+import type { GlobalWorkspaceConfig, ProviderProfileType, TemplateStudioModelCatalog } from "@/domain/model";
 import { WorkspaceRuntimeClient } from "@/lib/runtime-client";
 import {
   Select,
@@ -15,6 +15,7 @@ export function ProviderModelSelects(props: {
   modelProfileId?: string;
   modelId?: string;
   disabled?: boolean;
+  allowedProviderTypes?: ProviderProfileType[];
   providerLabel?: string;
   modelLabel?: string;
   providerPlaceholder?: string;
@@ -28,6 +29,7 @@ export function ProviderModelSelects(props: {
     modelProfileId,
     modelId,
     disabled = false,
+    allowedProviderTypes,
     providerLabel = "Provider",
     modelLabel = "Model",
     providerPlaceholder = "Select provider",
@@ -40,7 +42,11 @@ export function ProviderModelSelects(props: {
   const [catalog, setCatalog] = useState<TemplateStudioModelCatalog | undefined>(undefined);
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [catalogError, setCatalogError] = useState<string | undefined>(undefined);
-  const selectedProfileId = modelProfileId ?? globalConfig.modelProfiles[0]?.id;
+  const selectableProfiles = useMemo(
+    () => globalConfig.modelProfiles.filter((profile) => !allowedProviderTypes || allowedProviderTypes.includes(profile.providerType)),
+    [allowedProviderTypes, globalConfig.modelProfiles],
+  );
+  const selectedProfileId = modelProfileId ?? selectableProfiles[0]?.id;
 
   useEffect(() => {
     let cancelled = false;
@@ -91,12 +97,12 @@ export function ProviderModelSelects(props: {
     <>
       <label className="flex flex-col gap-2">
         <span className="text-sm font-medium">{providerLabel}</span>
-        <Select value={selectedProfileId} onValueChange={onProviderChange} disabled={disabled || globalConfig.modelProfiles.length === 0}>
+        <Select value={selectedProfileId} onValueChange={onProviderChange} disabled={disabled || selectableProfiles.length === 0}>
           <SelectTrigger className="w-full">
             <SelectValue placeholder={providerPlaceholder} />
           </SelectTrigger>
           <SelectContent>
-            {globalConfig.modelProfiles.map((profile) => (
+            {selectableProfiles.map((profile) => (
               <SelectItem key={profile.id} value={profile.id}>
                 {profile.name}
               </SelectItem>

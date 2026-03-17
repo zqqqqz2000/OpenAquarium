@@ -65,7 +65,8 @@ function supportsCodexThinkingDepth(args: {
   providerKind: string;
   globalConfig: GlobalWorkspaceConfig;
 }): boolean {
-  return (args.globalConfig.modelProfiles.find((profile) => profile.id === args.modelProfileId)?.binding.kind ?? args.providerKind) === "codex-acp";
+  const selectedProfile = args.globalConfig.modelProfiles.find((profile) => profile.id === args.modelProfileId);
+  return ((selectedProfile?.providerType === "acp" ? selectedProfile.binding.kind : undefined) ?? args.providerKind) === "codex-acp";
 }
 
 interface RoleGroupDraft {
@@ -565,6 +566,7 @@ export function RoomTeamDialog(props: {
                         <div className="grid gap-4 md:grid-cols-2">
                           <ProviderModelSelects
                             globalConfig={globalConfig}
+                            allowedProviderTypes={["acp"]}
                             modelProfileId={activeMember.modelProfileId}
                             modelId={activeMember.modelId}
                             onProviderChange={(value) => patchMemberDraft(activeMember.id, { modelProfileId: value })}

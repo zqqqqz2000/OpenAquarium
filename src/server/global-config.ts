@@ -28,6 +28,17 @@ const providerBindingSchema = z.object({
   capabilities: z.array(z.string().min(1)).default(["prompt", "cancel"]),
 });
 
+const openaiCompatibleProviderBindingSchema = z.object({
+  kind: z.literal("openai-compatible"),
+  label: z.string().min(1),
+  baseURL: z.string().min(1),
+  apiKeyEnvVar: z.string().min(1).optional(),
+  headersFormat: z.enum(["kv", "json"]).default("kv"),
+  headers: z.record(z.string(), z.string()).default({}),
+  extraBodyFormat: z.enum(["kv", "json"]).default("json"),
+  extraBody: z.record(z.string(), z.json()).default({}),
+});
+
 const codexThinkingDepthSchema = z.enum(["low", "mid", "high", "extra-high"]);
 
 const persistedTeamMemberBlueprintSchema = z.object({
@@ -75,13 +86,26 @@ const teamTemplateSchema = persistedTeamTemplateSchema.extend({
   members: z.array(teamMemberBlueprintSchema).min(1),
 });
 
-const providerModelProfileSchema = z.object({
+const acpProviderModelProfileSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   description: z.string().min(1),
   providerType: z.literal("acp"),
   binding: providerBindingSchema,
 });
+
+const openaiCompatibleProviderModelProfileSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  providerType: z.literal("openai-compatible"),
+  binding: openaiCompatibleProviderBindingSchema,
+});
+
+const providerModelProfileSchema = z.discriminatedUnion("providerType", [
+  acpProviderModelProfileSchema,
+  openaiCompatibleProviderModelProfileSchema,
+]);
 
 const configFileSchema = z.object({
   version: z.literal(1),
@@ -260,6 +284,51 @@ function normalizePersistedTemplates(
   }));
 }
 
+function normalizeProviderModelProfiles(
+  modelProfiles: ProviderModelProfile[],
+): ProviderModelProfile[] {
+  return modelProfiles.map((profile) => {
+    if (profile.providerType === "openai-compatible") {
+      return {
+        ...profile,
+        id: profile.id.trim(),
+        name: profile.name.trim(),
+        description: profile.description.trim(),
+        binding: {
+          ...profile.binding,
+          label: profile.binding.label.trim(),
+          baseURL: profile.binding.baseURL.trim(),
+          apiKeyEnvVar: profile.binding.apiKeyEnvVar?.trim() || undefined,
+          headersFormat: profile.binding.headersFormat,
+          headers: Object.fromEntries(
+            Object.entries(profile.binding.headers).map(([key, value]) => [key.trim(), value]),
+          ),
+          extraBodyFormat: profile.binding.extraBodyFormat,
+          extraBody: profile.binding.extraBody,
+        },
+      };
+    }
+
+    return {
+      ...profile,
+      id: profile.id.trim(),
+      name: profile.name.trim(),
+      description: profile.description.trim(),
+      binding: {
+        ...profile.binding,
+        label: profile.binding.label.trim(),
+        command: profile.binding.command.trim(),
+        args: profile.binding.args.map((arg) => arg.trim()).filter(Boolean),
+        env: Object.fromEntries(
+          Object.entries(profile.binding.env).map(([key, value]) => [key.trim(), value]),
+        ),
+        workingDirectory: profile.binding.workingDirectory?.trim() || undefined,
+        capabilities: profile.binding.capabilities.map((capability) => capability.trim()).filter(Boolean),
+      },
+    };
+  });
+}
+
 function dedupeProfiles(profiles: ProviderModelProfile[]): ProviderModelProfile[] {
   const seen = new Set<string>();
   return profiles.filter((profile) => {
@@ -307,7 +376,7 @@ export class OpenAquariumGlobalConfigManager {
       templates,
       config: {
         directory: this.directory,
-        modelProfiles: config.modelProfiles,
+        modelProfiles: normalizeProviderModelProfiles(config.modelProfiles),
         templateChatModelProfileId: config.templateChatModelProfileId,
       },
     };
@@ -321,7 +390,7 @@ export class OpenAquariumGlobalConfigManager {
   }
 
   async saveConfig(input: { modelProfiles: ProviderModelProfile[]; templateChatModelProfileId?: string }): Promise<GlobalWorkspaceConfig> {
-    const dedupedProfiles = dedupeProfiles(input.modelProfiles);
+    const dedupedProfiles = dedupeProfiles(normalizeProviderModelProfiles(input.modelProfiles));
     const fallbackModelId = dedupedProfiles[0]?.id ?? DEFAULT_CODEX_MODEL_PROFILE_ID;
     const persisted = configFileSchema.parse({
       version: 1,

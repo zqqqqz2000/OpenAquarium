@@ -132,7 +132,8 @@ export function MemberStudioDialog(props: {
     globalConfig.modelProfiles.find((profile) => profile.id === (configDraft.modelProfileId ?? member.modelProfileId))?.name
     ?? member.provider.label;
   const selectedModelProfile = globalConfig.modelProfiles.find((profile) => profile.id === (configDraft.modelProfileId ?? member.modelProfileId));
-  const supportsCodexThinkingDepth = (selectedModelProfile?.binding.kind ?? member.provider.kind) === "codex-acp";
+  const supportsCodexThinkingDepth =
+    (selectedModelProfile?.providerType === "acp" ? selectedModelProfile.binding.kind : member.provider.kind) === "codex-acp";
 
   const patchConfigDraft = (patch: Partial<MemberConfigDraft>): void => {
     setConfigDrafts((current) => ({
@@ -419,6 +420,7 @@ export function MemberStudioDialog(props: {
                     <div className="grid gap-4 md:grid-cols-2">
                       <ProviderModelSelects
                         globalConfig={globalConfig}
+                        allowedProviderTypes={["acp"]}
                         modelProfileId={configDraft.modelProfileId}
                         modelId={configDraft.modelId}
                         onProviderChange={(value) => patchConfigDraft({ modelProfileId: value })}

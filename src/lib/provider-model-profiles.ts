@@ -1,12 +1,45 @@
 import type {
+  ACPProviderModelProfile,
   GlobalWorkspaceConfig,
+  OpenAICompatibleProviderModelProfile,
   ProviderBinding,
   ProviderModelProfile,
 } from "@/domain/model";
 import { createCodexAcpProvider } from "@/lib/acp";
 
 export const DEFAULT_CODEX_MODEL_PROFILE_ID = "model-codex-acp-default";
+export const DEFAULT_OPENAI_COMPATIBLE_MODEL_PROFILE_ID = "model-openai-compatible-default";
 export const DEFAULT_OPENAQUARIUM_CONFIG_DIRECTORY = "~/.config/openaquarium";
+
+export function createDefaultOpenAICompatibleProviderModelProfile(): OpenAICompatibleProviderModelProfile {
+  return {
+    id: DEFAULT_OPENAI_COMPATIBLE_MODEL_PROFILE_ID,
+    name: "OpenAI-Compatible API",
+    description:
+      "Template Studio chat via an OpenAI-compatible HTTP API using the Vercel AI SDK provider.",
+    providerType: "openai-compatible",
+    binding: {
+      kind: "openai-compatible",
+      label: "OpenAI-Compatible API",
+      baseURL: "https://api.openai.com/v1",
+      apiKeyEnvVar: "OPENAI_API_KEY",
+      headersFormat: "kv",
+      headers: {},
+      extraBodyFormat: "json",
+      extraBody: {},
+    },
+  };
+}
+
+export function isACPProviderModelProfile(profile: ProviderModelProfile): profile is ACPProviderModelProfile {
+  return profile.providerType === "acp";
+}
+
+export function isOpenAICompatibleProviderModelProfile(
+  profile: ProviderModelProfile,
+): profile is OpenAICompatibleProviderModelProfile {
+  return profile.providerType === "openai-compatible";
+}
 
 export function createDefaultProviderModelProfiles(): ProviderModelProfile[] {
   return [
@@ -18,6 +51,7 @@ export function createDefaultProviderModelProfiles(): ProviderModelProfile[] {
       providerType: "acp",
       binding: createCodexAcpProvider(),
     },
+    createDefaultOpenAICompatibleProviderModelProfile(),
   ];
 }
 
@@ -50,8 +84,6 @@ export function resolveProviderBindingFromProfile(
   modelProfiles: ProviderModelProfile[],
   profileId?: string,
 ): ProviderBinding {
-  return (
-    findProviderModelProfile(modelProfiles, profileId)?.binding ??
-    fallbackProvider
-  );
+  const profile = findProviderModelProfile(modelProfiles, profileId);
+  return profile?.providerType === "acp" ? profile.binding : fallbackProvider;
 }

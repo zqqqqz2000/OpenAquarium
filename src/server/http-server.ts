@@ -4,6 +4,7 @@ import { URL } from "node:url";
 import { createUIMessageStream, pipeUIMessageStreamToResponse, validateUIMessages } from "ai";
 import { WebSocketServer } from "ws";
 
+import type { UpdateGlobalConfigInput } from "@/domain/model";
 import type { WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
 import { extractLastUserText } from "@/lib/chat/workspace-ui-message";
 import { resolveDirectTarget } from "@/lib/direct-target";
@@ -267,24 +268,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
   }
 
   if (method === "POST" && pathname === "/api/config") {
-    const globalConfig = await runtime.updateGlobalConfig(body as {
-      modelProfiles: Array<{
-        id: string;
-        name: string;
-        description: string;
-        providerType: "acp";
-        binding: {
-          kind: "codex-acp" | "generic-acp";
-          label: string;
-          command: string;
-          args: string[];
-          env: Record<string, string>;
-          workingDirectory?: string;
-          capabilities: string[];
-        };
-      }>;
-      templateChatModelProfileId?: string;
-    });
+    const globalConfig = await runtime.updateGlobalConfig(body as UpdateGlobalConfigInput);
     return {
       statusCode: 200,
       payload: { globalConfig, snapshot: runtime.getSnapshot() },
@@ -882,24 +866,7 @@ export async function startWorkspaceHttpServer(args: {
       }
 
       if (request.method === "POST" && url.pathname === "/api/config") {
-        const body = await readJson<{
-          modelProfiles: Array<{
-            id: string;
-            name: string;
-            description: string;
-            providerType: "acp";
-            binding: {
-              kind: "codex-acp" | "generic-acp";
-              label: string;
-              command: string;
-              args: string[];
-              env: Record<string, string>;
-              workingDirectory?: string;
-              capabilities: string[];
-            };
-          }>;
-          templateChatModelProfileId?: string;
-        }>(request);
+        const body = await readJson<UpdateGlobalConfigInput>(request);
         const globalConfig = await args.runtime.updateGlobalConfig(body);
         sendJson(response, 200, {
           globalConfig,

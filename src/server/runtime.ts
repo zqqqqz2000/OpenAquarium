@@ -323,7 +323,20 @@ function mergeGlobalTemplatesIntoSnapshot(snapshot: WorkspaceSnapshot, globalTem
   };
 }
 
-function bindingSignature(binding: ProviderBinding): string {
+function bindingSignature(binding: GlobalWorkspaceConfig["modelProfiles"][number]["binding"] | ProviderBinding): string {
+  if (binding.kind === "openai-compatible") {
+    return JSON.stringify({
+      kind: binding.kind,
+      label: binding.label,
+      baseURL: binding.baseURL,
+      apiKeyEnvVar: binding.apiKeyEnvVar,
+      headersFormat: binding.headersFormat,
+      headers: binding.headers,
+      extraBodyFormat: binding.extraBodyFormat,
+      extraBody: binding.extraBody,
+    });
+  }
+
   return JSON.stringify({
     kind: binding.kind,
     label: binding.label,

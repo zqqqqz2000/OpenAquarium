@@ -12,12 +12,16 @@ const {
   cleanupMock,
   generateTextMock,
   languageModelMock,
+  openAICompatibleLanguageModelMock,
+  openAICompatibleProviderMock,
   streamTextMock,
   streamConsumeMock,
   streamUiMessageMock,
 } = vi.hoisted(() => ({
   cleanupMock: vi.fn(),
   languageModelMock: vi.fn(() => ({ provider: "mock" })),
+  openAICompatibleLanguageModelMock: vi.fn((modelId: string) => ({ provider: "openai-compatible", modelId })),
+  openAICompatibleProviderMock: vi.fn(),
   generateTextMock: vi.fn(),
   streamConsumeMock: vi.fn(),
   streamUiMessageMock: vi.fn(),
@@ -29,6 +33,15 @@ vi.mock("@mcpc-tech/acp-ai-provider", () => ({
     cleanup: cleanupMock,
     languageModel: languageModelMock,
   })),
+}));
+
+vi.mock("@ai-sdk/openai-compatible", () => ({
+  createOpenAICompatible: vi.fn((options: unknown) => {
+    openAICompatibleProviderMock(options);
+    return {
+      languageModel: openAICompatibleLanguageModelMock,
+    };
+  }),
 }));
 
 vi.mock("ai", async (importOriginal) => {
@@ -58,6 +71,31 @@ function createProfile(
           : ["--stdio"],
       env: kind === "codex-acp" ? { OA_CODEX_ACP_MODE: "full-access" } : {},
       capabilities: ["prompt", "cancel", "loadSession"],
+    },
+  };
+}
+
+function createOpenAICompatibleProfile(): ProviderModelProfile {
+  return {
+    id: "model-openai-compatible",
+    name: "OpenAI-Compatible API",
+    description: "profile",
+    providerType: "openai-compatible",
+    binding: {
+      kind: "openai-compatible",
+      label: "OpenAI-Compatible API",
+      baseURL: "https://example.test/v1",
+      apiKeyEnvVar: "OPENAI_API_KEY",
+      headersFormat: "kv",
+      headers: {
+        "X-Workspace": "OpenAquarium",
+      },
+      extraBodyFormat: "json",
+      extraBody: {
+        provider: {
+          order: ["reasoning"],
+        },
+      },
     },
   };
 }
@@ -104,8 +142,12 @@ function createGlobalConfig(
 
 describe("TemplateStudioChatService", () => {
   beforeEach(() => {
+    delete process.env.OPENAI_API_KEY;
+    vi.unstubAllGlobals();
     cleanupMock.mockReset();
     languageModelMock.mockClear();
+    openAICompatibleLanguageModelMock.mockClear();
+    openAICompatibleProviderMock.mockReset();
     generateTextMock.mockReset();
     streamConsumeMock.mockReset();
     streamUiMessageMock.mockReset();
@@ -235,5 +277,89 @@ describe("TemplateStudioChatService", () => {
 
     await result.cleanup();
     expect(cleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the Vercel AI SDK openai-compatible provider for template chat", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const { TemplateStudioChatService } =
+      await import("@/server/template-studio-chat");
+    const profile = createOpenAICompatibleProfile();
+
+    const service = new TemplateStudioChatService();
+    const result = await service.chat({
+      configDirectory: "/tmp/openaquarium-config",
+      templateId: "template_1",
+      messages: [{ role: "user", content: "Update the selected template." }],
+      templates: [createTemplate()],
+      globalConfig: createGlobalConfig(profile),
+      modelProfileId: profile.id,
+      modelId: "gpt-4.1-mini",
+    });
+
+    expect(result.assistantMessage).toBe("updated");
+    expect(openAICompatibleProviderMock).toHaveBeenCalledWith({
+      name: "OpenAI-Compatible API",
+      baseURL: "https://example.test/v1",
+      apiKey: "test-key",
+      headers: {
+        "X-Workspace": "OpenAquarium",
+      },
+      transformRequestBody: expect.any(Function),
+    });
+    expect(openAICompatibleLanguageModelMock).toHaveBeenCalledWith("gpt-4.1-mini");
+    const createCall = openAICompatibleProviderMock.mock.calls[0]?.[0] as {
+      transformRequestBody: (body: Record<string, unknown>) => Record<string, unknown>;
+    };
+    expect(createCall.transformRequestBody({ model: "gpt-4.1-mini" })).toEqual({
+      model: "gpt-4.1-mini",
+      provider: {
+        order: ["reasoning"],
+      },
+    });
+  });
+
+  it("loads models from an openai-compatible /models endpoint", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          { id: "gpt-4.1-mini", owned_by: "openai" },
+          { id: "gpt-4.1", owned_by: "openai" },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { TemplateStudioChatService } =
+      await import("@/server/template-studio-chat");
+    const profile = createOpenAICompatibleProfile();
+
+    const service = new TemplateStudioChatService();
+    const catalog = await service.getModelCatalog({
+      configDirectory: "/tmp/openaquarium-config",
+      globalConfig: createGlobalConfig(profile),
+      modelProfileId: profile.id,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("https://example.test/v1/models", {
+      headers: {
+        Authorization: "Bearer test-key",
+        "X-Workspace": "OpenAquarium",
+      },
+    });
+    expect(catalog).toMatchObject({
+      source: "runtime",
+      providerType: "openai-compatible",
+      providerKind: "openai-compatible",
+      providerLabel: "OpenAI-Compatible API",
+      selectedProfileId: profile.id,
+      availableModels: [
+        { id: "gpt-4.1-mini", label: "gpt-4.1-mini", description: "owned by openai" },
+        { id: "gpt-4.1", label: "gpt-4.1", description: "owned by openai" },
+      ],
+    });
+
+    vi.unstubAllGlobals();
   });
 });

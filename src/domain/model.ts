@@ -1,3 +1,5 @@
+import type { JsonValue } from "@/lib/json";
+
 export type ProjectId = string;
 export type RoomId = string;
 export type TemplateId = string;
@@ -9,6 +11,9 @@ export type TraceId = string;
 export type ProviderModelProfileId = string;
 
 export type ProviderKind = "codex-acp" | "generic-acp";
+export type ProviderProfileType = "acp" | "openai-compatible";
+export type ProviderProfileKind = ProviderKind | "openai-compatible";
+export type ProviderTextFormat = "kv" | "json";
 export type MemberStatus = "idle" | "running" | "interrupted";
 export type TaskStatus = "running" | "interrupted" | "completed";
 export type MessageTransport = "group" | "direct" | "watch-digest" | "status";
@@ -33,13 +38,36 @@ export interface ProviderBinding {
   capabilities: string[];
 }
 
-export interface ProviderModelProfile {
+export interface OpenAICompatibleProviderBinding {
+  kind: "openai-compatible";
+  label: string;
+  baseURL: string;
+  apiKeyEnvVar?: string;
+  headersFormat: ProviderTextFormat;
+  headers: Record<string, string>;
+  extraBodyFormat: ProviderTextFormat;
+  extraBody: { [key: string]: JsonValue };
+}
+
+export interface ACPProviderModelProfile {
   id: ProviderModelProfileId;
   name: string;
   description: string;
   providerType: "acp";
   binding: ProviderBinding;
 }
+
+export interface OpenAICompatibleProviderModelProfile {
+  id: ProviderModelProfileId;
+  name: string;
+  description: string;
+  providerType: "openai-compatible";
+  binding: OpenAICompatibleProviderBinding;
+}
+
+export type ProviderModelProfile =
+  | ACPProviderModelProfile
+  | OpenAICompatibleProviderModelProfile;
 
 export interface WatchBlueprint {
   intervalMinutes: number;
@@ -342,8 +370,8 @@ export interface TemplateStudioModelOption {
 
 export interface TemplateStudioModelCatalog {
   source: "runtime" | "unavailable";
-  providerType: "acp";
-  providerKind: ProviderKind;
+  providerType: ProviderProfileType;
+  providerKind: ProviderProfileKind;
   providerLabel: string;
   selectedProfileId: ProviderModelProfileId;
   availableModels: TemplateStudioModelOption[];

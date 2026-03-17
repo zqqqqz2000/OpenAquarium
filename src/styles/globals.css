@@ -240,6 +240,74 @@
   .oa-message-markdown [data-streamdown="table-wrapper"] {
     margin-block: 0.75rem;
   }
+
+  .oa-json-editor__root {
+    font-family: "SFMono-Regular", "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+  }
+
+  .oa-json-editor__root textarea,
+  .oa-json-editor__root pre {
+    min-height: 7rem;
+    margin: 0;
+    font-family: inherit;
+    font-size: 0.875rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .oa-json-editor__root textarea {
+    outline: none;
+    color: transparent;
+    caret-color: var(--foreground);
+  }
+
+  .oa-json-editor__root textarea::selection,
+  .oa-json-editor__root textarea::-moz-selection {
+    background: color-mix(in oklch, var(--accent) 60%, transparent);
+  }
+
+  .oa-json-editor__root pre {
+    color: var(--foreground);
+  }
+
+  .oa-json-editor .token.property {
+    color: oklch(0.46 0.12 255);
+  }
+
+  .oa-json-editor .token.string {
+    color: oklch(0.5 0.12 165);
+  }
+
+  .oa-json-editor .token.number {
+    color: oklch(0.55 0.15 42);
+  }
+
+  .oa-json-editor .token.boolean,
+  .oa-json-editor .token.null {
+    color: oklch(0.56 0.18 18);
+  }
+
+  .oa-json-editor .token.punctuation {
+    color: var(--muted-foreground);
+  }
+
+  .dark .oa-json-editor .token.property {
+    color: oklch(0.78 0.09 252);
+  }
+
+  .dark .oa-json-editor .token.string {
+    color: oklch(0.82 0.11 165);
+  }
+
+  .dark .oa-json-editor .token.number {
+    color: oklch(0.8 0.12 65);
+  }
+
+  .dark .oa-json-editor .token.boolean,
+  .dark .oa-json-editor .token.null {
+    color: oklch(0.78 0.14 25);
+  }
 }
 
 @media (max-width: 1200px) {

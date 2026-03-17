@@ -179,4 +179,70 @@ describe("OpenAquariumGlobalConfigManager", () => {
       reloaded.templates[0]?.members.find((member) => member.id === targetMember.id)?.isRole,
     ).toBe(true);
   });
+
+  it("saves and reloads openai-compatible provider profiles", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-global-config-openai-compatible-"));
+    const manager = new OpenAquariumGlobalConfigManager(directory);
+    const loaded = await manager.load();
+
+    const nextConfig = await manager.saveConfig({
+      modelProfiles: [
+        ...loaded.config.modelProfiles,
+        {
+          id: "model-openai-compatible",
+          name: "OpenAI-Compatible API",
+          description: "HTTP API provider",
+          providerType: "openai-compatible",
+          binding: {
+            kind: "openai-compatible",
+            label: "OpenAI-Compatible API",
+            baseURL: "https://example.test/v1",
+            apiKeyEnvVar: "OPENAI_API_KEY",
+            headersFormat: "kv",
+            headers: {
+              "X-Workspace": "OpenAquarium",
+            },
+            extraBodyFormat: "json",
+            extraBody: {
+              provider: {
+                order: ["reasoning"],
+              },
+            },
+          },
+        },
+      ],
+      templateChatModelProfileId: "model-openai-compatible",
+    });
+
+    expect(nextConfig.modelProfiles.find((profile) => profile.id === "model-openai-compatible")).toMatchObject({
+      providerType: "openai-compatible",
+      binding: {
+        kind: "openai-compatible",
+        baseURL: "https://example.test/v1",
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        headersFormat: "kv",
+        headers: {
+          "X-Workspace": "OpenAquarium",
+        },
+        extraBodyFormat: "json",
+        extraBody: {
+          provider: {
+            order: ["reasoning"],
+          },
+        },
+      },
+    });
+
+    const reloaded = await manager.load();
+    expect(reloaded.config.templateChatModelProfileId).toBe("model-openai-compatible");
+    expect(reloaded.config.modelProfiles.find((profile) => profile.id === "model-openai-compatible")).toMatchObject({
+      providerType: "openai-compatible",
+      binding: {
+        kind: "openai-compatible",
+        baseURL: "https://example.test/v1",
+        headersFormat: "kv",
+        extraBodyFormat: "json",
+      },
+    });
+  });
 });

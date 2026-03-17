@@ -51,6 +51,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { JsonEditor } from "@/components/ui/json-editor";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -74,7 +75,8 @@ function supportsCodexThinkingDepth(args: {
   modelProfileId?: string;
   globalConfig: GlobalWorkspaceConfig;
 }): boolean {
-  return args.globalConfig.modelProfiles.find((profile) => profile.id === args.modelProfileId)?.binding.kind === "codex-acp";
+  const selectedProfile = args.globalConfig.modelProfiles.find((profile) => profile.id === args.modelProfileId);
+  return selectedProfile?.providerType === "acp" && selectedProfile.binding.kind === "codex-acp";
 }
 
 function ScopeNote(props: { directory: string }) {
@@ -191,6 +193,8 @@ function formatProviderTypeLabel(providerType: string): string {
   switch (providerType) {
     case "acp":
       return "ACP";
+    case "openai-compatible":
+      return "OpenAI-Compatible";
     default:
       return providerType;
   }
@@ -263,13 +267,21 @@ function ModelProfileEditor(props: {
           </label>
           <label className="flex flex-col gap-2">
             <span className="text-sm font-medium">Provider kind</span>
-            <Select value={draft.providerKind} onValueChange={(value) => onChange({ providerKind: value as ModelProfileDraft["providerKind"] })}>
+            <Select
+              value={draft.providerKind}
+              onValueChange={(value) =>
+                onChange({
+                  providerKind: value as ModelProfileDraft["providerKind"],
+                  providerType: value === "openai-compatible" ? "openai-compatible" : "acp",
+                })}
+            >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select provider kind" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="codex-acp">codex-acp</SelectItem>
                 <SelectItem value="generic-acp">generic-acp</SelectItem>
+                <SelectItem value="openai-compatible">openai-compatible</SelectItem>
               </SelectContent>
             </Select>
           </label>
@@ -285,28 +297,100 @@ function ModelProfileEditor(props: {
             <span className="text-sm font-medium">Provider label</span>
             <Input value={draft.providerLabel} onChange={(event) => onChange({ providerLabel: event.currentTarget.value })} />
           </label>
-          <label className="flex flex-col gap-2">
-            <span className="text-sm font-medium">Provider command</span>
-            <Input value={draft.providerCommand} onChange={(event) => onChange({ providerCommand: event.currentTarget.value })} />
-          </label>
+          {draft.providerType === "acp" ? (
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Provider command</span>
+              <Input value={draft.providerCommand} onChange={(event) => onChange({ providerCommand: event.currentTarget.value })} />
+            </label>
+          ) : (
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Base URL</span>
+              <Input value={draft.providerBaseUrl} onChange={(event) => onChange({ providerBaseUrl: event.currentTarget.value })} />
+            </label>
+          )}
         </div>
 
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Args (one per line)</span>
-          <Textarea className="min-h-24" value={draft.providerArgsText} onChange={(event) => onChange({ providerArgsText: event.currentTarget.value })} />
-        </label>
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Capabilities (comma or newline separated)</span>
-          <Textarea className="min-h-20" value={draft.providerCapabilitiesText} onChange={(event) => onChange({ providerCapabilitiesText: event.currentTarget.value })} />
-        </label>
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Working directory</span>
-          <Input value={draft.providerWorkingDirectory} onChange={(event) => onChange({ providerWorkingDirectory: event.currentTarget.value })} />
-        </label>
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Environment (KEY=VALUE per line)</span>
-          <Textarea className="min-h-24" value={draft.providerEnvText} onChange={(event) => onChange({ providerEnvText: event.currentTarget.value })} />
-        </label>
+        {draft.providerType === "acp" ? (
+          <>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Args (one per line)</span>
+              <Textarea className="min-h-24" value={draft.providerArgsText} onChange={(event) => onChange({ providerArgsText: event.currentTarget.value })} />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Capabilities (comma or newline separated)</span>
+              <Textarea className="min-h-20" value={draft.providerCapabilitiesText} onChange={(event) => onChange({ providerCapabilitiesText: event.currentTarget.value })} />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Working directory</span>
+              <Input value={draft.providerWorkingDirectory} onChange={(event) => onChange({ providerWorkingDirectory: event.currentTarget.value })} />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Environment (KEY=VALUE per line)</span>
+              <Textarea className="min-h-24" value={draft.providerEnvText} onChange={(event) => onChange({ providerEnvText: event.currentTarget.value })} />
+            </label>
+          </>
+        ) : (
+          <>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium">API key env var</span>
+                <Input value={draft.providerApiKeyEnvVar} onChange={(event) => onChange({ providerApiKeyEnvVar: event.currentTarget.value })} />
+              </label>
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium">Headers format</span>
+                <Select
+                  value={draft.providerHeadersFormat}
+                  onValueChange={(value) => onChange({ providerHeadersFormat: value as ModelProfileDraft["providerHeadersFormat"] })}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select headers format" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="kv">kv</SelectItem>
+                    <SelectItem value="json">json</SelectItem>
+                  </SelectContent>
+                </Select>
+              </label>
+            </div>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">
+                Headers ({draft.providerHeadersFormat === "json" ? "JSON object" : "KEY=VALUE or KEY: VALUE"})
+              </span>
+              {draft.providerHeadersFormat === "json" ? (
+                <JsonEditor value={draft.providerHeadersText} onChange={(value) => onChange({ providerHeadersText: value })} />
+              ) : (
+                <Textarea className="min-h-24" value={draft.providerHeadersText} onChange={(event) => onChange({ providerHeadersText: event.currentTarget.value })} />
+              )}
+            </label>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium">Extra body format</span>
+                <Select
+                  value={draft.providerExtraBodyFormat}
+                  onValueChange={(value) => onChange({ providerExtraBodyFormat: value as ModelProfileDraft["providerExtraBodyFormat"] })}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select extra body format" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="kv">kv</SelectItem>
+                    <SelectItem value="json">json</SelectItem>
+                  </SelectContent>
+                </Select>
+              </label>
+            </div>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">
+                Extra body ({draft.providerExtraBodyFormat === "json" ? "JSON object" : "KEY=VALUE or KEY: VALUE"})
+              </span>
+              {draft.providerExtraBodyFormat === "json" ? (
+                <JsonEditor value={draft.providerExtraBodyText} onChange={(value) => onChange({ providerExtraBodyText: value })} />
+              ) : (
+                <Textarea className="min-h-28" value={draft.providerExtraBodyText} onChange={(event) => onChange({ providerExtraBodyText: event.currentTarget.value })} />
+              )}
+            </label>
+          </>
+        )}
       </CardContent>
     </Card>
   );
@@ -1331,13 +1415,14 @@ export function TemplateStudioDialog(props: {
                             <div className="grid gap-4 md:grid-cols-2">
                               <ProviderModelSelects
                                 globalConfig={globalConfig}
+                                allowedProviderTypes={["acp"]}
                                 modelProfileId={activeMember.modelProfileId}
                                 modelId={activeMember.modelId}
                                 onProviderChange={(value) => {
                                   const selectedProfile = globalConfig.modelProfiles.find((profile) => profile.id === value);
                                   patchMemberDraft(selectedTemplate.id, activeMember.id, {
                                     modelProfileId: value,
-                                    provider: selectedProfile ? {
+                                    provider: selectedProfile?.providerType === "acp" ? {
                                       ...selectedProfile.binding,
                                       args: [...selectedProfile.binding.args],
                                       env: { ...selectedProfile.binding.env },

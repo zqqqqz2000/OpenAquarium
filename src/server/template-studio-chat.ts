@@ -1,16 +1,20 @@
 import path from "node:path";
 
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createACPProvider, type ModelInfo } from "@mcpc-tech/acp-ai-provider";
 import { convertToModelMessages, generateText, streamText, type UIMessageChunk } from "ai";
+import * as z from "zod";
 
 import type {
   GlobalWorkspaceConfig,
+  OpenAICompatibleProviderModelProfile,
   ProviderModelProfile,
   TeamTemplate,
   TemplateStudioModelCatalog,
   TemplateStudioModelOption,
   TemplateStudioChatMessage,
 } from "@/domain/model";
+import type { JsonValue } from "@/lib/json";
 import type { TemplateStudioChatDataParts, TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import { findProviderModelProfile } from "@/lib/provider-model-profiles";
 
@@ -62,6 +66,20 @@ export interface TemplateStudioModelCatalogRequest {
   globalConfig: GlobalWorkspaceConfig;
   modelProfileId?: string;
 }
+
+const openAICompatibleModelCatalogSchema = z.object({
+  data: z.array(
+    z.object({
+      id: z.string().min(1),
+      owned_by: z.string().optional(),
+    }),
+  ),
+});
+
+type TemplateStudioLanguageProvider = {
+  languageModel(modelId: string): ReturnType<ReturnType<typeof createOpenAICompatible>["languageModel"]>;
+  cleanup(): void | Promise<void>;
+};
 
 function describeTemplates(templates: TeamTemplate[]): string {
   return JSON.stringify(
@@ -121,7 +139,11 @@ function buildTemplateStudioSystemPrompt(args: {
     "[Context]",
     `Selected template id: ${args.templateId}`,
     `Config directory: ${args.configDirectory}`,
-    `Working directory: ${args.selectedProfile.binding.workingDirectory ?? args.configDirectory}`,
+    `Working directory: ${
+      args.selectedProfile.providerType === "acp"
+        ? (args.selectedProfile.binding.workingDirectory ?? args.configDirectory)
+        : args.configDirectory
+    }`,
     `Templates file: ${templatesFilePath}`,
     `Template schema file: ${schemaFilePath}`,
     `Config file: ${configFilePath}`,
@@ -189,6 +211,32 @@ function buildUnavailableCatalog(args: {
   };
 }
 
+function resolveOpenAICompatibleApiKey(profile: OpenAICompatibleProviderModelProfile): string | undefined {
+  const envVarName = profile.binding.apiKeyEnvVar?.trim();
+  if (!envVarName) {
+    return undefined;
+  }
+
+  return process.env[envVarName]?.trim() || undefined;
+}
+
+function buildOpenAICompatibleRequestHeaders(profile: OpenAICompatibleProviderModelProfile): Record<string, string> {
+  const apiKey = resolveOpenAICompatibleApiKey(profile);
+  return {
+    ...profile.binding.headers,
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+  };
+}
+
+function buildOpenAICompatibleExtraBody(profile: OpenAICompatibleProviderModelProfile): Record<string, JsonValue> {
+  return profile.binding.extraBody;
+}
+
+function buildOpenAICompatibleUrl(baseURL: string, pathname: string): string {
+  const normalizedBaseUrl = baseURL.endsWith("/") ? baseURL : `${baseURL}/`;
+  return new URL(pathname.replace(/^\//u, ""), normalizedBaseUrl).toString();
+}
+
 async function cleanupProvider(provider: { cleanup: () => void | Promise<void> }): Promise<void> {
   try {
     await provider.cleanup();
@@ -201,6 +249,46 @@ async function loadTemplateStudioModelCatalog(args: TemplateStudioModelCatalogRe
   const selectedProfile = resolveSelectedProfile(args);
   if (!selectedProfile) {
     throw new Error("Template Studio requires at least one configured model profile.");
+  }
+
+  if (selectedProfile.providerType === "openai-compatible") {
+    try {
+      const response = await fetch(buildOpenAICompatibleUrl(selectedProfile.binding.baseURL, "/models"), {
+        headers: buildOpenAICompatibleRequestHeaders(selectedProfile),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} when loading models`);
+      }
+
+      const parsed = openAICompatibleModelCatalogSchema.parse(await response.json());
+      const availableModels = parsed.data.map((model) => ({
+        id: model.id,
+        label: model.id,
+        description: model.owned_by ? `owned by ${model.owned_by}` : undefined,
+      }));
+
+      if (availableModels.length > 0) {
+        return {
+          source: "runtime",
+          providerType: selectedProfile.providerType,
+          providerKind: selectedProfile.binding.kind,
+          providerLabel: selectedProfile.binding.label,
+          selectedProfileId: selectedProfile.id,
+          currentModelId: undefined,
+          availableModels,
+        };
+      }
+
+      return buildUnavailableCatalog({
+        selectedProfile,
+        unavailableMessage: "Runtime model capability unavailable: /models returned no available models.",
+      });
+    } catch (error) {
+      return buildUnavailableCatalog({
+        selectedProfile,
+        unavailableMessage: `Runtime model capability unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
 
   const provider = createACPProvider({
@@ -253,9 +341,9 @@ async function resolveChatExecution(args: {
   messages: TemplateStudioUIMessage[];
 }): Promise<{
   selectedProfile: ProviderModelProfile;
-  provider: ReturnType<typeof createACPProvider>;
+  provider: TemplateStudioLanguageProvider;
   modelMessages: Awaited<ReturnType<typeof convertToModelMessages>>;
-  modelId?: string;
+  modelId: string;
 }> {
   const selectedProfile = resolveSelectedProfile(args);
 
@@ -265,6 +353,37 @@ async function resolveChatExecution(args: {
 
   if (args.messages.length === 0) {
     throw new Error("Template Studio chat requires at least one message.");
+  }
+
+  const modelMessages = await convertToModelMessages(args.messages, {
+    ignoreIncompleteToolCalls: true,
+  });
+
+  if (selectedProfile.providerType === "openai-compatible") {
+    if (!args.modelId?.trim()) {
+      throw new Error("OpenAI-compatible provider requires a model id.");
+    }
+
+    const provider = createOpenAICompatible({
+      name: selectedProfile.binding.label,
+      baseURL: selectedProfile.binding.baseURL,
+      apiKey: resolveOpenAICompatibleApiKey(selectedProfile),
+      headers: selectedProfile.binding.headers,
+      transformRequestBody: (body) => ({
+        ...body,
+        ...buildOpenAICompatibleExtraBody(selectedProfile),
+      }),
+    });
+
+    return {
+      selectedProfile,
+      provider: {
+        languageModel: (modelId: string) => provider.languageModel(modelId),
+        cleanup: () => Promise.resolve(),
+      },
+      modelMessages,
+      modelId: args.modelId.trim(),
+    };
   }
 
   const provider = createACPProvider({
@@ -277,15 +396,14 @@ async function resolveChatExecution(args: {
     },
   });
 
-  const modelMessages = await convertToModelMessages(args.messages, {
-    ignoreIncompleteToolCalls: true,
-  });
-
   return {
     selectedProfile,
-    provider,
+    provider: {
+      languageModel: (modelId: string) => provider.languageModel(modelId || undefined),
+      cleanup: () => provider.cleanup(),
+    },
     modelMessages,
-    modelId: args.modelId,
+    modelId: args.modelId?.trim() || "",
   };
 }
 
@@ -335,7 +453,7 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
       return {
         assistantMessage: result.text.trim(),
         modelProfileId: selectedProfile.id,
-        modelId,
+        modelId: modelId || undefined,
       };
     } finally {
       provider.cleanup();
@@ -368,7 +486,7 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
     return {
       result,
       modelProfileId: selectedProfile.id,
-      modelId,
+      modelId: modelId || undefined,
       cleanup: () => {
         provider.cleanup();
         return Promise.resolve();

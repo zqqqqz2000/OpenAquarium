@@ -1,6 +1,14 @@
-import type { GlobalWorkspaceConfig, ProviderKind, ProviderModelProfile, UpdateGlobalConfigInput } from "@/domain/model";
+import type {
+  ProviderKind,
+  GlobalWorkspaceConfig,
+  ProviderModelProfile,
+  ProviderProfileKind,
+  ProviderProfileType,
+  UpdateGlobalConfigInput,
+} from "@/domain/model";
 import {
   parseEnvText,
+  parseJsonObjectText,
   splitCapabilities,
   splitLines,
   type ProviderConfigDraftFields,
@@ -10,7 +18,14 @@ export interface ModelProfileDraft extends ProviderConfigDraftFields {
   id: string;
   name: string;
   description: string;
-  providerKind: ProviderKind;
+  providerType: ProviderProfileType;
+  providerKind: ProviderProfileKind;
+  providerBaseUrl: string;
+  providerApiKeyEnvVar: string;
+  providerHeadersFormat: "kv" | "json";
+  providerHeadersText: string;
+  providerExtraBodyFormat: "kv" | "json";
+  providerExtraBodyText: string;
 }
 
 export interface GlobalConfigDraft {
@@ -19,10 +34,43 @@ export interface GlobalConfigDraft {
 }
 
 export function createModelProfileDraft(profile: ProviderModelProfile): ModelProfileDraft {
+  if (profile.providerType === "openai-compatible") {
+    return {
+      id: profile.id,
+      name: profile.name,
+      description: profile.description,
+      providerType: profile.providerType,
+      providerKind: profile.binding.kind,
+      providerLabel: profile.binding.label,
+      providerCommand: "",
+      providerArgsText: "",
+      providerCapabilitiesText: "",
+      providerWorkingDirectory: "",
+      providerEnvText: "",
+      providerBaseUrl: profile.binding.baseURL,
+      providerApiKeyEnvVar: profile.binding.apiKeyEnvVar ?? "",
+      providerHeadersFormat: profile.binding.headersFormat,
+      providerHeadersText:
+        profile.binding.headersFormat === "json"
+          ? JSON.stringify(profile.binding.headers, null, 2)
+          : Object.entries(profile.binding.headers)
+            .map(([key, value]) => `${key}=${value}`)
+            .join("\n"),
+      providerExtraBodyFormat: profile.binding.extraBodyFormat,
+      providerExtraBodyText:
+        profile.binding.extraBodyFormat === "json"
+          ? JSON.stringify(profile.binding.extraBody, null, 2)
+          : Object.entries(profile.binding.extraBody)
+            .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
+            .join("\n"),
+    };
+  }
+
   return {
     id: profile.id,
     name: profile.name,
     description: profile.description,
+    providerType: profile.providerType,
     providerKind: profile.binding.kind,
     providerLabel: profile.binding.label,
     providerCommand: profile.binding.command,
@@ -32,6 +80,12 @@ export function createModelProfileDraft(profile: ProviderModelProfile): ModelPro
     providerEnvText: Object.entries(profile.binding.env)
       .map(([key, value]) => `${key}=${value}`)
       .join("\n"),
+    providerBaseUrl: "",
+    providerApiKeyEnvVar: "",
+    providerHeadersFormat: "kv",
+    providerHeadersText: "",
+    providerExtraBodyFormat: "json",
+    providerExtraBodyText: "",
   };
 }
 
@@ -47,6 +101,7 @@ export function addEmptyModelProfileDraft(): ModelProfileDraft {
     id: `model-${crypto.randomUUID()}`,
     name: "New model profile",
     description: "Describe when this profile should be used.",
+    providerType: "acp",
     providerKind: "codex-acp",
     providerLabel: "ACP provider",
     providerCommand: "",
@@ -54,20 +109,69 @@ export function addEmptyModelProfileDraft(): ModelProfileDraft {
     providerCapabilitiesText: "prompt, cancel",
     providerWorkingDirectory: "",
     providerEnvText: "",
+    providerBaseUrl: "",
+    providerApiKeyEnvVar: "",
+    providerHeadersFormat: "kv",
+    providerHeadersText: "",
+    providerExtraBodyFormat: "json",
+    providerExtraBodyText: "",
   };
 }
 
 export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: GlobalConfigDraft): UpdateGlobalConfigInput {
   const modelProfiles = draft.modelProfiles.map((profile) => {
     const existing = current.modelProfiles.find((candidate) => candidate.id === profile.id);
-    const fallbackBinding = existing?.binding ?? {
-      kind: "codex-acp" as const,
-      label: "ACP provider",
-      command: "",
-      args: [],
-      env: {},
-      capabilities: ["prompt", "cancel"],
-    };
+    if (profile.providerType === "openai-compatible") {
+      const fallbackBinding =
+        existing?.providerType === "openai-compatible"
+          ? existing.binding
+          : {
+              kind: "openai-compatible" as const,
+              label: "OpenAI-Compatible API",
+              baseURL: "https://api.openai.com/v1",
+              headersFormat: "kv" as const,
+              headers: {},
+              extraBodyFormat: "json" as const,
+              extraBody: {},
+            };
+
+      return {
+        id: profile.id.trim(),
+        name: profile.name.trim(),
+        description: profile.description.trim(),
+        providerType: "openai-compatible" as const,
+        binding: {
+          ...fallbackBinding,
+          label: profile.providerLabel.trim(),
+          baseURL: profile.providerBaseUrl.trim(),
+          apiKeyEnvVar: profile.providerApiKeyEnvVar.trim() || undefined,
+          headersFormat: profile.providerHeadersFormat,
+          headers:
+            profile.providerHeadersFormat === "json"
+              ? Object.fromEntries(
+                  Object.entries(parseJsonObjectText(profile.providerHeadersText)).map(([key, value]) => [key, String(value)]),
+                )
+              : parseEnvText(profile.providerHeadersText),
+          extraBodyFormat: profile.providerExtraBodyFormat,
+          extraBody:
+            profile.providerExtraBodyFormat === "json"
+              ? parseJsonObjectText(profile.providerExtraBodyText)
+              : parseEnvText(profile.providerExtraBodyText),
+        },
+      };
+    }
+
+    const fallbackBinding =
+      existing?.providerType === "acp"
+        ? existing.binding
+        : {
+            kind: "codex-acp" as const,
+            label: "ACP provider",
+            command: "",
+            args: [],
+            env: {},
+            capabilities: ["prompt", "cancel"],
+          };
 
     return {
       id: profile.id.trim(),
@@ -76,7 +180,7 @@ export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: Gl
       providerType: "acp" as const,
       binding: {
         ...fallbackBinding,
-        kind: profile.providerKind,
+        kind: profile.providerKind as ProviderKind,
         label: profile.providerLabel.trim(),
         command: profile.providerCommand.trim(),
         args: splitLines(profile.providerArgsText),

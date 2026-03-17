@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMemberConfigInput, buildWatcherConfigInput, createMemberConfigDraft } from "@/lib/member-config-draft";
+import { buildMemberConfigInput, buildWatcherConfigInput, createMemberConfigDraft, parseEnvText } from "@/lib/member-config-draft";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
 describe("member config draft helpers", () => {
@@ -53,5 +53,18 @@ describe("member config draft helpers", () => {
         prompt: "",
       }),
     ).toThrow(/positive number/i);
+  });
+
+  it("parses header-style KEY: VALUE lines", () => {
+    expect(parseEnvText("Authorization: Bearer YOUR_API_KEY\nX-Workspace=OpenAquarium")).toEqual({
+      Authorization: "Bearer YOUR_API_KEY",
+      "X-Workspace": "OpenAquarium",
+    });
+  });
+
+  it("ignores malformed env/header lines instead of throwing", () => {
+    expect(parseEnvText("AuthorizationBearer YOUR_API_KEY\nX-Workspace=OpenAquarium")).toEqual({
+      "X-Workspace": "OpenAquarium",
+    });
   });
 });
