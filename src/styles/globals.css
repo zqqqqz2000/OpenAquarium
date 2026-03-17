@@ -243,23 +243,46 @@
 
   .oa-json-editor__surface,
   .oa-json-editor__textarea {
-    font-family: "SFMono-Regular", "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+    grid-area: 1 / 1;
+    font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  }
+
+  .oa-json-editor {
+    display: grid;
   }
 
   .oa-json-editor__surface,
   .oa-json-editor__textarea {
     min-height: 7rem;
     margin: 0;
+    padding: 0.625rem;
+    box-sizing: border-box;
     font-family: inherit;
     font-size: 0.875rem;
     line-height: 1.7;
     white-space: pre-wrap;
-    word-break: break-word;
+    overflow-wrap: anywhere;
     tab-size: 2;
+    font-kerning: none;
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "calt" 0;
+    letter-spacing: 0;
   }
 
   .oa-json-editor__surface {
     color: var(--foreground);
+  }
+
+  .oa-json-editor__surface code {
+    display: block;
+    min-height: 100%;
+    font: inherit;
+    line-height: inherit;
+    white-space: inherit;
+    letter-spacing: inherit;
+    font-kerning: inherit;
+    font-variant-ligatures: inherit;
+    font-feature-settings: inherit;
   }
 
   .oa-json-editor__textarea {
@@ -267,6 +290,7 @@
     color: transparent;
     caret-color: var(--foreground);
     border: 0;
+    appearance: none;
   }
 
   .oa-json-editor__textarea::selection,
