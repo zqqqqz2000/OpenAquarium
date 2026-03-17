@@ -17,7 +17,9 @@ describe("ChatPane", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const onToggleLeftSidebar = vi.fn();
     const onToggleRightSidebar = vi.fn();
 
@@ -40,27 +42,56 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getAllByText("做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(
+        "做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品",
+      ).length,
+    ).toBeGreaterThan(0);
     expect(screen.getAllByText("@lead").length).toBeGreaterThan(0);
     expect(screen.queryByText("Handled by")).not.toBeInTheDocument();
     expect(screen.queryByText("To")).not.toBeInTheDocument();
     expect(screen.queryByText("Room transcript")).not.toBeInTheDocument();
     expect(screen.queryByText("Message filter")).not.toBeInTheDocument();
-    expect(screen.queryByText("团队通常不大，右侧保留更多状态，便于快速切换到具体 member session。")).not.toBeInTheDocument();
-    expect(screen.queryByText("成员内部推理只显示为处理状态；只有显式发送到 room 或 direct 的消息才会出现在消息流里。")).not.toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /Open @.* session panel/ }).length).toBeGreaterThan(0);
-    expect(screen.queryByRole("button", { name: "Direct" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "团队通常不大，右侧保留更多状态，便于快速切换到具体 member session。",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "成员内部推理只显示为处理状态；只有显式发送到 room 或 direct 的消息才会出现在消息流里。",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /Open @.* session panel/ }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: "Direct" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Chat" }),
+    ).not.toBeInTheDocument();
     const userMessage = screen
-      .getAllByText("做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品")
+      .getAllByText(
+        "做一个支持 codex-acp 和可配置 team member 的 TypeScript agent-team 产品",
+      )
       .find((element) => element.closest("[data-message-kind='user']"));
-    const compactMemberMessages = document.querySelectorAll("[data-message-kind='member'][data-message-surface='compact']");
+    const compactMemberMessages = document.querySelectorAll(
+      "[data-message-kind='member'][data-message-surface='compact']",
+    );
 
-    expect(userMessage?.closest("[data-message-kind='user']")).toHaveAttribute("data-message-surface", "compact");
+    expect(userMessage?.closest("[data-message-kind='user']")).toHaveAttribute(
+      "data-message-surface",
+      "compact",
+    );
     expect(compactMemberMessages.length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole("button", { name: "Hide projects sidebar" }));
-    await user.click(screen.getByRole("button", { name: "Hide members sidebar" }));
+    await user.click(
+      screen.getByRole("button", { name: "Hide projects sidebar" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Hide members sidebar" }),
+    );
 
     expect(onToggleLeftSidebar).toHaveBeenCalledTimes(1);
     expect(onToggleRightSidebar).toHaveBeenCalledTimes(1);
@@ -70,7 +101,9 @@ describe("ChatPane", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const lead = members.find((member) => member.handle === "lead");
     const builder = members.find((member) => member.handle === "builder");
     const firstMessageId = snapshot.messageOrderByRoom[room.id]?.[0];
@@ -82,7 +115,8 @@ describe("ChatPane", () => {
     const firstMessage = snapshot.messages[firstMessageId];
     snapshot.messages[firstMessageId] = {
       ...firstMessage,
-      content: "## 进度\n\n- 已对齐 `workspace`\n- @lead 复核\n- @>builder 开始实现",
+      content:
+        "## 进度\n\n- 已对齐 `workspace`\n- @lead 复核\n- @>builder 开始实现",
       mentionedMemberIds: [builder.id],
       quotedMemberIds: [lead.id],
     };
@@ -106,17 +140,30 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    const markdownHeading = screen.getByRole("heading", { level: 2, name: "进度" });
+    const markdownHeading = screen.getByRole("heading", {
+      level: 2,
+      name: "进度",
+    });
     const markdownBubble = markdownHeading.closest("[data-message-kind]");
 
     if (!(markdownBubble instanceof HTMLElement)) {
-      throw new Error("Expected markdown heading to render inside a message bubble");
+      throw new Error(
+        "Expected markdown heading to render inside a message bubble",
+      );
     }
 
-    expect(within(markdownBubble).getByText("workspace", { selector: "code" })).toBeInTheDocument();
+    expect(
+      within(markdownBubble).getByText("workspace", { selector: "code" }),
+    ).toBeInTheDocument();
     await waitFor(() => {
-      expect(markdownBubble.querySelector('[data-message-mention-kind="reference"]')?.textContent).toBe("@lead");
-      expect(markdownBubble.querySelector('[data-message-mention-kind="assignment"]')?.textContent).toBe("@>builder");
+      expect(
+        markdownBubble.querySelector('[data-message-mention-kind="reference"]')
+          ?.textContent,
+      ).toBe("@lead");
+      expect(
+        markdownBubble.querySelector('[data-message-mention-kind="assignment"]')
+          ?.textContent,
+      ).toBe("@>builder");
     });
   });
 
@@ -125,7 +172,9 @@ describe("ChatPane", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const research = members.find((member) => member.handle === "research");
     const onOpenMember = vi.fn();
 
@@ -152,7 +201,9 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open @research session panel" }));
+    await user.click(
+      screen.getByRole("button", { name: "Open @research session panel" }),
+    );
 
     expect(onOpenMember).toHaveBeenCalledWith(research.id);
   });
@@ -161,7 +212,9 @@ describe("ChatPane", () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const builder = members.find((member) => member.handle === "builder");
     const research = members.find((member) => member.handle === "research");
 
@@ -175,7 +228,9 @@ describe("ChatPane", () => {
       roleName: builder.roleName,
     };
 
-    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const nextMembers = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
 
     render(
@@ -197,21 +252,42 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "Open @lead session panel" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open @lead session panel" }),
+    ).toBeInTheDocument();
     const roleGroup = screen.getByLabelText(`Role group ${builder.roleName}`);
 
-    expect(within(roleGroup).getAllByText("Codex ACP").length).toBeGreaterThan(0);
+    expect(within(roleGroup).getAllByText("Codex ACP").length).toBeGreaterThan(
+      0,
+    );
 
     await user.hover(roleGroup);
 
-    expect(await screen.findByRole("button", { name: "Open @builder session panel" })).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "Open @research session panel" })).toBeInTheDocument();
+    const builderButton = await screen.findByRole("button", {
+      name: "Open @builder session panel",
+    });
+    const researchButton = await screen.findByRole("button", {
+      name: "Open @research session panel",
+    });
+    const hoverCardContent = builderButton.closest(
+      "[data-slot='hover-card-content']",
+    );
+
+    expect(builderButton).toBeInTheDocument();
+    expect(researchButton).toBeInTheDocument();
+    expect(hoverCardContent).toBeTruthy();
+    expect(hoverCardContent).toHaveClass("overflow-y-auto");
+    expect(hoverCardContent?.className).toContain(
+      "max-h-[min(70vh,calc(100vh-2rem))]",
+    );
   });
 
   it("keeps stacked preview layers stable when a non-top member is selected", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const builder = members.find((member) => member.handle === "builder");
     const research = members.find((member) => member.handle === "research");
 
@@ -225,7 +301,9 @@ describe("ChatPane", () => {
       roleName: builder.roleName,
     };
 
-    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const nextMembers = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
 
     render(
@@ -248,7 +326,9 @@ describe("ChatPane", () => {
     );
 
     const roleGroup = screen.getByLabelText(`Role group ${builder.roleName}`);
-    const previewCards = roleGroup.querySelectorAll("[data-role-group-preview-card]");
+    const previewCards = roleGroup.querySelectorAll(
+      "[data-role-group-preview-card]",
+    );
     const topCardSurface = previewCards[0]?.firstElementChild;
     const nextCardSurface = previewCards[1]?.firstElementChild;
 
@@ -263,20 +343,26 @@ describe("ChatPane", () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const builder = members.find((member) => member.handle === "builder");
     const research = members.find((member) => member.handle === "research");
     const lead = members.find((member) => member.handle === "lead");
 
     if (!builder || !research || !lead) {
-      throw new Error("Expected lead, builder, and research members in seeded room");
+      throw new Error(
+        "Expected lead, builder, and research members in seeded room",
+      );
     }
 
     snapshot.members[lead.id] = { ...lead, roleId: "" };
     snapshot.members[builder.id] = { ...builder, roleId: "" };
     snapshot.members[research.id] = { ...research, roleId: "" };
 
-    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const nextMembers = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
 
     render(
@@ -298,19 +384,31 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "Open @lead session panel" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open @builder session panel" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open @research session panel" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open @lead session panel" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open @builder session panel" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open @research session panel" }),
+    ).toBeInTheDocument();
 
-    await user.hover(screen.getByRole("button", { name: "Open @lead session panel" }));
+    await user.hover(
+      screen.getByRole("button", { name: "Open @lead session panel" }),
+    );
 
-    expect(screen.queryByLabelText(`Role group ${lead.roleName}`)).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText(`Role group ${lead.roleName}`),
+    ).not.toBeInTheDocument();
   });
 
   it("falls back to member ids and handles when legacy role fields are missing", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const builder = members.find((member) => member.handle === "builder");
     const research = members.find((member) => member.handle === "research");
 
@@ -329,7 +427,9 @@ describe("ChatPane", () => {
       roleName: undefined as never,
     };
 
-    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const nextMembers = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
 
     render(
@@ -351,16 +451,26 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "Open @builder session panel" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open @research session panel" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("Role group builder")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Role group research")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open @builder session panel" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open @research session panel" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Role group builder"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Role group research"),
+    ).not.toBeInTheDocument();
   });
 
   it("falls back safely when legacy role fields are non-strings", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const builder = members.find((member) => member.handle === "builder");
     const research = members.find((member) => member.handle === "research");
 
@@ -379,7 +489,9 @@ describe("ChatPane", () => {
       roleName: ["research"] as never,
     };
 
-    const nextMembers = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const nextMembers = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
 
     render(
@@ -401,17 +513,27 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "Open @builder session panel" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open @research session panel" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("Role group builder")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Role group research")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open @builder session panel" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open @research session panel" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Role group builder"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Role group research"),
+    ).not.toBeInTheDocument();
   });
 
   it("emphasizes member roles over display names in the sidebar", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -436,11 +558,16 @@ describe("ChatPane", () => {
     expect(screen.getAllByText("Lead Koi").length).toBeGreaterThan(0);
   });
 
-  it("shows summary plus a one-line latest message preview without restoring duplicate tool status blocks", () => {
+  it("keeps the latest member update inside the hover card instead of repeating it in the sidebar list", async () => {
+    const user = userEvent.setup();
     let snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "lead");
-    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
+    const lead = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead");
+    const builder = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder");
     if (!lead || !builder) {
       throw new Error("Expected lead and builder members in seeded room");
     }
@@ -460,7 +587,8 @@ describe("ChatPane", () => {
       throw new Error("Expected builder to have an active task");
     }
 
-    const liveUpdate = "这个字符串只该出现在中间消息区，不该在右侧 members card 重复。";
+    const liveUpdate =
+      "这个字符串只该出现在中间消息区，不该在右侧 members card 重复。";
     snapshot = postMemberMessage(
       snapshot,
       {
@@ -474,7 +602,9 @@ describe("ChatPane", () => {
 
     const nextRoom = snapshot.rooms[room.id];
     const roomTeam = resolveRoomTeamSummary(snapshot, nextRoom);
-    const members = nextRoom.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = nextRoom.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -495,20 +625,43 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    const leadCard = screen.getByRole("button", { name: "Open @lead session panel" });
-    const builderCard = screen.getByRole("button", { name: "Open @builder session panel" });
+    const leadCard = screen.getByRole("button", {
+      name: "Open @lead session panel",
+    });
+    const builderCard = screen.getByRole("button", {
+      name: "Open @builder session panel",
+    });
 
     expect(within(leadCard).queryByText(/Ready/i)).not.toBeInTheDocument();
     expect(within(builderCard).queryByText(/Running/i)).not.toBeInTheDocument();
-    expect(within(builderCard).queryByText(/Direct inbox/i)).not.toBeInTheDocument();
-    expect(within(builderCard).getByText(liveUpdate)).toBeInTheDocument();
+    expect(
+      within(builderCard).queryByText(/Direct inbox/i),
+    ).not.toBeInTheDocument();
+    expect(within(builderCard).queryByText(liveUpdate)).not.toBeInTheDocument();
     expect(within(leadCard).getByText(lead.summary)).toBeInTheDocument();
     expect(within(leadCard).getByText("Entry")).toBeInTheDocument();
     expect(within(leadCard).getByText("Codex ACP")).toBeInTheDocument();
-    expect(within(leadCard).getByText("Direct messages")).toBeInTheDocument();
     expect(within(builderCard).getByText("Codex ACP")).toBeInTheDocument();
-    expect(within(builderCard).getByText("Direct messages")).toBeInTheDocument();
     expect(within(leadCard).queryByText("Monitor")).not.toBeInTheDocument();
+
+    await user.hover(builderCard);
+
+    const hoverCardLabel = await screen.findByText("Latest update");
+    const hoverCardContent = hoverCardLabel.closest(
+      "[data-slot='hover-card-content']",
+    );
+
+    if (!(hoverCardContent instanceof HTMLElement)) {
+      throw new Error("Expected member hover card content");
+    }
+
+    expect(within(hoverCardContent).getByText(liveUpdate)).toBeInTheDocument();
+    expect(
+      within(hoverCardContent).queryByText(builder.summary),
+    ).not.toBeInTheDocument();
+    expect(
+      within(hoverCardContent).queryByText("Codex ACP"),
+    ).not.toBeInTheDocument();
   });
 
   it("makes running members more prominent in the right sidebar", () => {
@@ -524,7 +677,9 @@ describe("ChatPane", () => {
     );
     const nextRoom = snapshot.rooms[room.id];
     const roomTeam = resolveRoomTeamSummary(snapshot, nextRoom);
-    const members = nextRoom.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = nextRoom.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -551,7 +706,9 @@ describe("ChatPane", () => {
   it("shows static green dots on running member avatars in the transcript and sidebar only", () => {
     let snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
+    const builder = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder");
     if (!builder) {
       throw new Error("Expected builder member in seeded room");
     }
@@ -569,7 +726,9 @@ describe("ChatPane", () => {
 
     const runningBuilder = snapshot.members[builder.id];
     if (!runningBuilder?.activeTaskId) {
-      throw new Error("Expected builder to have a running task after the follow-up user message");
+      throw new Error(
+        "Expected builder to have a running task after the follow-up user message",
+      );
     }
 
     const builderMessageContent = "聊天区 bubble 头像也补上 running 绿点。";
@@ -586,10 +745,16 @@ describe("ChatPane", () => {
 
     const builderMessages = snapshot.messageOrderByRoom[room.id]
       ?.map((messageId) => snapshot.messages[messageId])
-      .filter((message) => message.author.kind === "member" && message.author.id === runningBuilder.id);
+      .filter(
+        (message) =>
+          message.author.kind === "member" &&
+          message.author.id === runningBuilder.id,
+      );
 
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     const { container } = render(
       <TooltipProvider>
@@ -610,12 +775,17 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    const runningDots = container.querySelectorAll("[data-slot='avatar-badge']");
-    const bubble = screen.getAllByText(builderMessageContent)
+    const runningDots = container.querySelectorAll(
+      "[data-slot='avatar-badge']",
+    );
+    const bubble = screen
+      .getAllByText(builderMessageContent)
       .find((element) => element.closest("[data-message-kind='member']"))
       ?.closest("[data-message-kind='member']");
     if (!(bubble instanceof HTMLElement)) {
-      throw new Error("Expected builder message to render inside a member bubble");
+      throw new Error(
+        "Expected builder message to render inside a member bubble",
+      );
     }
 
     expect(bubble.querySelector("[data-slot='avatar-badge']")).toBeTruthy();
@@ -630,7 +800,9 @@ describe("ChatPane", () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
+    const builder = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder");
     if (!builder) {
       throw new Error("Expected builder member in seeded room");
     }
@@ -639,7 +811,9 @@ describe("ChatPane", () => {
       status: "running",
     };
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -660,7 +834,9 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    const trigger = document.querySelector('[aria-label="Show running members"]');
+    const trigger = document.querySelector(
+      '[aria-label="Show running members"]',
+    );
     if (!(trigger instanceof HTMLElement)) {
       throw new Error("Expected running members trigger");
     }
@@ -683,14 +859,17 @@ describe("ChatPane", () => {
             roomId: "room_1",
             memberName: "Forge Crab",
             memberHandle: "builder",
-            latestContentPreview: "正在补 room 顶部状态 tooltip 的 hover 列表。",
+            latestContentPreview:
+              "正在补 room 顶部状态 tooltip 的 hover 列表。",
           },
         ]}
         onOpenMember={vi.fn()}
       />,
     );
 
-    const trigger = document.querySelector('[aria-label="Show running members"]');
+    const trigger = document.querySelector(
+      '[aria-label="Show running members"]',
+    );
     if (!(trigger instanceof HTMLElement)) {
       throw new Error("Expected running members trigger");
     }
@@ -700,14 +879,18 @@ describe("ChatPane", () => {
     expect(await screen.findByText("Running members")).toBeInTheDocument();
     expect(screen.getByText("@builder")).toBeInTheDocument();
     expect(screen.getByText("Forge Crab")).toBeInTheDocument();
-    expect(screen.getByText("正在补 room 顶部状态 tooltip 的 hover 列表。")).toBeInTheDocument();
+    expect(
+      screen.getByText("正在补 room 顶部状态 tooltip 的 hover 列表。"),
+    ).toBeInTheDocument();
   });
 
   it("uses a compact team edit badge instead of the full template name", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -729,10 +912,14 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    const teamTrigger = screen.getByRole("button", { name: new RegExp(`Edit ${roomTeam?.name ?? "Room team"}`) });
+    const teamTrigger = screen.getByRole("button", {
+      name: new RegExp(`Edit ${roomTeam?.name ?? "Room team"}`),
+    });
 
     expect(within(teamTrigger).getByText("Team")).toBeInTheDocument();
-    expect(within(teamTrigger).queryByText(roomTeam?.name ?? "")).not.toBeInTheDocument();
+    expect(
+      within(teamTrigger).queryByText(roomTeam?.name ?? ""),
+    ).not.toBeInTheDocument();
   });
 
   it("lets the user toggle per-member room visibility from the header", async () => {
@@ -740,7 +927,9 @@ describe("ChatPane", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
     const onUpdateRoomSettings = vi.fn();
 
     render(
@@ -763,13 +952,17 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    await user.click(screen.getByRole("button", { name: "Toggle @builder visibility" }));
+    await user.click(
+      screen.getByRole("button", { name: "Toggle @builder visibility" }),
+    );
 
     expect(onUpdateRoomSettings).toHaveBeenCalledWith({
       roomId: room.id,
-      visibleMemberIds: resolveRoomVisibleMemberIds(snapshot, room, snapshot.templates[room.templateId]).filter(
-        (memberId) => snapshot.members[memberId]?.handle !== "builder",
-      ),
+      visibleMemberIds: resolveRoomVisibleMemberIds(
+        snapshot,
+        room,
+        snapshot.templates[room.templateId],
+      ).filter((memberId) => snapshot.members[memberId]?.handle !== "builder"),
     });
   });
 
@@ -777,7 +970,9 @@ describe("ChatPane", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -799,7 +994,9 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    const builderChip = screen.getByRole("button", { name: "Toggle @builder visibility" });
+    const builderChip = screen.getByRole("button", {
+      name: "Toggle @builder visibility",
+    });
 
     expect(builderChip).toHaveTextContent("builder");
     expect(builderChip.querySelector("[data-slot='avatar']")).toBeTruthy();
@@ -810,7 +1007,9 @@ describe("ChatPane", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -874,7 +1073,9 @@ describe("ChatPane", () => {
 
     room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -902,10 +1103,12 @@ describe("ChatPane", () => {
     expect(screen.getByText(/lead @builder/)).toBeInTheDocument();
 
     const summaryLine = screen.getByText((content, element) => {
-      return element?.tagName === "P"
-        && content.includes("先整理需求边界")
-        && content.includes("...")
-        && !content.includes("第二行不应该被带进来");
+      return (
+        element?.tagName === "P" &&
+        content.includes("先整理需求边界") &&
+        content.includes("...") &&
+        !content.includes("第二行不应该被带进来")
+      );
     });
 
     expect(summaryLine).toHaveClass("truncate");
@@ -945,7 +1148,9 @@ describe("ChatPane", () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
-    const builder = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "builder");
+    const builder = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder");
     if (!builder) {
       throw new Error("Expected builder member in seeded room");
     }
@@ -954,7 +1159,9 @@ describe("ChatPane", () => {
       status: "running",
     };
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -979,18 +1186,24 @@ describe("ChatPane", () => {
       .getAllByText("Members")
       .find((element) => element.closest("[data-slot='badge']"))
       ?.closest("[data-slot='badge']");
-    const watchersBadge = screen.getByText("Watchers").closest("[data-slot='badge']");
+    const watchersBadge = screen
+      .getByText("Watchers")
+      .closest("[data-slot='badge']");
 
     expect(membersBadge).toHaveClass("h-6");
     expect(membersBadge).not.toHaveClass("h-8");
     expect(watchersBadge).toHaveClass("h-6");
     expect(watchersBadge).not.toHaveClass("h-8");
 
-    const runningTrigger = document.querySelector('[aria-label="Show running members"]');
+    const runningTrigger = document.querySelector(
+      '[aria-label="Show running members"]',
+    );
     if (!(runningTrigger instanceof HTMLElement)) {
       throw new Error("Expected running members trigger");
     }
-    const runningBadge = within(runningTrigger).getByText("Running").closest("[data-slot='badge']");
+    const runningBadge = within(runningTrigger)
+      .getByText("Running")
+      .closest("[data-slot='badge']");
 
     expect(runningBadge).toHaveClass("h-6");
     expect(runningBadge).not.toHaveClass("h-7");
@@ -1003,7 +1216,9 @@ describe("ChatPane", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -1025,9 +1240,15 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    const titleBlock = screen.getByText(room.name).closest("div.min-w-\\[min\\(100\\%\\,24rem\\)\\]");
-    const teamTrigger = screen.getByRole("button", { name: new RegExp(`Edit ${roomTeam?.name ?? "Room team"}`) });
-    const badgeGroup = teamTrigger.closest("div.flex.max-w-full.shrink-0.flex-nowrap.items-center.gap-1\\.5");
+    const titleBlock = screen
+      .getByText(room.name)
+      .closest("div.min-w-\\[min\\(100\\%\\,24rem\\)\\]");
+    const teamTrigger = screen.getByRole("button", {
+      name: new RegExp(`Edit ${roomTeam?.name ?? "Room team"}`),
+    });
+    const badgeGroup = teamTrigger.closest(
+      "div.flex.max-w-full.shrink-0.flex-nowrap.items-center.gap-1\\.5",
+    );
 
     expect(titleBlock).toBeTruthy();
     expect(badgeGroup).toBeTruthy();
@@ -1038,14 +1259,18 @@ describe("ChatPane", () => {
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {
       configurable: true,
       value: (options: ScrollToOptions | number, top?: number) => {
-        scrollCalls.push(typeof options === "number" ? [options, top ?? 0] : options);
+        scrollCalls.push(
+          typeof options === "number" ? [options, top ?? 0] : options,
+        );
       },
     });
 
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
-    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
 
     render(
       <TooltipProvider>
@@ -1071,7 +1296,9 @@ describe("ChatPane", () => {
     expect(firstCall).toBeDefined();
     expect(Array.isArray(firstCall)).toBe(false);
     if (!firstCall || Array.isArray(firstCall)) {
-      throw new Error("Expected transcript scrollTo to receive ScrollToOptions");
+      throw new Error(
+        "Expected transcript scrollTo to receive ScrollToOptions",
+      );
     }
     expect(firstCall.behavior).toBe("auto");
     expect(typeof firstCall.top).toBe("number");

@@ -1,7 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, BarChart3, Bot, Eye, EyeOff, FolderKanban, GitBranch, Link2, TerminalSquare, Users } from "lucide-react";
+import {
+  ArrowDown,
+  BarChart3,
+  Bot,
+  Eye,
+  EyeOff,
+  FolderKanban,
+  GitBranch,
+  Link2,
+  TerminalSquare,
+  Users,
+} from "lucide-react";
 
 import type {
   ChatMessage,
@@ -12,13 +32,20 @@ import type {
   WorkspaceSnapshot,
 } from "@/domain/model";
 import { ChatComposer } from "@/components/chat/chat-composer";
-import { MessageBubble, MessageBubbleMeta } from "@/components/chat/message-bubble";
+import {
+  MessageBubble,
+  MessageBubbleMeta,
+} from "@/components/chat/message-bubble";
 import { RoomDashboard } from "@/components/chat/room-dashboard";
 import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import { MemberAvatar } from "@/components/members/member-avatar";
 import { MemberHoverPreview } from "@/components/members/member-hover-preview";
 import { RunningMembersHoverCard } from "@/components/members/running-members-hover-card";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { getMemberActivitySummary } from "@/components/members/member-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +55,12 @@ import { getMemberRoleLabel } from "@/lib/member-display";
 import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
 import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
 import type { RoomTeamSummary } from "@/lib/room-team";
-import { getUIMessageText, getVisibleRoomMessages, mapDomainMessageToUIMessage, type WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
+import {
+  getUIMessageText,
+  getVisibleRoomMessages,
+  mapDomainMessageToUIMessage,
+  type WorkspaceUIMessage,
+} from "@/lib/chat/workspace-ui-message";
 import {
   getMessageHandlers,
   getMessageMentionHandles,
@@ -40,7 +72,12 @@ import { WorkspaceRuntimeClient } from "@/lib/runtime-client";
 import { badgeToneProps, compactBadgeClassName } from "@/lib/ui-tone";
 import { cn, summarizePrompt } from "@/lib/utils";
 
-function PresenceBadge(props: { active: boolean; activeLabel: string; idleLabel: string; className?: string }) {
+function PresenceBadge(props: {
+  active: boolean;
+  activeLabel: string;
+  idleLabel: string;
+  className?: string;
+}) {
   const { active, activeLabel, idleLabel, className } = props;
 
   return (
@@ -91,16 +128,27 @@ interface CachedTranscriptViewState {
   scrollTop: number;
 }
 
-const transcriptViewStateByScopeKey = new Map<string, CachedTranscriptViewState>();
+const transcriptViewStateByScopeKey = new Map<
+  string,
+  CachedTranscriptViewState
+>();
 
-function buildMemberCardBadges(member: TeamMember, room: Room, snapshot: WorkspaceSnapshot): string[] {
+function buildMemberCardBadges(
+  member: TeamMember,
+  room: Room,
+  snapshot: WorkspaceSnapshot,
+): string[] {
   const badges: string[] = [];
 
   if (member.isEntryMember) {
     badges.push("Entry");
   }
 
-  if (room.watcherIds.some((watcherId) => snapshot.watchers[watcherId]?.memberId === member.id)) {
+  if (
+    room.watcherIds.some(
+      (watcherId) => snapshot.watchers[watcherId]?.memberId === member.id,
+    )
+  ) {
     badges.push("Watcher");
   }
 
@@ -117,7 +165,9 @@ function buildRunningRoomMemberPreviews(args: {
   activeRoutes: RoomChatStatus[];
 }): RunningRoomMemberPreview[] {
   const { members, snapshot, activeRoutes } = args;
-  const routeByMemberId = Object.fromEntries(activeRoutes.map((route) => [route.memberId, route] as const));
+  const routeByMemberId = Object.fromEntries(
+    activeRoutes.map((route) => [route.memberId, route] as const),
+  );
 
   return members
     .filter((member) => member.status === "running")
@@ -130,15 +180,24 @@ function buildRunningRoomMemberPreviews(args: {
         memberId: member.id,
         memberName: member.name,
         memberHandle: member.handle,
-        latestContentPreview: summarizePrompt(routeSummary || activity.latestContentPreview || "正在处理当前消息。", 96),
+        latestContentPreview: summarizePrompt(
+          routeSummary || activity.latestContentPreview || "正在处理当前消息。",
+          96,
+        ),
       } satisfies RunningRoomMemberPreview;
     });
 }
 
 function groupMembersByRole(members: TeamMember[]): RoomRoleGroup[] {
   return members.reduce<RoomRoleGroup[]>((groups, member) => {
-    const roleId = typeof member.roleId === "string" && member.roleId.trim().length > 0 ? member.roleId.trim() : member.id;
-    const roleName = typeof member.roleName === "string" && member.roleName.trim().length > 0 ? member.roleName.trim() : member.handle;
+    const roleId =
+      typeof member.roleId === "string" && member.roleId.trim().length > 0
+        ? member.roleId.trim()
+        : member.id;
+    const roleName =
+      typeof member.roleName === "string" && member.roleName.trim().length > 0
+        ? member.roleName.trim()
+        : member.handle;
     const existingGroup = groups.find((group) => group.roleId === roleId);
     if (existingGroup) {
       existingGroup.members.push(member);
@@ -156,10 +215,14 @@ function resolveMemberLatestPreview(
 ): string {
   const activity = getMemberActivitySummary(snapshot, member);
 
-  return activeRouteSummaryByMemberId[member.id]
-    ?? (activity.latestMessage ? summarizePrompt(activity.latestMessage.content, 120) : undefined)
-    ?? activity.latestContentPreview
-    ?? "No recent visible update.";
+  return (
+    activeRouteSummaryByMemberId[member.id] ??
+    (activity.latestMessage
+      ? summarizePrompt(activity.latestMessage.content, 120)
+      : undefined) ??
+    activity.latestContentPreview ??
+    "No recent visible update."
+  );
 }
 
 export function ActiveRoomStatusBadge(props: {
@@ -169,7 +232,9 @@ export function ActiveRoomStatusBadge(props: {
   const { runningMembers, onOpenMember } = props;
 
   if (runningMembers.length === 0) {
-    return <PresenceBadge active={false} activeLabel="Running" idleLabel="Ready" />;
+    return (
+      <PresenceBadge active={false} activeLabel="Running" idleLabel="Ready" />
+    );
   }
 
   return (
@@ -204,7 +269,9 @@ function RoomMetaBadge(props: {
       className={cn(
         compactBadgeClassName,
         "gap-1",
-        tone === "neutral" ? "border-border/75 bg-background/80 text-muted-foreground" : "border-border/80 bg-background/70 text-foreground",
+        tone === "neutral"
+          ? "border-border/75 bg-background/80 text-muted-foreground"
+          : "border-border/80 bg-background/70 text-foreground",
         className,
       )}
     >
@@ -225,11 +292,18 @@ function SidebarMemberCard(props: {
   onOpenMember: (memberId: string) => void;
   onToggleVisible: (memberId: string) => void;
 }) {
-  const { member, onOpenMember, onToggleVisible, selectedMemberId, visible, ...rest } = props;
+  const {
+    member,
+    onOpenMember,
+    onToggleVisible,
+    selectedMemberId,
+    visible,
+    ...rest
+  } = props;
   const roleLabel = getMemberRoleLabel(member.handle);
 
   return (
-    <MemberHoverPreview member={member} watcher={undefined}>
+    <MemberHoverPreview member={member} latestPreview={rest.latestPreview}>
       <button
         aria-label={`Open ${roleLabel} session panel`}
         className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -255,15 +329,35 @@ function SidebarMemberCardSurface(props: {
   snapshot: WorkspaceSnapshot;
   selected?: boolean;
   latestPreview?: string;
+  previewMode?: "sidebar" | "hover";
   visible: boolean;
   onToggleVisible?: (memberId: string) => void;
   titleSuffix?: ReactNode;
   className?: string;
 }) {
-  const { member, room, snapshot, selected = false, latestPreview, visible, onToggleVisible, titleSuffix, className } = props;
-  const summary = summarizePrompt((member.note?.trim() || member.summary || "").trim(), 140);
+  const {
+    member,
+    room,
+    snapshot,
+    selected = false,
+    latestPreview,
+    previewMode = "sidebar",
+    visible,
+    onToggleVisible,
+    titleSuffix,
+    className,
+  } = props;
+  const summary = summarizePrompt(
+    (member.note?.trim() || member.summary || "").trim(),
+    140,
+  );
   const badges = buildMemberCardBadges(member, room, snapshot);
-  const eyeLabel = visible ? `Hide @${member.handle} messages` : `Show @${member.handle} messages`;
+  const eyeLabel = visible
+    ? `Hide @${member.handle} messages`
+    : `Show @${member.handle} messages`;
+  const showSidebarSummary = previewMode === "sidebar" && summary.length > 0;
+  const showLatestPreview = previewMode === "hover";
+  const resolvedLatestPreview = latestPreview ?? "No recent visible update.";
 
   return (
     <div
@@ -271,18 +365,25 @@ function SidebarMemberCardSurface(props: {
         "w-full rounded-2xl border border-border bg-card px-3.5 py-3 text-left shadow-sm transition-colors",
         selected && "border-ring bg-accent/10 shadow-md",
         !visible && "opacity-70",
-        member.status === "running"
-          && "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)]/95 shadow-[0_18px_36px_-32px_rgba(62,118,255,0.95)]",
+        member.status === "running" &&
+          "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)]/95 shadow-[0_18px_36px_-32px_rgba(62,118,255,0.95)]",
         className,
       )}
     >
       <div className="flex items-start gap-3">
-        <MemberAvatar member={member} compact active={selected} showRunningDot />
+        <MemberAvatar
+          member={member}
+          compact
+          active={selected}
+          showRunningDot
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2">
             <div className="min-w-0 flex-1">
               <div className="inline-flex max-w-full items-center gap-2 align-top">
-                <p className="m-0 truncate text-base font-semibold tracking-tight">@{member.handle}</p>
+                <p className="m-0 truncate text-base font-semibold tracking-tight">
+                  @{member.handle}
+                </p>
                 {titleSuffix}
               </div>
             </div>
@@ -307,9 +408,22 @@ function SidebarMemberCardSurface(props: {
               </button>
             ) : null}
           </div>
-          {summary ? <p className="mt-1 m-0 line-clamp-2 text-sm text-muted-foreground">{summary}</p> : null}
-          {latestPreview ? <p className="mt-2 truncate text-sm text-foreground/85">{latestPreview}</p> : null}
-          {badges.length > 0 ? (
+          {showSidebarSummary ? (
+            <p className="mt-1 m-0 line-clamp-2 text-sm text-muted-foreground">
+              {summary}
+            </p>
+          ) : null}
+          {showLatestPreview ? (
+            <div className="mt-2 rounded-2xl border border-border/60 bg-muted/30 px-3 py-2.5">
+              <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                Latest update
+              </p>
+              <p className="mt-1 m-0 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/90">
+                {resolvedLatestPreview}
+              </p>
+            </div>
+          ) : null}
+          {previewMode === "sidebar" && badges.length > 0 ? (
             <div className="mt-3 border-t border-border/70 pt-3">
               <div className="flex flex-wrap gap-1.5">
                 {badges.map((badge) => (
@@ -336,34 +450,42 @@ function RoleGroupHoverPreview(props: {
   onOpenMember: (memberId: string) => void;
   onToggleVisible: (memberId: string) => void;
 }) {
-  const { group, room, snapshot, selectedMemberId, visibleMemberIds, activeRouteSummaryByMemberId, onOpenMember, onToggleVisible } = props;
+  const {
+    group,
+    room,
+    snapshot,
+    selectedMemberId,
+    visibleMemberIds,
+    activeRouteSummaryByMemberId,
+    onOpenMember,
+    onToggleVisible,
+  } = props;
   const previewMember = group.members[0];
-  const groupHasSelectedMember = group.members.some((member) => member.id === selectedMemberId);
+  const groupHasSelectedMember = group.members.some(
+    (member) => member.id === selectedMemberId,
+  );
   const visibleMemberIdSet = new Set(visibleMemberIds);
 
   if (!previewMember) {
     return null;
   }
 
-  const latestPreview = resolveMemberLatestPreview(previewMember, snapshot, activeRouteSummaryByMemberId);
-
   return (
     <HoverCard openDelay={120}>
       <HoverCardTrigger asChild>
-        <div
-          aria-label={`Role group ${group.roleName}`}
-          className="w-full"
-        >
+        <div aria-label={`Role group ${group.roleName}`} className="w-full">
           <SidebarMemberCardSurface
             member={previewMember}
             room={room}
             snapshot={snapshot}
             selected={groupHasSelectedMember}
-            latestPreview={latestPreview}
             visible={visibleMemberIdSet.has(previewMember.id)}
             onToggleVisible={onToggleVisible}
             titleSuffix={
-              <Badge variant="outline" className="shrink-0 px-1.5 text-[10px] font-medium text-muted-foreground">
+              <Badge
+                variant="outline"
+                className="shrink-0 px-1.5 text-[10px] font-medium text-muted-foreground"
+              >
                 x {group.members.length}
               </Badge>
             }
@@ -371,10 +493,20 @@ function RoleGroupHoverPreview(props: {
           />
         </div>
       </HoverCardTrigger>
-      <HoverCardContent side="left" align="start" sideOffset={14} className="w-[min(88vw,320px)] p-2.5">
+      <HoverCardContent
+        side="left"
+        align="start"
+        sideOffset={14}
+        collisionPadding={12}
+        className="w-[min(88vw,340px)] max-h-[min(70vh,calc(100vh-2rem))] overflow-y-auto p-2.5"
+      >
         <div className="flex flex-col gap-2">
           {group.members.map((member) => {
-            const latestPreview = resolveMemberLatestPreview(member, snapshot, activeRouteSummaryByMemberId);
+            const latestPreview = resolveMemberLatestPreview(
+              member,
+              snapshot,
+              activeRouteSummaryByMemberId,
+            );
 
             return (
               <button
@@ -392,6 +524,7 @@ function RoleGroupHoverPreview(props: {
                   snapshot={snapshot}
                   selected={member.id === selectedMemberId}
                   latestPreview={latestPreview}
+                  previewMode="hover"
                   visible={visibleMemberIdSet.has(member.id)}
                   onToggleVisible={onToggleVisible}
                   className="hover:bg-muted/60"
@@ -421,7 +554,9 @@ export function ChatPane(props: {
   onUpdateRoomSettings?: (input: UpdateRoomSettingsInput) => void;
   onToggleLeftSidebar: () => void;
   onToggleRightSidebar: () => void;
-  onRightSidebarResizeStart?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onRightSidebarResizeStart?: (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => void;
 }) {
   const {
     leftSidebarCollapsed,
@@ -446,34 +581,61 @@ export function ChatPane(props: {
   const previousLiveLatestMessageIdRef = useRef<string | undefined>(undefined);
   const historyBootstrapCursorRef = useRef<string | undefined>(undefined);
   const pendingInitialBottomAlignRef = useRef(false);
-  const pendingPrependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | undefined>(undefined);
+  const pendingPrependAnchorRef = useRef<
+    { scrollHeight: number; scrollTop: number } | undefined
+  >(undefined);
   const historyRequestIdRef = useRef(0);
   const pendingRestoreScrollTopRef = useRef<number | undefined>(undefined);
   const runtimeClient = useMemo(() => new WorkspaceRuntimeClient(), []);
   const roomId = room?.id;
-  const visibleMemberIds = room ? resolveRoomVisibleMemberIds(snapshot, room, snapshot.templates[room.templateId]) : [];
+  const visibleMemberIds = room
+    ? resolveRoomVisibleMemberIds(
+        snapshot,
+        room,
+        snapshot.templates[room.templateId],
+      )
+    : [];
   const historyScopeKey = `${roomId ?? "no-room"}:${visibleMemberIds.join(",")}`;
-  const cachedTranscriptViewState = useMemo(() => transcriptViewStateByScopeKey.get(historyScopeKey), [historyScopeKey]);
+  const cachedTranscriptViewState = useMemo(
+    () => transcriptViewStateByScopeKey.get(historyScopeKey),
+    [historyScopeKey],
+  );
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const [transcriptScrollTop, setTranscriptScrollTop] = useState(0);
-  const [historyMessages, setHistoryMessages] = useState<ChatMessage[]>(() => cachedTranscriptViewState?.historyMessages ?? []);
-  const [historyHasMore, setHistoryHasMore] = useState(() => cachedTranscriptViewState?.historyHasMore ?? false);
+  const [historyMessages, setHistoryMessages] = useState<ChatMessage[]>(
+    () => cachedTranscriptViewState?.historyMessages ?? [],
+  );
+  const [historyHasMore, setHistoryHasMore] = useState(
+    () => cachedTranscriptViewState?.historyHasMore ?? false,
+  );
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState<string | undefined>(undefined);
-  const [focusedMessageId, setFocusedMessageId] = useState<string | undefined>(undefined);
+  const [historyError, setHistoryError] = useState<string | undefined>(
+    undefined,
+  );
+  const [focusedMessageId, setFocusedMessageId] = useState<string | undefined>(
+    undefined,
+  );
   const roomChat = useRoomChat({
     room,
     members,
     snapshot,
   });
-  const liveRoomMessages = useMemo(() => (room ? getVisibleRoomMessages(snapshot, room) : []), [room, snapshot]);
+  const liveRoomMessages = useMemo(
+    () => (room ? getVisibleRoomMessages(snapshot, room) : []),
+    [room, snapshot],
+  );
   historyBootstrapCursorRef.current = liveRoomMessages[0]?.id;
   const transcriptDomainMessages = useMemo(
     () => mergeVisibleRoomMessages(historyMessages, liveRoomMessages),
     [historyMessages, liveRoomMessages],
   );
   const transcriptMessages = useMemo(
-    () => (room ? transcriptDomainMessages.map((message) => mapDomainMessageToUIMessage(snapshot, room, message)) : []),
+    () =>
+      room
+        ? transcriptDomainMessages.map((message) =>
+            mapDomainMessageToUIMessage(snapshot, room, message),
+          )
+        : [],
     [room, snapshot, transcriptDomainMessages],
   );
   const latestLiveMessageId = liveRoomMessages.at(-1)?.id;
@@ -491,12 +653,24 @@ export function ChatPane(props: {
     getItemKey: (index) => transcriptMessages[index]?.id ?? index,
   });
   const virtualRows = messageVirtualizer.getVirtualItems();
-  const stickyVirtualRow = virtualRows.find((row) => row.end > transcriptScrollTop + 4) ?? virtualRows[0];
-  const stickyMessage = stickyVirtualRow ? transcriptMessages[stickyVirtualRow.index] : undefined;
-  const stickyBubble = stickyMessage && room ? toBubbleModel(stickyMessage, snapshot, room, snapshot.currentUserName) : undefined;
+  const stickyVirtualRow =
+    virtualRows.find((row) => row.end > transcriptScrollTop + 4) ??
+    virtualRows[0];
+  const stickyMessage = stickyVirtualRow
+    ? transcriptMessages[stickyVirtualRow.index]
+    : undefined;
+  const stickyBubble =
+    stickyMessage && room
+      ? toBubbleModel(stickyMessage, snapshot, room, snapshot.currentUserName)
+      : undefined;
   const stickyAuthorMemberId = stickyBubble?.authorMemberId;
   const transcriptIndexByMessageId = useMemo(
-    () => Object.fromEntries(transcriptMessages.map((message, index) => [message.id, index] as const)),
+    () =>
+      Object.fromEntries(
+        transcriptMessages.map(
+          (message, index) => [message.id, index] as const,
+        ),
+      ),
     [transcriptMessages],
   );
   const updateScrollState = useCallback((): void => {
@@ -506,7 +680,8 @@ export function ChatPane(props: {
     }
 
     setTranscriptScrollTop(container.scrollTop);
-    const bottomGap = container.scrollHeight - container.clientHeight - container.scrollTop;
+    const bottomGap =
+      container.scrollHeight - container.clientHeight - container.scrollTop;
     setShowScrollToLatest(bottomGap > 32);
   }, []);
 
@@ -517,28 +692,31 @@ export function ChatPane(props: {
       scrollTop: transcriptRef.current?.scrollTop ?? transcriptScrollTop,
     });
   }, [historyHasMore, historyMessages, historyScopeKey, transcriptScrollTop]);
-  const scrollTranscriptToLatest = useCallback((behavior: ScrollBehavior = "smooth"): void => {
-    const container = transcriptRef.current;
-    if (!container) {
-      return;
-    }
+  const scrollTranscriptToLatest = useCallback(
+    (behavior: ScrollBehavior = "smooth"): void => {
+      const container = transcriptRef.current;
+      if (!container) {
+        return;
+      }
 
-    if (transcriptMessages.length > 0) {
-      messageVirtualizer.scrollToIndex(transcriptMessages.length - 1, {
-        align: "end",
-        behavior,
-      });
-    }
+      if (transcriptMessages.length > 0) {
+        messageVirtualizer.scrollToIndex(transcriptMessages.length - 1, {
+          align: "end",
+          behavior,
+        });
+      }
 
-    window.requestAnimationFrame(() => {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior,
+      window.requestAnimationFrame(() => {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior,
+        });
+        setShowScrollToLatest(false);
+        updateScrollState();
       });
-      setShowScrollToLatest(false);
-      updateScrollState();
-    });
-  }, [messageVirtualizer, transcriptMessages.length, updateScrollState]);
+    },
+    [messageVirtualizer, transcriptMessages.length, updateScrollState],
+  );
 
   useEffect(() => {
     historyRequestIdRef.current += 1;
@@ -584,7 +762,11 @@ export function ChatPane(props: {
 
         setHistoryMessages([]);
         setHistoryHasMore(false);
-        setHistoryError(error instanceof Error ? error.message : "Failed to load room history.");
+        setHistoryError(
+          error instanceof Error
+            ? error.message
+            : "Failed to load room history.",
+        );
       })
       .finally(() => {
         if (historyRequestIdRef.current === requestId) {
@@ -632,7 +814,14 @@ export function ChatPane(props: {
         scrollTranscriptToLatest("auto");
       });
     });
-  }, [layoutKey, latestLiveMessageId, roomId, scrollTranscriptToLatest, transcriptMessages.length, updateScrollState]);
+  }, [
+    layoutKey,
+    latestLiveMessageId,
+    roomId,
+    scrollTranscriptToLatest,
+    transcriptMessages.length,
+    updateScrollState,
+  ]);
 
   useEffect(() => {
     const pendingAnchor = pendingPrependAnchorRef.current;
@@ -643,13 +832,17 @@ export function ChatPane(props: {
 
     window.requestAnimationFrame(() => {
       container.scrollTo({
-        top: pendingAnchor.scrollTop + (container.scrollHeight - pendingAnchor.scrollHeight),
+        top:
+          pendingAnchor.scrollTop +
+          (container.scrollHeight - pendingAnchor.scrollHeight),
         behavior: "auto",
       });
       updateScrollState();
       window.requestAnimationFrame(() => {
         container.scrollTo({
-          top: pendingAnchor.scrollTop + (container.scrollHeight - pendingAnchor.scrollHeight),
+          top:
+            pendingAnchor.scrollTop +
+            (container.scrollHeight - pendingAnchor.scrollHeight),
           behavior: "auto",
         });
         pendingPrependAnchorRef.current = undefined;
@@ -659,12 +852,18 @@ export function ChatPane(props: {
   }, [scrollTranscriptToLatest, transcriptMessages.length, updateScrollState]);
 
   useEffect(() => {
-    if (!roomId || transcriptMessages.length === 0 || pendingInitialBottomAlignRef.current || pendingPrependAnchorRef.current) {
+    if (
+      !roomId ||
+      transcriptMessages.length === 0 ||
+      pendingInitialBottomAlignRef.current ||
+      pendingPrependAnchorRef.current
+    ) {
       return;
     }
 
     const layoutChanged = previousLayoutKeyRef.current !== layoutKey;
-    const liveLatestChanged = previousLiveLatestMessageIdRef.current !== latestLiveMessageId;
+    const liveLatestChanged =
+      previousLiveLatestMessageIdRef.current !== latestLiveMessageId;
     previousLayoutKeyRef.current = layoutKey;
     previousLiveLatestMessageIdRef.current = latestLiveMessageId;
 
@@ -676,7 +875,15 @@ export function ChatPane(props: {
     }
 
     window.requestAnimationFrame(updateScrollState);
-  }, [layoutKey, latestLiveMessageId, roomId, scrollTranscriptToLatest, showScrollToLatest, transcriptMessages.length, updateScrollState]);
+  }, [
+    layoutKey,
+    latestLiveMessageId,
+    roomId,
+    scrollTranscriptToLatest,
+    showScrollToLatest,
+    transcriptMessages.length,
+    updateScrollState,
+  ]);
 
   const loadEarlierMessages = (): void => {
     if (!room || historyLoading) {
@@ -709,7 +916,9 @@ export function ChatPane(props: {
           pendingPrependAnchorRef.current = undefined;
         }
 
-        setHistoryMessages((currentMessages) => mergeVisibleRoomMessages(page.messages, currentMessages));
+        setHistoryMessages((currentMessages) =>
+          mergeVisibleRoomMessages(page.messages, currentMessages),
+        );
         setHistoryHasMore(page.hasMore);
       })
       .catch((error) => {
@@ -718,7 +927,11 @@ export function ChatPane(props: {
         }
 
         pendingPrependAnchorRef.current = undefined;
-        setHistoryError(error instanceof Error ? error.message : "Failed to load earlier messages.");
+        setHistoryError(
+          error instanceof Error
+            ? error.message
+            : "Failed to load earlier messages.",
+        );
       })
       .finally(() => {
         if (historyRequestIdRef.current === requestId) {
@@ -727,21 +940,26 @@ export function ChatPane(props: {
       });
   };
 
-  const focusMessage = useCallback((messageId: string): void => {
-    const targetIndex = transcriptIndexByMessageId[messageId];
-    if (typeof targetIndex !== "number") {
-      return;
-    }
+  const focusMessage = useCallback(
+    (messageId: string): void => {
+      const targetIndex = transcriptIndexByMessageId[messageId];
+      if (typeof targetIndex !== "number") {
+        return;
+      }
 
-    setFocusedMessageId(messageId);
-    messageVirtualizer.scrollToIndex(targetIndex, {
-      align: "center",
-      behavior: "smooth",
-    });
-    window.setTimeout(() => {
-      setFocusedMessageId((current) => (current === messageId ? undefined : current));
-    }, 1800);
-  }, [messageVirtualizer, transcriptIndexByMessageId]);
+      setFocusedMessageId(messageId);
+      messageVirtualizer.scrollToIndex(targetIndex, {
+        align: "center",
+        behavior: "smooth",
+      });
+      window.setTimeout(() => {
+        setFocusedMessageId((current) =>
+          current === messageId ? undefined : current,
+        );
+      }, 1800);
+    },
+    [messageVirtualizer, transcriptIndexByMessageId],
+  );
 
   if (!room) {
     const templateCount = snapshot.templateOrder.length;
@@ -752,19 +970,28 @@ export function ChatPane(props: {
 
     return (
       <main className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden px-6 py-10">
-        <ShellToolbar leftSidebarCollapsed={leftSidebarCollapsed} onToggleLeftSidebar={onToggleLeftSidebar} />
+        <ShellToolbar
+          leftSidebarCollapsed={leftSidebarCollapsed}
+          onToggleLeftSidebar={onToggleLeftSidebar}
+        />
         <div className="grid flex-1 content-start gap-10 pt-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(17rem,24rem)]">
           <section className="space-y-10">
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{connected ? "Runtime online" : "Runtime offline"}</Badge>
+                <Badge variant="outline">
+                  {connected ? "Runtime online" : "Runtime offline"}
+                </Badge>
                 <Badge variant="outline">{templateCount} templates ready</Badge>
                 <Badge variant="outline">Project path supported</Badge>
               </div>
               <div className="space-y-3">
-                <p className="m-0 text-5xl font-semibold tracking-tight">OpenAquarium</p>
+                <p className="m-0 text-5xl font-semibold tracking-tight">
+                  OpenAquarium
+                </p>
                 <p className="m-0 max-w-3xl text-lg leading-8 text-muted-foreground">
-                  从左侧创建一个 project 开始协作。你可以选 team template，也可以额外填写 project path，让 ACP 直接在真实仓库目录里启动。
+                  从左侧创建一个 project 开始协作。你可以选 team
+                  template，也可以额外填写 project path，让 ACP
+                  直接在真实仓库目录里启动。
                 </p>
               </div>
             </div>
@@ -775,7 +1002,9 @@ export function ChatPane(props: {
                 <div className="space-y-2">
                   <p className="m-0 text-3xl font-semibold tracking-tight">1</p>
                   <p className="m-0 text-sm font-medium">新建 project</p>
-                  <p className="m-0 text-sm leading-7 text-muted-foreground">在左侧 Projects 面板点击加号，立即生成一个空 room。</p>
+                  <p className="m-0 text-sm leading-7 text-muted-foreground">
+                    在左侧 Projects 面板点击加号，立即生成一个空 room。
+                  </p>
                 </div>
               </div>
               <div className="space-y-3">
@@ -783,7 +1012,9 @@ export function ChatPane(props: {
                 <div className="space-y-2">
                   <p className="m-0 text-3xl font-semibold tracking-tight">2</p>
                   <p className="m-0 text-sm font-medium">选择协作模板</p>
-                  <p className="m-0 text-sm leading-7 text-muted-foreground">模板会决定入口成员、实现者、研究员和 watcher 的初始结构。</p>
+                  <p className="m-0 text-sm leading-7 text-muted-foreground">
+                    模板会决定入口成员、实现者、研究员和 watcher 的初始结构。
+                  </p>
                 </div>
               </div>
               <div className="space-y-3">
@@ -791,7 +1022,10 @@ export function ChatPane(props: {
                 <div className="space-y-2">
                   <p className="m-0 text-3xl font-semibold tracking-tight">3</p>
                   <p className="m-0 text-sm font-medium">可选填写 path</p>
-                  <p className="m-0 text-sm leading-7 text-muted-foreground">如果你要操作真实项目，填写路径后 ACP 会以那个目录作为默认工作目录。</p>
+                  <p className="m-0 text-sm leading-7 text-muted-foreground">
+                    如果你要操作真实项目，填写路径后 ACP
+                    会以那个目录作为默认工作目录。
+                  </p>
                 </div>
               </div>
             </div>
@@ -808,7 +1042,11 @@ export function ChatPane(props: {
                   ? "Runtime 已连接。创建 project 后，首条消息会自动路由给入口成员。"
                   : "Runtime 还没连上。启动本地服务后再创建 project，消息和保存才会真正落盘。"}
               </p>
-              {!connected ? <p className="m-0 font-mono text-xs text-muted-foreground">bun run server</p> : null}
+              {!connected ? (
+                <p className="m-0 font-mono text-xs text-muted-foreground">
+                  bun run server
+                </p>
+              ) : null}
             </div>
 
             <div className="space-y-3">
@@ -818,14 +1056,19 @@ export function ChatPane(props: {
                   const badge = badgeToneProps(template.accentTone);
 
                   return (
-                    <Badge key={template.id} variant={badge.variant} className={badge.className}>
+                    <Badge
+                      key={template.id}
+                      variant={badge.variant}
+                      className={badge.className}
+                    >
                       {template.name}
                     </Badge>
                   );
                 })}
               </div>
               <p className="m-0 text-sm leading-7 text-muted-foreground">
-                新建 project 之后，消息区会展示 room transcript、成员状态和 watcher 活动。
+                新建 project 之后，消息区会展示 room transcript、成员状态和
+                watcher 活动。
               </p>
             </div>
           </aside>
@@ -840,18 +1083,31 @@ export function ChatPane(props: {
         <Card className="border border-destructive/30 bg-destructive/5 shadow-sm">
           <CardContent className="flex flex-col gap-2 p-4">
             <p className="m-0 text-sm font-medium">Runtime offline</p>
-            <p className="m-0 text-sm text-muted-foreground">启动本地 runtime 后，发消息和保存改动才会生效。</p>
-            <p className="m-0 font-mono text-xs text-muted-foreground">bun run server</p>
-            {error ? <p className="m-0 text-xs text-destructive">{error}</p> : null}
+            <p className="m-0 text-sm text-muted-foreground">
+              启动本地 runtime 后，发消息和保存改动才会生效。
+            </p>
+            <p className="m-0 font-mono text-xs text-muted-foreground">
+              bun run server
+            </p>
+            {error ? (
+              <p className="m-0 text-xs text-destructive">{error}</p>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
       <div
         className={cn(
           "relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden",
-          !rightSidebarCollapsed && "xl:grid-cols-[minmax(0,1fr)_var(--oa-right-panel)] xl:gap-3",
+          !rightSidebarCollapsed &&
+            "xl:grid-cols-[minmax(0,1fr)_var(--oa-right-panel)] xl:gap-3",
         )}
-        style={!rightSidebarCollapsed ? ({ "--oa-right-panel": `${rightSidebarWidth}px` } as CSSProperties) : undefined}
+        style={
+          !rightSidebarCollapsed
+            ? ({
+                "--oa-right-panel": `${rightSidebarWidth}px`,
+              } as CSSProperties)
+            : undefined
+        }
       >
         {!rightSidebarCollapsed ? (
           <button
@@ -887,10 +1143,14 @@ export function ChatPane(props: {
                     disabled={historyLoading}
                     onClick={loadEarlierMessages}
                   >
-                    {historyLoading ? "Loading earlier messages..." : "Load earlier messages"}
+                    {historyLoading
+                      ? "Loading earlier messages..."
+                      : "Load earlier messages"}
                   </Button>
                 ) : null}
-                {historyError ? <p className="m-0 text-xs text-destructive">{historyError}</p> : null}
+                {historyError ? (
+                  <p className="m-0 text-xs text-destructive">{historyError}</p>
+                ) : null}
               </div>
             ) : null}
             {transcriptScrollTop > 8 && stickyBubble ? (
@@ -898,29 +1158,45 @@ export function ChatPane(props: {
                 <div className="pointer-events-auto bg-background/95 backdrop-blur-sm">
                   <MessageBubbleMeta
                     message={stickyBubble.message}
-                    authorMember={stickyAuthorMemberId ? roomChat.activeMembersById[stickyAuthorMemberId] : undefined}
+                    authorMember={
+                      stickyAuthorMemberId
+                        ? roomChat.activeMembersById[stickyAuthorMemberId]
+                        : undefined
+                    }
                     mentionedHandles={stickyBubble.mentionedHandles}
                     quotedHandles={stickyBubble.quotedHandles}
                     recipientHandles={stickyBubble.recipientHandles}
                     handlerSummaries={stickyBubble.handlerSummaries}
-                    onAuthorClick={stickyAuthorMemberId ? () => onOpenMember(stickyAuthorMemberId) : undefined}
+                    onAuthorClick={
+                      stickyAuthorMemberId
+                        ? () => onOpenMember(stickyAuthorMemberId)
+                        : undefined
+                    }
                   />
                 </div>
               </div>
             ) : null}
-            <div ref={transcriptRef} className="h-full min-h-0 overflow-y-auto pb-4" onScroll={updateScrollState}>
+            <div
+              ref={transcriptRef}
+              className="h-full min-h-0 overflow-y-auto pb-6"
+              onScroll={updateScrollState}
+            >
               {historyLoading && transcriptMessages.length === 0 ? (
                 <Card className="border border-border shadow-none">
                   <CardContent className="flex items-center gap-4 p-5">
                     <Bot size={28} />
-                    <p className="m-0 text-sm text-muted-foreground">正在加载完整消息历史…</p>
+                    <p className="m-0 text-sm text-muted-foreground">
+                      正在加载完整消息历史…
+                    </p>
                   </CardContent>
                 </Card>
               ) : transcriptMessages.length === 0 ? (
                 <Card className="border border-border shadow-none">
                   <CardContent className="flex items-center gap-4 p-5">
                     <Bot size={28} />
-                    <p className="m-0 text-sm text-muted-foreground">还没有消息。发送第一句话开始。</p>
+                    <p className="m-0 text-sm text-muted-foreground">
+                      还没有消息。发送第一句话开始。
+                    </p>
                   </CardContent>
                 </Card>
               ) : (
@@ -936,8 +1212,15 @@ export function ChatPane(props: {
                       return null;
                     }
 
-                    const bubble = toBubbleModel(message, snapshot, room, snapshot.currentUserName);
-                    const authorMember = bubble.authorMemberId ? roomChat.activeMembersById[bubble.authorMemberId] : undefined;
+                    const bubble = toBubbleModel(
+                      message,
+                      snapshot,
+                      room,
+                      snapshot.currentUserName,
+                    );
+                    const authorMember = bubble.authorMemberId
+                      ? roomChat.activeMembersById[bubble.authorMemberId]
+                      : undefined;
 
                     return (
                       <div
@@ -946,7 +1229,8 @@ export function ChatPane(props: {
                         data-index={virtualRow.index}
                         className={cn(
                           "absolute top-0 left-0 w-full rounded-2xl py-1 transition-all duration-500",
-                          focusedMessageId === bubble.message.id && "bg-[color:var(--tone-blueprint-surface)]/75 ring-1 ring-[color:var(--tone-blueprint-border)]",
+                          focusedMessageId === bubble.message.id &&
+                            "bg-[color:var(--tone-blueprint-surface)]/75 ring-1 ring-[color:var(--tone-blueprint-border)]",
                         )}
                         style={{
                           transform: `translateY(${virtualRow.start}px)`,
@@ -960,7 +1244,11 @@ export function ChatPane(props: {
                           quotedHandles={bubble.quotedHandles}
                           recipientHandles={bubble.recipientHandles}
                           handlerSummaries={bubble.handlerSummaries}
-                          onAuthorClick={authorMember ? () => onOpenMember(authorMember.id) : undefined}
+                          onAuthorClick={
+                            authorMember
+                              ? () => onOpenMember(authorMember.id)
+                              : undefined
+                          }
                         />
                       </div>
                     );
@@ -1004,7 +1292,10 @@ export function ChatPane(props: {
             activeRouteSummaryByMemberId={Object.fromEntries(
               roomChat.activeRoutes
                 .filter((route) => route.summary?.trim())
-                .map((route) => [route.memberId, summarizePrompt(route.summary?.trim() ?? "", 120)]),
+                .map((route) => [
+                  route.memberId,
+                  summarizePrompt(route.summary?.trim() ?? "", 120),
+                ]),
             )}
             onOpenMember={onOpenMember}
             onUpdateRoomSettings={onUpdateRoomSettings}
@@ -1023,13 +1314,26 @@ function ShellToolbar(props: {
   rightSidebarCollapsed?: boolean;
   onToggleRightSidebar?: () => void;
 }) {
-  const { leftSidebarCollapsed, onToggleLeftSidebar, rightSidebarCollapsed, onToggleRightSidebar } = props;
+  const {
+    leftSidebarCollapsed,
+    onToggleLeftSidebar,
+    rightSidebarCollapsed,
+    onToggleRightSidebar,
+  } = props;
 
   return (
     <div className="flex items-center justify-between gap-3">
-      <PanelToggleButton collapsed={leftSidebarCollapsed} side="left" onToggle={onToggleLeftSidebar} />
+      <PanelToggleButton
+        collapsed={leftSidebarCollapsed}
+        side="left"
+        onToggle={onToggleLeftSidebar}
+      />
       {typeof rightSidebarCollapsed === "boolean" && onToggleRightSidebar ? (
-        <PanelToggleButton collapsed={rightSidebarCollapsed} side="right" onToggle={onToggleRightSidebar} />
+        <PanelToggleButton
+          collapsed={rightSidebarCollapsed}
+          side="right"
+          onToggle={onToggleRightSidebar}
+        />
       ) : null}
     </div>
   );
@@ -1060,19 +1364,24 @@ function RoomTopBar(props: {
     onOpenMember,
     onToggleLeftSidebar,
     onToggleRightSidebar,
-  } =
-    props;
+  } = props;
   const teamBadge = badgeToneProps(roomTeam?.accentTone ?? "paper");
   const teamBadgeTitle = roomTeam?.name?.trim() || "Room team";
 
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="flex min-w-0 flex-1 items-start gap-3">
-        <PanelToggleButton collapsed={leftSidebarCollapsed} side="left" onToggle={onToggleLeftSidebar} />
+        <PanelToggleButton
+          collapsed={leftSidebarCollapsed}
+          side="left"
+          onToggle={onToggleLeftSidebar}
+        />
         <div className="min-w-0 flex-1 space-y-3 pt-0.5">
           <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
             <div className="min-w-[min(100%,24rem)] flex-[1_1_24rem]">
-              <p className="m-0 truncate text-3xl font-semibold tracking-tight">{room.name}</p>
+              <p className="m-0 truncate text-3xl font-semibold tracking-tight">
+                {room.name}
+              </p>
             </div>
             <div className="flex max-w-full shrink-0 flex-nowrap items-center gap-1.5">
               {onOpenRoomTeam ? (
@@ -1083,7 +1392,14 @@ function RoomTopBar(props: {
                   className="inline-flex rounded-full border-0 bg-transparent p-0 text-left align-middle"
                   onClick={onOpenRoomTeam}
                 >
-                  <Badge variant={teamBadge.variant} className={cn(compactBadgeClassName, teamBadge.className, "max-w-full gap-1.5 px-2")}>
+                  <Badge
+                    variant={teamBadge.variant}
+                    className={cn(
+                      compactBadgeClassName,
+                      teamBadge.className,
+                      "max-w-full gap-1.5 px-2",
+                    )}
+                  >
                     <Link2 aria-hidden size={12} />
                     <span>Team</span>
                   </Badge>
@@ -1091,7 +1407,11 @@ function RoomTopBar(props: {
               ) : (
                 <Badge
                   variant={teamBadge.variant}
-                  className={cn(compactBadgeClassName, teamBadge.className, "max-w-full gap-1.5 px-2")}
+                  className={cn(
+                    compactBadgeClassName,
+                    teamBadge.className,
+                    "max-w-full gap-1.5 px-2",
+                  )}
                   title={teamBadgeTitle}
                 >
                   <Link2 aria-hidden size={12} />
@@ -1099,17 +1419,28 @@ function RoomTopBar(props: {
                 </Badge>
               )}
               <RoomMetaBadge label="Members" value={String(members.length)} />
-              <RoomMetaBadge label="Watchers" value={String(room.watcherIds.length)} />
+              <RoomMetaBadge
+                label="Watchers"
+                value={String(room.watcherIds.length)}
+              />
               <ActiveRoomStatusBadge
                 runningMembers={runningMembers}
                 onOpenMember={(preview) => onOpenMember(preview.memberId)}
               />
             </div>
           </div>
-          {activeStreamSummary ? <p className="m-0 text-sm text-muted-foreground">{activeStreamSummary}</p> : null}
+          {activeStreamSummary ? (
+            <p className="m-0 text-sm text-muted-foreground">
+              {activeStreamSummary}
+            </p>
+          ) : null}
         </div>
       </div>
-      <PanelToggleButton collapsed={rightSidebarCollapsed} side="right" onToggle={onToggleRightSidebar} />
+      <PanelToggleButton
+        collapsed={rightSidebarCollapsed}
+        side="right"
+        onToggle={onToggleRightSidebar}
+      />
     </div>
   );
 }
@@ -1126,36 +1457,75 @@ function RoomMembersSidebar(props: {
   onFocusMessage: (messageId: string) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
-  const { room, snapshot, members, visibleMemberIds, selectedMemberId, activeRouteSummaryByMemberId, onOpenMember, onUpdateRoomSettings, onFocusMessage, onResizeStart } = props;
+  const {
+    room,
+    snapshot,
+    members,
+    visibleMemberIds,
+    selectedMemberId,
+    activeRouteSummaryByMemberId,
+    onOpenMember,
+    onUpdateRoomSettings,
+    onFocusMessage,
+    onResizeStart,
+  } = props;
   const roleGroups = useMemo(() => groupMembersByRole(members), [members]);
-  const [activeTab, setActiveTab] = useState<"members" | "dashboard">("members");
-  const toggleMemberVisibility = useCallback((memberId: string): void => {
-    const visibleMemberIdSet = new Set(visibleMemberIds);
-    const nextVisibleMemberIds = visibleMemberIdSet.has(memberId)
-      ? visibleMemberIds.filter((candidateId) => candidateId !== memberId)
-      : [...visibleMemberIds, memberId];
-    onUpdateRoomSettings?.({ roomId: room.id, visibleMemberIds: nextVisibleMemberIds });
-  }, [onUpdateRoomSettings, room.id, visibleMemberIds]);
+  const [activeTab, setActiveTab] = useState<"members" | "dashboard">(
+    "members",
+  );
+  const toggleMemberVisibility = useCallback(
+    (memberId: string): void => {
+      const visibleMemberIdSet = new Set(visibleMemberIds);
+      const nextVisibleMemberIds = visibleMemberIdSet.has(memberId)
+        ? visibleMemberIds.filter((candidateId) => candidateId !== memberId)
+        : [...visibleMemberIds, memberId];
+      onUpdateRoomSettings?.({
+        roomId: room.id,
+        visibleMemberIds: nextVisibleMemberIds,
+      });
+    },
+    [onUpdateRoomSettings, room.id, visibleMemberIds],
+  );
 
   return (
     <aside className="absolute inset-y-0 right-0 z-20 w-[min(23rem,84vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
       <Card className="relative flex h-full min-h-0 flex-col border border-border shadow-sm">
         <CardContent className="flex h-full min-h-0 flex-col gap-0 p-0">
-          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "members" | "dashboard")} className="h-full min-h-0 gap-0">
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) =>
+              setActiveTab(value as "members" | "dashboard")
+            }
+            className="h-full min-h-0 gap-0"
+          >
             <div className="shrink-0 border-b border-border px-4 py-3">
-              <TabsList variant="line" className="h-auto w-full justify-start rounded-none bg-transparent p-0">
-                <TabsTrigger value="members" className="rounded-none px-2.5 py-2">
+              <TabsList
+                variant="line"
+                className="h-auto w-full justify-start rounded-none bg-transparent p-0"
+              >
+                <TabsTrigger
+                  value="members"
+                  className="rounded-none px-2.5 py-2"
+                >
                   <Users size={16} />
                   Members
-                  <Badge variant="outline" className="ml-1">{members.length}</Badge>
+                  <Badge variant="outline" className="ml-1">
+                    {members.length}
+                  </Badge>
                 </TabsTrigger>
-                <TabsTrigger value="dashboard" className="rounded-none px-2.5 py-2">
+                <TabsTrigger
+                  value="dashboard"
+                  className="rounded-none px-2.5 py-2"
+                >
                   <BarChart3 size={16} />
                   Dashboard
                 </TabsTrigger>
               </TabsList>
             </div>
-            <TabsContent value="members" className="m-0 min-h-0 flex-1 overflow-y-auto px-3 py-3">
+            <TabsContent
+              value="members"
+              className="m-0 min-h-0 flex-1 overflow-y-auto px-3 py-3"
+            >
               <div className="min-h-full">
                 <div className="flex flex-col gap-2.5">
                   {roleGroups.map((group: RoomRoleGroup) => {
@@ -1165,7 +1535,11 @@ function RoomMembersSidebar(props: {
 
                     if (group.members.length === 1) {
                       const member = group.members[0];
-                      const latestPreview = resolveMemberLatestPreview(member, snapshot, activeRouteSummaryByMemberId);
+                      const latestPreview = resolveMemberLatestPreview(
+                        member,
+                        snapshot,
+                        activeRouteSummaryByMemberId,
+                      );
 
                       return (
                         <SidebarMemberCard
@@ -1190,7 +1564,9 @@ function RoomMembersSidebar(props: {
                         snapshot={snapshot}
                         selectedMemberId={selectedMemberId}
                         visibleMemberIds={visibleMemberIds}
-                        activeRouteSummaryByMemberId={activeRouteSummaryByMemberId}
+                        activeRouteSummaryByMemberId={
+                          activeRouteSummaryByMemberId
+                        }
                         onOpenMember={onOpenMember}
                         onToggleVisible={toggleMemberVisibility}
                       />
@@ -1199,12 +1575,25 @@ function RoomMembersSidebar(props: {
                 </div>
               </div>
             </TabsContent>
-            <TabsContent value="dashboard" className="m-0 min-h-0 flex-1 overflow-y-auto px-3 py-3">
-              <RoomDashboard snapshot={snapshot} room={room} members={members} onOpenMember={onOpenMember} onFocusMessage={onFocusMessage} />
+            <TabsContent
+              value="dashboard"
+              className="m-0 min-h-0 flex-1 overflow-y-auto px-3 py-3"
+            >
+              <RoomDashboard
+                snapshot={snapshot}
+                room={room}
+                members={members}
+                onOpenMember={onOpenMember}
+                onFocusMessage={onFocusMessage}
+              />
             </TabsContent>
           </Tabs>
         </CardContent>
-        <div aria-hidden className="absolute inset-y-0 -left-2 hidden w-4 cursor-col-resize xl:block" onPointerDown={onResizeStart}>
+        <div
+          aria-hidden
+          className="absolute inset-y-0 -left-2 hidden w-4 cursor-col-resize xl:block"
+          onPointerDown={onResizeStart}
+        >
           <div className="absolute inset-y-4 left-1/2 w-px -translate-x-1/2 rounded-full bg-border/80" />
         </div>
       </Card>
@@ -1212,7 +1601,10 @@ function RoomMembersSidebar(props: {
   );
 }
 
-function mergeVisibleRoomMessages(historyMessages: ChatMessage[], liveMessages: ChatMessage[]): ChatMessage[] {
+function mergeVisibleRoomMessages(
+  historyMessages: ChatMessage[],
+  liveMessages: ChatMessage[],
+): ChatMessage[] {
   const mergedById = new Map<string, ChatMessage>();
 
   historyMessages.forEach((message) => {
@@ -1222,10 +1614,16 @@ function mergeVisibleRoomMessages(historyMessages: ChatMessage[], liveMessages: 
     mergedById.set(message.id, message);
   });
 
-  return [...mergedById.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  return [...mergedById.values()].sort(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.id.localeCompare(right.id),
+  );
 }
 
-function inferMessageStatus(message: WorkspaceUIMessage): ChatMessage["status"] {
+function inferMessageStatus(
+  message: WorkspaceUIMessage,
+): ChatMessage["status"] {
   const textPart = message.parts.find((part) => part.type === "text");
   if (textPart?.state === "streaming") {
     return "streaming";
@@ -1254,15 +1652,35 @@ function toBubbleModel(
 } {
   const text = getUIMessageText(message);
   const status = message.metadata?.status ?? inferMessageStatus(message);
-  const authorKind = message.metadata?.authorKind ?? (message.role === "user" ? "user" : "member");
-  const authorId = message.metadata?.authorId ?? (message.role === "user" ? "user" : activeRoute?.memberId ?? "assistant");
-  const authorLabel = message.metadata?.authorLabel ?? (message.role === "user" ? currentUserName : activeRoute?.memberName ?? "Assistant");
+  const authorKind =
+    message.metadata?.authorKind ??
+    (message.role === "user" ? "user" : "member");
+  const authorId =
+    message.metadata?.authorId ??
+    (message.role === "user" ? "user" : (activeRoute?.memberId ?? "assistant"));
+  const authorLabel =
+    message.metadata?.authorLabel ??
+    (message.role === "user"
+      ? currentUserName
+      : (activeRoute?.memberName ?? "Assistant"));
   const sourceMessageId = message.metadata?.domainMessageId;
-  const sourceMessage = sourceMessageId ? snapshot.messages[sourceMessageId] : undefined;
-  const handlerSummaries = message.metadata?.handlerSummaries ?? (sourceMessage ? getMessageHandlers(snapshot, sourceMessage) : []);
-  const mentionedHandles = message.metadata?.mentionedHandles ?? (sourceMessage ? getMessageMentionHandles(snapshot, sourceMessage) : []);
-  const quotedHandles = message.metadata?.quotedHandles ?? (sourceMessage ? getMessageQuotedHandles(snapshot, sourceMessage) : []);
-  const recipientHandles = message.metadata?.recipientHandles ?? (sourceMessage ? getMessageRecipientHandles(snapshot, room, sourceMessage) : []);
+  const sourceMessage = sourceMessageId
+    ? snapshot.messages[sourceMessageId]
+    : undefined;
+  const handlerSummaries =
+    message.metadata?.handlerSummaries ??
+    (sourceMessage ? getMessageHandlers(snapshot, sourceMessage) : []);
+  const mentionedHandles =
+    message.metadata?.mentionedHandles ??
+    (sourceMessage ? getMessageMentionHandles(snapshot, sourceMessage) : []);
+  const quotedHandles =
+    message.metadata?.quotedHandles ??
+    (sourceMessage ? getMessageQuotedHandles(snapshot, sourceMessage) : []);
+  const recipientHandles =
+    message.metadata?.recipientHandles ??
+    (sourceMessage
+      ? getMessageRecipientHandles(snapshot, room, sourceMessage)
+      : []);
 
   return {
     message: {
@@ -1282,7 +1700,9 @@ function toBubbleModel(
       recipientMemberIds: sourceMessage?.recipientMemberIds ?? [],
       taskId: handlerSummaries[0]?.taskId ?? sourceMessage?.taskId,
     },
-    authorMemberId: message.metadata?.memberId ?? (message.role === "assistant" ? activeRoute?.memberId : undefined),
+    authorMemberId:
+      message.metadata?.memberId ??
+      (message.role === "assistant" ? activeRoute?.memberId : undefined),
     mentionedHandles,
     quotedHandles,
     recipientHandles,

@@ -1,7 +1,11 @@
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { cn } from "@/lib/utils";
 
 export interface RunningMemberPreview {
@@ -36,10 +40,18 @@ export function RunningMembersHoverCard(props: {
   return (
     <HoverCard openDelay={0} closeDelay={80}>
       <HoverCardTrigger asChild>{children}</HoverCardTrigger>
-      <HoverCardContent side={side} align={align} sideOffset={sideOffset} className="w-[min(24rem,calc(100vw-2rem))] p-0">
+      <HoverCardContent
+        side={side}
+        align={align}
+        sideOffset={sideOffset}
+        collisionPadding={12}
+        className="w-[min(24rem,calc(100vw-2rem))] max-h-[min(70vh,calc(100vh-2rem))] overflow-y-auto p-0"
+      >
         <div className="flex flex-col gap-2 px-3 py-3">
           <div className="flex items-center justify-between gap-2">
-            <p className="m-0 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Running members</p>
+            <p className="m-0 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              Running members
+            </p>
             <Badge variant="outline" className="text-[10px]">
               {members.length}
             </Badge>
@@ -68,11 +80,16 @@ export function RunningMembersHoverCard(props: {
                     aria-hidden
                     className="size-2 shrink-0 rounded-full animate-oa-breathe bg-[color:var(--tone-blueprint-foreground)] shadow-[0_0_0_0.24rem_rgba(113,113,255,0.12)]"
                   />
-                  <p className="m-0 truncate text-sm font-semibold tracking-tight">@{member.memberHandle}</p>
-                  <span className="truncate text-xs text-muted-foreground">{member.memberName}</span>
+                  <p className="m-0 truncate text-sm font-semibold tracking-tight">
+                    @{member.memberHandle}
+                  </p>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {member.memberName}
+                  </span>
                 </div>
                 <p className="m-0 w-full truncate text-xs text-muted-foreground">
-                  {member.latestContentPreview || "Waiting for the next visible update."}
+                  {member.latestContentPreview ||
+                    "Waiting for the next visible update."}
                 </p>
               </button>
             ))}
