@@ -1,8 +1,10 @@
-import Editor from "react-simple-code-editor";
+import * as EditorModule from "react-simple-code-editor";
 import Prism from "prismjs";
 import "prismjs/components/prism-json";
 
 import { cn } from "@/lib/utils";
+
+const Editor = ("default" in EditorModule ? EditorModule.default : EditorModule) as typeof EditorModule.default;
 
 export function JsonEditor(props: {
   value: string;
