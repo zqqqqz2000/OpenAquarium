@@ -353,6 +353,96 @@ describe("WorkspaceRuntime", () => {
     expect(seenProviderKinds).toContain("openai-compatible");
   });
 
+  it("persists openai-compatible conversation history across turns", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-openai-history-"));
+    const seenRequests: ExecutionRequest[] = [];
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(
+        path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      workspaceRoot,
+      globalConfig: createRuntimeGlobalConfig(),
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (request, callbacks) => {
+          seenRequests.push(request);
+          await callbacks.onComplete(`${member.handle} done`, "end_turn", {
+            nextOpenAICompatibleConversation: {
+              messages: [
+                ...(request.messageHistory ?? []),
+                {
+                  role: "user",
+                  content: request.prompt,
+                },
+                {
+                  role: "assistant",
+                  content: `${member.handle} done`,
+                },
+              ],
+            },
+          });
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "OpenAI History Runtime",
+      templateId: "template-product-pod",
+    });
+    const initial = runtime.getSnapshot();
+    const room = initial.rooms[created.roomId];
+    const lead = room.memberIds
+      .map((memberId) => initial.members[memberId])
+      .find((member) => member.handle === "lead");
+
+    if (!lead) {
+      throw new Error("Expected the lead member");
+    }
+
+    await runtime.updateMemberConfig({
+      memberId: lead.id,
+      isRole: lead.isRole,
+      summary: lead.summary,
+      prompt: lead.prompt,
+      modelProfileId: "model-openai-compatible",
+      modelId: "gpt-4.1-mini",
+      acceptsDirectMessages: lead.acceptsDirectMessages,
+      codexThinkingDepth: lead.codexThinkingDepth,
+      allowedSkillIds: lead.allowedSkillIds,
+      provider: lead.provider,
+    });
+    await runtime.sendUserMessage({
+      roomId: room.id,
+      content: "@>lead 第一轮 openai compatible 历史",
+    });
+    await waitFor(() => {
+      expect(seenRequests.length).toBeGreaterThanOrEqual(1);
+      expect(runtime.getSnapshot().members[lead.id]?.openAICompatibleConversation?.messages.length).toBe(2);
+    });
+
+    await runtime.sendUserMessage({
+      roomId: room.id,
+      content: "@>lead 第二轮 openai compatible 历史",
+    });
+    await waitFor(() => {
+      expect(seenRequests.length).toBeGreaterThanOrEqual(2);
+    });
+
+    expect(seenRequests[0]?.messageHistory ?? []).toEqual([]);
+    expect(seenRequests[0]?.prompt).toContain("prompt mode: full");
+    expect(seenRequests[1]?.messageHistory).toEqual([
+      {
+        role: "user",
+        content: seenRequests[0]?.prompt ?? "",
+      },
+      {
+        role: "assistant",
+        content: "lead done",
+      },
+    ]);
+    expect(seenRequests[1]?.prompt).toContain("prompt mode: delta");
+  });
+
   it("normalizes project paths against the OpenAquarium workspace root", async () => {
     const workspaceRoot = await mkdtemp(
       path.join(os.tmpdir(), "oa-runtime-path-"),

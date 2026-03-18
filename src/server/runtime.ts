@@ -55,13 +55,13 @@ import type {
   UpdateMemberConfigInput,
   UpdateTemplateInput,
 } from "../domain/model";
-import type { ExecutionMember, MemberExecutor, MemberExecutorFactory } from "./executor";
+import type { ExecutionMember, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "./executor";
 import { AcpMemberExecutor } from "./acp-executor";
 import { OpenAICompatibleMemberExecutor } from "./openai-compatible-executor";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
-import { buildTaskPrompt } from "./prompt-builder";
+import { buildTaskPromptPayload } from "./prompt-builder";
 import { WorkspacePersistence } from "./persistence";
 import { OpenAquariumGlobalConfigManager } from "./global-config";
 import { TemplateStudioChatService, type TemplateStudioChatServiceLike } from "./template-studio-chat";
@@ -1418,7 +1418,7 @@ export class WorkspaceRuntime {
             task: currentTask,
             snapshot: this.snapshot,
           });
-          const prompt = buildTaskPrompt({
+          const promptPayload = buildTaskPromptPayload({
             workspaceRoot: this.workspaceRoot,
             project,
             room,
@@ -1435,7 +1435,10 @@ export class WorkspaceRuntime {
             room,
             project,
             task: currentTask,
-            prompt,
+            prompt: promptPayload.prompt,
+            promptTraceContent: promptPayload.promptTraceContent,
+            messageHistory: promptPayload.messageHistory,
+            openAICompatibleConversation: executionMember.openAICompatibleConversation,
             executor,
             retryAttempt,
           });
@@ -1612,6 +1615,9 @@ export class WorkspaceRuntime {
     project: WorkspaceSnapshot["projects"][string];
     task: WorkspaceSnapshot["tasks"][string];
     prompt: string;
+    promptTraceContent: string;
+    messageHistory?: ExecutionRequest["messageHistory"];
+    openAICompatibleConversation?: ExecutionRequest["openAICompatibleConversation"];
     executor: MemberExecutor;
     retryAttempt: number;
   }): Promise<{ taskSettled: boolean; promptVisible: boolean }> {
@@ -1640,6 +1646,9 @@ export class WorkspaceRuntime {
           task: args.task,
           snapshot: this.snapshot,
           prompt: args.prompt,
+          promptTraceContent: args.promptTraceContent,
+          messageHistory: args.messageHistory,
+          openAICompatibleConversation: args.openAICompatibleConversation,
         },
         {
         onPromptVisible: async () => {
@@ -1659,7 +1668,7 @@ export class WorkspaceRuntime {
               memberId: currentTask.memberId,
               kind: "task-prompt",
               title: args.retryAttempt === 0 ? "Task prompt" : `Task prompt (retry ${args.retryAttempt}/${this.taskExecutionMaxRetries})`,
-              content: args.prompt,
+              content: args.promptTraceContent,
             },
             this.context,
           ));
@@ -1775,7 +1784,7 @@ export class WorkspaceRuntime {
             });
           }
         },
-        onComplete: async (finalContent, stopReason) => {
+        onComplete: async (finalContent, stopReason, metadata) => {
           if (!acceptingExecutorUpdates) {
             return;
           }
@@ -1798,8 +1807,21 @@ export class WorkspaceRuntime {
             },
             this.context,
           );
+          const snapshotWithConversation =
+            metadata?.nextOpenAICompatibleConversation
+              ? {
+                  ...snapshotWithTrace,
+                  members: {
+                    ...snapshotWithTrace.members,
+                    [currentTask.memberId]: {
+                      ...snapshotWithTrace.members[currentTask.memberId],
+                      openAICompatibleConversation: metadata.nextOpenAICompatibleConversation,
+                    },
+                  },
+                }
+              : snapshotWithTrace;
           const next = completeMemberTask(
-            snapshotWithTrace,
+            snapshotWithConversation,
             {
               taskId: args.taskId,
               finalContent:

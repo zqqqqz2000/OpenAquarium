@@ -1,3 +1,4 @@
+import type { AssistantModelMessage, ToolModelMessage } from "@ai-sdk/provider-utils";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { streamText } from "ai";
 
@@ -13,6 +14,7 @@ import type {
 import type { DiagnosticsLogger } from "./diagnostics";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { createWorkspaceTools, type MemberToolHost, resolveExecutorDirectories } from "./member-workspace-tools";
+import { appendConversationTurn, buildPersistedUserTurnMessage, toModelMessages } from "./openai-compatible-conversation";
 import { TerminalRegistry } from "./terminal-registry";
 
 const TOOL_STATUS_PREFIX = "__oa_tool__";
@@ -143,11 +145,18 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
 
     const currentTurn = (async () => {
       try {
+        const currentConversation = {
+          messages: request.messageHistory ?? request.openAICompatibleConversation?.messages ?? [],
+        };
+        const currentUserMessage = buildPersistedUserTurnMessage(request.prompt);
         const result = streamText({
           abortSignal: abortController.signal,
           includeRawChunks: true,
           model: this.provider.languageModel(modelId),
-          prompt: request.prompt,
+          messages: [
+            ...toModelMessages(request.messageHistory ?? currentConversation.messages),
+            currentUserMessage,
+          ],
           tools,
           onChunk: async ({ chunk }) => {
             switch (chunk.type) {
@@ -186,12 +195,26 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
 
         await callbacks.onPromptVisible?.();
 
-        const [text, finishReason] = await Promise.all([result.text, result.finishReason]);
+        const [text, finishReason, response] = await Promise.all([
+          result.text,
+          result.finishReason,
+          result.response,
+        ]);
         if (abortController.signal.aborted) {
           return;
         }
 
-        await callbacks.onComplete(text.trim().length > 0 ? text : finalContent, finishReason);
+        await callbacks.onComplete(
+          text.trim().length > 0 ? text : finalContent,
+          finishReason,
+          {
+            nextOpenAICompatibleConversation: appendConversationTurn({
+              conversation: currentConversation,
+              userMessage: currentUserMessage,
+              responseMessages: response.messages as Array<AssistantModelMessage | ToolModelMessage>,
+            }),
+          },
+        );
       } catch (error) {
         if (abortController.signal.aborted && abortController.signal.reason === "cancelled") {
           return;

@@ -2,6 +2,7 @@ import type {
   ChatMessage,
   MemberTask,
   OpenAICompatibleProviderBinding,
+  PersistedOpenAICompatibleMessage,
   Project,
   ProviderBinding,
   Room,
@@ -19,6 +20,7 @@ import {
   resolveProjectWorkingDirectory,
 } from "./project-paths";
 import { getMemberHistoryFilePath, getRoomContextDirectoryPath, getRoomTranscriptFilePath } from "./room-transcript-files";
+import { buildPersistedUserTurnMessage, formatConversationTrace } from "./openai-compatible-conversation";
 
 const FULL_PROMPT_TRANSCRIPT_LIMIT = 14;
 const DELTA_PROMPT_TRANSCRIPT_LIMIT = 6;
@@ -29,6 +31,13 @@ type PromptMode = "full" | "delta";
 type PromptMember = Omit<TeamMember, "provider"> & {
   provider: ProviderBinding | OpenAICompatibleProviderBinding;
 };
+
+export interface BuiltTaskPrompt {
+  prompt: string;
+  promptMode: PromptMode;
+  promptTraceContent: string;
+  messageHistory?: PersistedOpenAICompatibleMessage[];
+}
 
 function summarizeHandles(prefix: string, memberIds: string[], snapshot: WorkspaceSnapshot, marker = "@"): string {
   if (memberIds.length === 0) {
@@ -122,6 +131,7 @@ function resolvePromptMode(args: {
   task: MemberTask;
   retryAttempt?: number;
   sessionContinuation?: ExecutionSessionContinuation;
+  openAICompatibleConversationContinuation?: ExecutionSessionContinuation;
 }): {
   mode: PromptMode;
   turnsBeforeCurrent: number;
@@ -132,14 +142,19 @@ function resolvePromptMode(args: {
     member,
     task,
     sessionContinuation = member.providerSessionId ? "resumed" : "fresh",
+    openAICompatibleConversationContinuation = member.openAICompatibleConversation ? "resumed" : "fresh",
   } = args;
   const memberTasks = sortMemberTasks(snapshot, member.id);
   const currentTaskIndex = memberTasks.findIndex((candidate) => candidate.id === task.id);
   const turnsBeforeCurrent = currentTaskIndex >= 0 ? currentTaskIndex : memberTasks.length;
   const previousTask = currentTaskIndex > 0 ? memberTasks[currentTaskIndex - 1] : undefined;
   if (member.provider.kind === "openai-compatible") {
+    const needsFullPrompt =
+      turnsBeforeCurrent === 0
+      || turnsBeforeCurrent % MEMBER_FULL_PROMPT_REFRESH_INTERVAL === 0
+      || openAICompatibleConversationContinuation === "fresh";
     return {
-      mode: "full",
+      mode: needsFullPrompt ? "full" : "delta",
       turnsBeforeCurrent,
       previousTask,
     };
@@ -517,7 +532,7 @@ function buildIncrementalPrompt(args: {
   ].join("\n");
 }
 
-export function buildTaskPrompt(args: {
+export function buildTaskPromptPayload(args: {
   workspaceRoot: string;
   project: Project;
   room: Room;
@@ -527,22 +542,26 @@ export function buildTaskPrompt(args: {
   transcriptFilePath?: string;
   retryAttempt?: number;
   sessionContinuation?: ExecutionSessionContinuation;
-}): string {
+}): BuiltTaskPrompt {
   const { snapshot, room, member, task } = args;
   const sourceMessage = snapshot.messages[task.sourceMessageId];
   const addressedRoutingNote = extractAddressedMemberIds(snapshot, room.id, sourceMessage.content).length > 0
     ? "This source message used one or more active @>handles, so every targeted teammate was routed as a real assignment."
     : "This source message did not use any active @>handle, so it followed the normal fallback routing.";
+  const openAICompatibleConversationContinuation: ExecutionSessionContinuation =
+    member.provider.kind === "openai-compatible" && (member.openAICompatibleConversation?.messages.length ?? 0) > 0
+      ? "resumed"
+      : "fresh";
   const { mode, turnsBeforeCurrent, previousTask } = resolvePromptMode({
     snapshot,
     member,
     task,
     retryAttempt: args.retryAttempt,
     sessionContinuation: args.sessionContinuation,
+    openAICompatibleConversationContinuation,
   });
   const taskSequence = turnsBeforeCurrent + 1;
-
-  return mode === "full"
+  const prompt = mode === "full"
     ? buildFullPrompt({
         ...args,
         routingNote: addressedRoutingNote,
@@ -556,4 +575,37 @@ export function buildTaskPrompt(args: {
         taskSequence,
         previousTask,
       });
+
+  if (member.provider.kind !== "openai-compatible") {
+    return {
+      prompt,
+      promptMode: mode,
+      promptTraceContent: prompt,
+    };
+  }
+
+  const messageHistory = member.openAICompatibleConversation?.messages ?? [];
+  return {
+    prompt,
+    promptMode: mode,
+    messageHistory,
+    promptTraceContent: formatConversationTrace({
+      messageHistory,
+      currentUserMessage: buildPersistedUserTurnMessage(prompt),
+    }),
+  };
+}
+
+export function buildTaskPrompt(args: {
+  workspaceRoot: string;
+  project: Project;
+  room: Room;
+  member: ExecutionMember;
+  task: MemberTask;
+  snapshot: WorkspaceSnapshot;
+  transcriptFilePath?: string;
+  retryAttempt?: number;
+  sessionContinuation?: ExecutionSessionContinuation;
+}): string {
+  return buildTaskPromptPayload(args).prompt;
 }

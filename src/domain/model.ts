@@ -49,6 +49,54 @@ export interface OpenAICompatibleProviderBinding {
   extraBody: { [key: string]: JsonValue };
 }
 
+export interface PersistedOpenAICompatibleTextPart {
+  type: "text";
+  text: string;
+}
+
+export interface PersistedOpenAICompatibleToolCallPart {
+  type: "tool-call";
+  toolCallId: string;
+  toolName: string;
+  input: JsonValue;
+}
+
+export interface PersistedOpenAICompatibleToolResultPart {
+  type: "tool-result";
+  toolCallId: string;
+  toolName: string;
+  output: JsonValue;
+}
+
+export type PersistedOpenAICompatibleAssistantPart =
+  | PersistedOpenAICompatibleTextPart
+  | PersistedOpenAICompatibleToolCallPart
+  | PersistedOpenAICompatibleToolResultPart;
+
+export interface PersistedOpenAICompatibleUserMessage {
+  role: "user";
+  content: string;
+}
+
+export interface PersistedOpenAICompatibleAssistantMessage {
+  role: "assistant";
+  content: string | PersistedOpenAICompatibleAssistantPart[];
+}
+
+export interface PersistedOpenAICompatibleToolMessage {
+  role: "tool";
+  content: PersistedOpenAICompatibleToolResultPart[];
+}
+
+export type PersistedOpenAICompatibleMessage =
+  | PersistedOpenAICompatibleUserMessage
+  | PersistedOpenAICompatibleAssistantMessage
+  | PersistedOpenAICompatibleToolMessage;
+
+export interface OpenAICompatibleConversationState {
+  messages: PersistedOpenAICompatibleMessage[];
+}
+
 export interface ACPProviderModelProfile {
   id: ProviderModelProfileId;
   name: string;
@@ -152,6 +200,7 @@ export interface TeamMember {
   codexThinkingDepth?: CodexThinkingDepth;
   status: MemberStatus;
   providerSessionId?: string;
+  openAICompatibleConversation?: OpenAICompatibleConversationState;
   activeTaskId?: TaskId;
   archivedAt?: string;
 }

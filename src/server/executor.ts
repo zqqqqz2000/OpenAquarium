@@ -1,6 +1,8 @@
 import type {
   MemberTask,
+  OpenAICompatibleConversationState,
   OpenAICompatibleProviderBinding,
+  PersistedOpenAICompatibleMessage,
   Project,
   ProviderBinding,
   Room,
@@ -16,7 +18,13 @@ export interface ExecutorCallbacks {
   onPromptVisible?(): Promise<void>;
   onDraft(content: string): Promise<void>;
   onStatus(summary: string): Promise<void>;
-  onComplete(finalContent: string, stopReason: string): Promise<void>;
+  onComplete(
+    finalContent: string,
+    stopReason: string,
+    metadata?: {
+      nextOpenAICompatibleConversation?: OpenAICompatibleConversationState;
+    },
+  ): Promise<void>;
   onError(message: string): Promise<void>;
 }
 
@@ -27,11 +35,14 @@ export interface ExecutionRequest {
   task: MemberTask;
   snapshot: WorkspaceSnapshot;
   prompt: string;
+  promptTraceContent?: string;
+  messageHistory?: PersistedOpenAICompatibleMessage[];
+  openAICompatibleConversation?: OpenAICompatibleConversationState;
 }
 
 export type ExecutionSessionContinuation = "fresh" | "resumed";
 
-export type ExecutionPreparationRequest = Omit<ExecutionRequest, "prompt">;
+export type ExecutionPreparationRequest = Omit<ExecutionRequest, "prompt" | "promptTraceContent">;
 
 export interface ExecutionPreparation {
   sessionContinuation?: ExecutionSessionContinuation;

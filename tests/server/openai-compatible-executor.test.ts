@@ -132,6 +132,14 @@ describe("OpenAICompatibleMemberExecutor", () => {
     streamTextMock.mockReturnValue({
       text: Promise.resolve("done"),
       finishReason: Promise.resolve("stop"),
+      response: Promise.resolve({
+        messages: [
+          {
+            role: "assistant",
+            content: "done",
+          },
+        ],
+      }),
     });
   });
 
@@ -171,10 +179,91 @@ describe("OpenAICompatibleMemberExecutor", () => {
     });
     expect(openAICompatibleLanguageModelMock).toHaveBeenCalledWith("gpt-4.1-mini");
     expect(streamTextMock).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: "Full task prompt with complete visible history",
+      messages: [
+        {
+          role: "user",
+          content: "Full task prompt with complete visible history",
+        },
+      ],
     }));
-    expect(onComplete).toHaveBeenCalledWith("done", "stop");
+    expect(onComplete).toHaveBeenCalledWith("done", "stop", {
+      nextOpenAICompatibleConversation: {
+        messages: [
+          {
+            role: "user",
+            content: "Full task prompt with complete visible history",
+          },
+          {
+            role: "assistant",
+            content: "done",
+          },
+        ],
+      },
+    });
     expect(persistMemberSession).not.toHaveBeenCalled();
+  });
+
+  it("replays persisted message history on subsequent turns", async () => {
+    const request = createRequest();
+    const { OpenAICompatibleMemberExecutor } = await import("@/server/openai-compatible-executor");
+    const executor = new OpenAICompatibleMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: createHost(),
+    });
+
+    await executor.execute(
+      {
+        ...request,
+        messageHistory: [
+          {
+            role: "user",
+            content: "Earlier full prompt",
+          },
+          {
+            role: "assistant",
+            content: "Earlier answer",
+          },
+        ],
+        openAICompatibleConversation: {
+          messages: [
+            {
+              role: "user",
+              content: "Earlier full prompt",
+            },
+            {
+              role: "assistant",
+              content: "Earlier answer",
+            },
+          ],
+        },
+        prompt: "Delta task update",
+      },
+      {
+        onPromptVisible: () => Promise.resolve(),
+        onDraft: () => Promise.resolve(),
+        onStatus: () => Promise.resolve(),
+        onComplete: () => Promise.resolve(),
+        onError: () => Promise.resolve(),
+      },
+    );
+
+    expect(streamTextMock).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [
+        {
+          role: "user",
+          content: "Earlier full prompt",
+        },
+        {
+          role: "assistant",
+          content: "Earlier answer",
+        },
+        {
+          role: "user",
+          content: "Delta task update",
+        },
+      ],
+    }));
   });
 
   it("fails early when the openai-compatible member has no model id", async () => {

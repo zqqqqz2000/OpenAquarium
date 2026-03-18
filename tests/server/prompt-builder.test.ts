@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createRuntimeContext } from "@/domain/identity";
 import { completeMemberTask, postSystemMessage, postUserMessage, runWatcher } from "@/domain/workspace";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
-import { buildTaskPrompt, MEMBER_FULL_PROMPT_REFRESH_INTERVAL } from "@/server/prompt-builder";
+import { buildTaskPrompt, buildTaskPromptPayload, MEMBER_FULL_PROMPT_REFRESH_INTERVAL } from "@/server/prompt-builder";
 import type { MemberTask, WorkspaceSnapshot } from "@/domain/model";
 import { getRoomContextDirectoryPath } from "@/server/room-transcript-files";
 
@@ -171,7 +171,7 @@ describe("buildTaskPrompt", () => {
     expect(prompt).not.toContain(`prompt: ${lead.prompt}`);
   });
 
-  it("keeps openai-compatible members on a full prompt with the full visible history", () => {
+  it("reuses persisted openai-compatible conversation history and switches later turns to delta", () => {
     const context = createRuntimeContext(505, "2026-03-10T12:00:00.000Z");
     let snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
@@ -235,33 +235,67 @@ describe("buildTaskPrompt", () => {
       throw new Error("Expected a new lead task");
     }
 
+    const openAICompatibleMember = {
+      ...nextLead,
+      openAICompatibleConversation: {
+        messages: [
+          {
+            role: "user" as const,
+            content: "Earlier full prompt",
+          },
+          {
+            role: "assistant" as const,
+            content: "Earlier assistant reply",
+          },
+        ],
+      },
+      modelId: "gpt-4.1-mini",
+      provider: {
+        kind: "openai-compatible" as const,
+        label: "OpenAI-Compatible API",
+        baseURL: "https://example.test/v1",
+        apiKeyEnvVar: "OPENAI_API_KEY",
+        headersFormat: "kv" as const,
+        headers: {},
+        extraBodyFormat: "json" as const,
+        extraBody: {},
+      },
+    };
+
     const prompt = buildTaskPrompt({
       workspaceRoot: process.cwd(),
       project,
       room: snapshot.rooms[room.id],
-      member: {
-        ...nextLead,
-        modelId: "gpt-4.1-mini",
-        provider: {
-          kind: "openai-compatible",
-          label: "OpenAI-Compatible API",
-          baseURL: "https://example.test/v1",
-          apiKeyEnvVar: "OPENAI_API_KEY",
-          headersFormat: "kv",
-          headers: {},
-          extraBodyFormat: "json",
-          extraBody: {},
-        },
-      },
+      member: openAICompatibleMember,
       task: currentTask,
       snapshot,
     });
 
-    expect(prompt).toContain("prompt mode: full");
-    expect(prompt).toContain("[Full Room Transcript]");
-    expect(prompt).toContain("openai-history-0");
-    expect(prompt).toContain("openai-history-17");
-    expect(prompt).not.toContain("[Relevant History]");
+    const payload = buildTaskPromptPayload({
+      workspaceRoot: process.cwd(),
+      project,
+      room: snapshot.rooms[room.id],
+      member: openAICompatibleMember,
+      task: currentTask,
+      snapshot,
+    });
+
+    expect(prompt).toContain("prompt mode: delta");
+    expect(prompt).toContain("[Relevant History]");
+    expect(prompt).not.toContain("[Full Room Transcript]");
+    expect(payload.messageHistory).toEqual([
+      {
+        role: "user",
+        content: "Earlier full prompt",
+      },
+      {
+        role: "assistant",
+        content: "Earlier assistant reply",
+      },
+    ]);
+    expect(payload.promptTraceContent).toContain("[Conversation History]");
+    expect(payload.promptTraceContent).toContain("Earlier full prompt");
+    expect(payload.promptTraceContent).toContain("[Current User Turn]");
   });
 
   it("does not fall back to older room transcript when a watcher heartbeat has no new visible messages", () => {
