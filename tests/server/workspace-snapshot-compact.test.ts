@@ -231,4 +231,156 @@ describe("compactWorkspaceSnapshot", () => {
       ],
     );
   });
+
+  it("preserves pending watcher digests without rewriting them to visible room messages", () => {
+    const snapshot = {
+      projects: {
+        project_a: {
+          id: "project_a",
+          name: "Project A",
+          createdAt: "2026-03-10T10:00:00.000Z",
+        },
+      },
+      projectOrder: ["project_a"],
+      rooms: {
+        room_a: {
+          id: "room_a",
+          projectId: "project_a",
+          name: "Room A",
+          topic: "topic",
+          templateId: "template_a",
+          memberIds: ["member_a"],
+          watcherIds: ["watcher_a"],
+          entryMemberId: "member_a",
+          createdAt: "2026-03-10T10:00:00.000Z",
+        },
+      },
+      roomOrderByProject: {
+        project_a: ["room_a"],
+      },
+      templates: {
+        template_a: {
+          id: "template_a",
+          name: "Template A",
+          description: "desc",
+          accentTone: "paper",
+          members: [],
+        },
+      },
+      templateOrder: ["template_a"],
+      members: {
+        member_a: {
+          id: "member_a",
+          roomId: "room_a",
+          blueprintId: "blueprint_a",
+          roleId: "blueprint_a",
+          roleName: "member-a",
+          name: "Member A",
+          handle: "member-a",
+          summary: "summary",
+          prompt: "prompt",
+          accentTone: "paper",
+          allowedSkillIds: [],
+          provider: {
+            kind: "codex-acp",
+            label: "Codex ACP",
+            command: "npx",
+            args: ["@zed-industries/codex-acp@^0.7.0"],
+            env: {},
+            capabilities: ["prompt"],
+          },
+          acceptsDirectMessages: true,
+          isEntryMember: true,
+          status: "running",
+          activeTaskId: "task_digest",
+        },
+      },
+      messages: {
+        message_visible_1: {
+          id: "message_visible_1",
+          roomId: "room_a",
+          author: { kind: "user", id: "user", label: "You" },
+          content: "visible room message",
+          createdAt: "2026-03-10T10:00:01.000Z",
+          transport: "group",
+          status: "sent",
+          mentionedMemberIds: [],
+          recipientMemberIds: [],
+        },
+        message_digest: {
+          id: "message_digest",
+          roomId: "room_a",
+          author: { kind: "system", id: "system", label: "Watcher" },
+          content: "Watcher activity since last watch",
+          createdAt: "2026-03-10T10:00:02.000Z",
+          transport: "watch-digest",
+          status: "sent",
+          visibility: "internal",
+          mentionedMemberIds: [],
+          recipientMemberIds: ["member_a"],
+        },
+        message_visible_2: {
+          id: "message_visible_2",
+          roomId: "room_a",
+          author: { kind: "member", id: "member_a", label: "Member A" },
+          content: "task output after the digest",
+          createdAt: "2026-03-10T10:00:03.000Z",
+          transport: "direct",
+          status: "completed",
+          visibility: "public",
+          mentionedMemberIds: [],
+          recipientMemberIds: [],
+          taskId: "task_digest",
+        },
+      },
+      messageOrderByRoom: {
+        room_a: ["message_visible_1", "message_digest", "message_visible_2"],
+      },
+      tasks: {
+        task_digest: {
+          id: "task_digest",
+          roomId: "room_a",
+          memberId: "member_a",
+          sourceMessageId: "message_digest",
+          title: "Review watcher digest",
+          status: "running",
+          startedAt: "2026-03-10T10:00:02.000Z",
+          updatedAt: "2026-03-10T10:00:03.000Z",
+          draftMessageId: "message_visible_2",
+        },
+      },
+      taskTraces: {},
+      taskTraceOrderByTask: {},
+      watchers: {
+        watcher_a: {
+          id: "watcher_a",
+          roomId: "room_a",
+          memberId: "member_a",
+          enabled: true,
+          intervalMinutes: 10,
+          lastConsumedMessageId: "message_visible_1",
+          pendingDigestMessageId: "message_digest",
+          pendingConsumedMessageId: "message_digest",
+        },
+      },
+      selection: {
+        roomId: "room_a",
+      },
+      currentUserName: "You",
+    } satisfies WorkspaceSnapshot;
+
+    const compacted = compactWorkspaceSnapshot(snapshot);
+
+    expect(compacted.messageOrderByRoom.room_a).toEqual([
+      "message_visible_1",
+      "message_visible_2",
+    ]);
+    expect(compacted.messages.message_digest).toBeDefined();
+    expect(compacted.watchers.watcher_a.pendingDigestMessageId).toBe(
+      "message_digest",
+    );
+    expect(compacted.watchers.watcher_a.pendingConsumedMessageId).toBe(
+      "message_visible_2",
+    );
+  });
 });

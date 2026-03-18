@@ -25,6 +25,7 @@ import {
 import { resolveRoomTeamSummary } from "../lib/room-team";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
+import { normalizeWatcherCursorState } from "./watcher-cursor-normalization";
 import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
 
 interface PersistedWorkspaceState {
@@ -144,23 +145,10 @@ function normalizeWorkspaceSnapshot(
   const normalizedWatchers = Object.fromEntries(
     Object.entries(snapshot.watchers).map(([watcherId, watcher]) => {
       const roomMessageIds = normalizedMessageOrderByRoom[watcher.roomId] ?? [];
-      const normalizeWatcherMessageId = (messageId?: string) =>
-        messageId === undefined
-          ? undefined
-          : roomMessageIds.includes(messageId)
-            ? messageId
-            : roomMessageIds[roomMessageIds.length - 1];
 
       return [
         watcherId,
-        {
-          ...watcher,
-          lastConsumedMessageId: normalizeWatcherMessageId(watcher.lastConsumedMessageId),
-          lastConsumedStateAt: watcher.lastConsumedStateAt,
-          pendingDigestMessageId: normalizeWatcherMessageId(watcher.pendingDigestMessageId),
-          pendingConsumedMessageId: normalizeWatcherMessageId(watcher.pendingConsumedMessageId),
-          pendingConsumedStateAt: watcher.pendingConsumedStateAt,
-        },
+        normalizeWatcherCursorState(watcher, roomMessageIds, snapshot.messages),
       ];
     }),
   );

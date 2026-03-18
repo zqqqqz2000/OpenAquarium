@@ -1184,6 +1184,65 @@ describe("workspace domain", () => {
     expect(digestMessages[0].content).toContain("pause 后的新消息");
   });
 
+  it("keeps a paused persistent watcher paused when only watcher-task output arrives", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const watcherId = snapshot.rooms[roomId].watcherIds[0];
+    snapshot.watchers[watcherId] = {
+      ...snapshot.watchers[watcherId],
+      persistent: true,
+    };
+
+    snapshot = runWatcher(snapshot, watcherId, context);
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId,
+        content: "第一条真实消息",
+      },
+      context,
+    );
+    snapshot = runWatcher(snapshot, watcherId, context);
+
+    const digestMessage = [...(snapshot.messageOrderByRoom[roomId] ?? [])]
+      .map((messageId) => snapshot.messages[messageId])
+      .reverse()
+      .find((message): message is ChatMessage => message.transport === "watch-digest");
+    if (!digestMessage) {
+      throw new Error("Expected a watcher digest");
+    }
+
+    const digestTask = Object.values(snapshot.tasks).find(
+      (task) => task.sourceMessageId === digestMessage.id,
+    );
+    if (!digestTask) {
+      throw new Error("Expected a watcher digest task");
+    }
+
+    snapshot = acknowledgeWatcherDigestVisibility(snapshot, digestTask.id);
+    snapshot = pauseWatcherUntilActivity(snapshot, watcherId);
+    snapshot = completeMemberTask(
+      snapshot,
+      {
+        taskId: digestTask.id,
+        finalContent: "本轮 watcher digest 仅新增一条提醒，暂无新决策、新分工或待跟进事项。",
+      },
+      context,
+    );
+
+    const summaryMessageId = snapshot.messageOrderByRoom[roomId][snapshot.messageOrderByRoom[roomId].length - 1];
+    const next = runWatcher(snapshot, watcherId, context);
+    const digestMessages = (next.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => next.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(next.watchers[watcherId].pausedUntilActivity).toBe(true);
+    expect(next.watchers[watcherId].lastConsumedMessageId).toBe(summaryMessageId);
+    expect(digestMessages).toHaveLength(1);
+  });
+
   it("triggers a watcher when member state changes even without a new room message", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);

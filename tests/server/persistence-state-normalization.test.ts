@@ -419,4 +419,120 @@ describe("workspace persistence state normalization", () => {
     expect(loaded?.messages.message_watch).toBeUndefined();
     expect(loaded?.messageOrderByRoom.room_a ?? []).not.toContain("message_watch");
   });
+
+  it("repairs invalid pending watcher digests instead of pointing them at ordinary room messages", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-persistence-watcher-repair-"));
+    const filePath = path.join(directory, "state.json");
+
+    const snapshot = {
+      projects: {},
+      projectOrder: [],
+      rooms: {
+        room_a: {
+          id: "room_a",
+          projectId: "project_a",
+          name: "A",
+          topic: "topic a",
+          templateId: "template_a",
+          memberIds: ["member_a"],
+          watcherIds: ["watcher_a"],
+          entryMemberId: "member_a",
+          createdAt: "2026-03-10T10:00:00.000Z",
+        },
+      },
+      roomOrderByProject: {},
+      templates: {},
+      templateOrder: [],
+      members: {
+        member_a: {
+          id: "member_a",
+          roomId: "room_a",
+          blueprintId: "blueprint_a",
+          roleId: "blueprint_a",
+          roleName: "member-a",
+          name: "Member A",
+          handle: "member-a",
+          summary: "summary",
+          prompt: "prompt",
+          accentTone: "paper",
+          allowedSkillIds: [],
+          provider: {
+            kind: "codex-acp",
+            label: "Codex ACP",
+            command: CODEX_ACP_NPX_COMMAND,
+            args: CODEX_ACP_NPX_ARGS,
+            env: {
+              [CODEX_ACP_MODE_ENV_KEY]: CODEX_ACP_DEFAULT_MODE,
+            },
+            capabilities: ["prompt"],
+          },
+          acceptsDirectMessages: true,
+          isEntryMember: true,
+          status: "idle",
+        },
+      },
+      messages: {
+        message_a: {
+          id: "message_a",
+          roomId: "room_a",
+          author: { kind: "user", id: "user", label: "You" },
+          content: "first room message",
+          createdAt: "2026-03-10T10:00:01.000Z",
+          transport: "group",
+          status: "sent",
+          mentionedMemberIds: [],
+          recipientMemberIds: [],
+        },
+        message_b: {
+          id: "message_b",
+          roomId: "room_a",
+          author: { kind: "member", id: "member_a", label: "Member A" },
+          content: "ordinary direct message",
+          createdAt: "2026-03-10T10:00:02.000Z",
+          transport: "direct",
+          status: "completed",
+          visibility: "public",
+          mentionedMemberIds: [],
+          recipientMemberIds: [],
+        },
+      },
+      messageOrderByRoom: {
+        room_a: ["message_a", "message_b"],
+      },
+      tasks: {},
+      taskTraces: {},
+      taskTraceOrderByTask: {},
+      watchers: {
+        watcher_a: {
+          id: "watcher_a",
+          roomId: "room_a",
+          memberId: "member_a",
+          enabled: true,
+          intervalMinutes: 10,
+          persistent: true,
+          pausedUntilActivity: true,
+          lastConsumedMessageId: "message_a",
+          lastConsumedStateAt: "2026-03-10T10:00:01.000Z",
+          pendingDigestMessageId: "message_b",
+          pendingConsumedMessageId: "message_b",
+          pendingConsumedStateAt: "2026-03-10T10:00:03.000Z",
+        },
+      },
+      selection: {
+        roomId: "room_a",
+      },
+      currentUserName: "You",
+    } satisfies WorkspaceSnapshot;
+
+    await writeFile(filePath, JSON.stringify({ savedAt: "2026-03-10T10:00:04.000Z", snapshot }, null, 2), "utf8");
+
+    const persistence = new WorkspacePersistence(filePath);
+    const loaded = await persistence.load();
+
+    expect(loaded?.watchers.watcher_a.pendingDigestMessageId).toBeUndefined();
+    expect(loaded?.watchers.watcher_a.pendingConsumedMessageId).toBeUndefined();
+    expect(loaded?.watchers.watcher_a.pendingConsumedStateAt).toBeUndefined();
+    expect(loaded?.watchers.watcher_a.lastConsumedMessageId).toBe("message_b");
+    expect(loaded?.watchers.watcher_a.lastConsumedStateAt).toBe("2026-03-10T10:00:03.000Z");
+  });
 });

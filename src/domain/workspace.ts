@@ -2387,7 +2387,8 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
   const newMessageIds = observedMessageIds.filter((messageId) => !shouldExcludeFromWatcherDigest(snapshot, messageId));
   const stateChanges = collectWatcherStateChanges(snapshot, watcherWithResolvedStateCursor);
   const hasObservedActivity = observedMessageIds.length > 0 || stateChanges.length > 0;
-  const hasDigestActivity = newMessageIds.length > 0 || stateChanges.length > 0;
+  const hasResumeActivity = newMessageIds.length > 0 || stateChanges.length > 0;
+  const hasDigestActivity = hasResumeActivity;
   const nextCursor = {
     lastConsumedMessageId:
       observedMessageIds.length > 0 ? observedMessageIds[observedMessageIds.length - 1] : watcher.lastConsumedMessageId,
@@ -2396,7 +2397,10 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
   let effectiveWatcher = watcher;
 
   if (watcher.pausedUntilActivity) {
-    if (!hasObservedActivity) {
+    if (!hasResumeActivity) {
+      if (hasObservedActivity) {
+        advanceWatcherCursor(snapshot, watcher, watcherId, nextCursor);
+      }
       return snapshot;
     }
 

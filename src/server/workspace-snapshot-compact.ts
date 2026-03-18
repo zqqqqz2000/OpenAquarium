@@ -1,5 +1,6 @@
 import type { MessageId, RoomId, TaskId, WorkspaceSnapshot } from "@/domain/model";
 import { isVisibleRoomMessage } from "@/lib/message-visibility";
+import { normalizeWatcherCursorState } from "@/server/watcher-cursor-normalization";
 
 export interface WorkspaceSnapshotCompactionLimits {
   maxMessagesPerRoom: number;
@@ -216,28 +217,16 @@ function compactTaskTraces(
 
 function normalizeWatcherCursor(
   snapshot: WorkspaceSnapshot,
+  messages: WorkspaceSnapshot["messages"],
   roomMessageOrder: Record<RoomId, MessageId[]>,
 ): WorkspaceSnapshot["watchers"] {
   return Object.fromEntries(
     Object.entries(snapshot.watchers).map(([watcherId, watcher]) => {
       const roomMessageIds = roomMessageOrder[watcher.roomId] ?? [];
-      const normalizeWatcherMessageId = (messageId?: string) =>
-        messageId === undefined
-          ? undefined
-          : roomMessageIds.includes(messageId)
-            ? messageId
-            : roomMessageIds[roomMessageIds.length - 1];
 
       return [
         watcherId,
-        {
-          ...watcher,
-          lastConsumedMessageId: normalizeWatcherMessageId(watcher.lastConsumedMessageId),
-          lastConsumedStateAt: watcher.lastConsumedStateAt,
-          pendingDigestMessageId: normalizeWatcherMessageId(watcher.pendingDigestMessageId),
-          pendingConsumedMessageId: normalizeWatcherMessageId(watcher.pendingConsumedMessageId),
-          pendingConsumedStateAt: watcher.pendingConsumedStateAt,
-        },
+        normalizeWatcherCursorState(watcher, roomMessageIds, messages),
       ];
     }),
   );
@@ -277,6 +266,6 @@ export function compactWorkspaceSnapshot(
     tasks: compactedTasks,
     taskTraces: compactedTaskTraces,
     taskTraceOrderByTask: compactedTraceOrderByTask,
-    watchers: normalizeWatcherCursor(snapshot, messageOrderByRoom),
+    watchers: normalizeWatcherCursor(snapshot, compactedMessages, messageOrderByRoom),
   };
 }
