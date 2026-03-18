@@ -359,6 +359,128 @@ describe("OpenAICompatibleMemberExecutor", () => {
     }));
   });
 
+  it("runs visible compaction with a dedicated model and persists summary plus the last 10 messages", async () => {
+    const request = createRequest();
+    if (request.member.provider.kind !== "openai-compatible") {
+      throw new Error("Expected openai-compatible provider");
+    }
+
+    request.member.provider.modelLimits = {
+      "gpt-4.1-mini": {
+        context: 80,
+      },
+    };
+    request.member.provider.compactionModelId = "gpt-4.1-nano";
+    request.member.provider.compactionReservedTokens = 10;
+    request.member.provider.compactionOffloadThresholdChars = 10;
+    request.messageHistory = Array.from({ length: 12 }, (_, index) => (
+      index % 2 === 0
+        ? {
+            role: "user" as const,
+            content: `Earlier prompt ${index} with enough text to force compaction`,
+          }
+        : {
+            role: "assistant" as const,
+            content: `Earlier answer ${index} with enough text to force compaction`,
+          }
+    ));
+
+    streamTextMock
+      .mockReset()
+      .mockReturnValueOnce({
+        text: Promise.resolve("<analysis>compaction</analysis>\n\n1. Primary Request and Intent\n- summary"),
+        finishReason: Promise.resolve("stop"),
+        response: Promise.resolve({
+          messages: [
+            {
+              role: "assistant",
+              content: "summary",
+            },
+          ],
+        }),
+      })
+      .mockReturnValueOnce({
+        text: Promise.resolve("done"),
+        finishReason: Promise.resolve("stop"),
+        response: Promise.resolve({
+          messages: [
+            {
+              role: "assistant",
+              content: "done",
+            },
+          ],
+        }),
+      });
+
+    const onStatus = vi.fn(() => Promise.resolve());
+    const onComplete = vi.fn(() => Promise.resolve());
+    const { OpenAICompatibleMemberExecutor } = await import("@/server/openai-compatible-executor");
+    const executor = new OpenAICompatibleMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: createHost(),
+    });
+
+    await executor.execute(request, {
+      onPromptVisible: () => Promise.resolve(),
+      onDraft: () => Promise.resolve(),
+      onStatus,
+      onComplete,
+      onError: () => Promise.resolve(),
+    });
+
+    expect(openAICompatibleLanguageModelMock).toHaveBeenNthCalledWith(1, "gpt-4.1-nano");
+    expect(openAICompatibleLanguageModelMock).toHaveBeenNthCalledWith(2, "gpt-4.1-mini");
+    expect(streamTextMock).toHaveBeenCalledTimes(2);
+    expect(streamTextMock.mock.calls[0]?.[0]).toMatchObject({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("[OA_COMPACTION_AGENT]"),
+        }),
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("Primary Request and Intent"),
+        }),
+      ]),
+    });
+    expect(streamTextMock.mock.calls[1]?.[0]).toMatchObject({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("The conversation begins with a compaction summary."),
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: "<analysis>compaction</analysis>\n\n1. Primary Request and Intent\n- summary",
+        }),
+      ]),
+    });
+    expect(onStatus).toHaveBeenCalledWith("Compacting conversation history...");
+    expect(onStatus).toHaveBeenCalledWith("Compaction completed.");
+    expect(onComplete).toHaveBeenCalledWith("done", "stop", {
+      nextOpenAICompatibleConversation: expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            summary: expect.objectContaining({
+              tailMessageCount: 10,
+              modelId: "gpt-4.1-nano",
+            }),
+          }),
+          expect.objectContaining({
+            role: "user",
+            content: "Full task prompt with complete visible history",
+          }),
+          expect.objectContaining({
+            role: "assistant",
+            content: "done",
+          }),
+        ]),
+      }),
+    });
+  });
+
   it("fails early when the openai-compatible member has no model id", async () => {
     const request = createRequest();
     const { OpenAICompatibleMemberExecutor } = await import("@/server/openai-compatible-executor");

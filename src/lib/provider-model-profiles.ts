@@ -29,6 +29,9 @@ export function createDefaultOpenAICompatibleProviderModelProfile(): OpenAICompa
       extraBodyFormat: "json",
       extraBody: {},
       mcpServers: [],
+      modelLimits: {},
+      compactionReservedTokens: 20_000,
+      compactionOffloadThresholdChars: 12_000,
     },
   };
 }

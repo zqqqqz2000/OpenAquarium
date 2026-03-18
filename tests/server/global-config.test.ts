@@ -208,6 +208,15 @@ describe("OpenAquariumGlobalConfigManager", () => {
                 order: ["reasoning"],
               },
             },
+            modelLimits: {
+              "gpt-4.1-mini": {
+                context: 200000,
+                output: 32000,
+              },
+            },
+            compactionModelId: "gpt-4.1-nano",
+            compactionReservedTokens: 12000,
+            compactionOffloadThresholdChars: 9000,
             mcpServers: [
               {
                 id: "local-files",
@@ -242,6 +251,15 @@ describe("OpenAquariumGlobalConfigManager", () => {
             order: ["reasoning"],
           },
         },
+        modelLimits: {
+          "gpt-4.1-mini": {
+            context: 200000,
+            output: 32000,
+          },
+        },
+        compactionModelId: "gpt-4.1-nano",
+        compactionReservedTokens: 12000,
+        compactionOffloadThresholdChars: 9000,
         mcpServers: [
           {
             id: "local-files",
@@ -261,6 +279,15 @@ describe("OpenAquariumGlobalConfigManager", () => {
         baseURL: "https://example.test/v1",
         headersFormat: "kv",
         extraBodyFormat: "json",
+        modelLimits: {
+          "gpt-4.1-mini": {
+            context: 200000,
+            output: 32000,
+          },
+        },
+        compactionModelId: "gpt-4.1-nano",
+        compactionReservedTokens: 12000,
+        compactionOffloadThresholdChars: 9000,
         mcpServers: [
           {
             id: "local-files",

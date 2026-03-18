@@ -14,7 +14,11 @@ import type {
 import type { DiagnosticsLogger } from "./diagnostics";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { createWorkspaceTools, type MemberToolHost, resolveExecutorDirectories } from "./member-workspace-tools";
-import { appendConversationTurn, buildPersistedUserTurnMessage, toModelMessages } from "./openai-compatible-conversation";
+import { appendConversationTurn, buildPersistedUserTurnMessage } from "./openai-compatible-conversation";
+import {
+  isContextWindowErrorMessage,
+  prepareOpenAICompatibleConversation,
+} from "./openai-compatible-compaction";
 import { createConfiguredMcpTools } from "./openai-compatible-mcp";
 import { TerminalRegistry } from "./terminal-registry";
 
@@ -148,81 +152,122 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
       let mcpTools:
         | Awaited<ReturnType<typeof createConfiguredMcpTools>>
         | undefined;
+      let promptVisible = false;
       try {
         mcpTools = await createConfiguredMcpTools({
           binding: this.member.provider,
           defaultWorkingDirectory: this.projectWorkingDirectory,
         });
+        const availableTools = {
+          ...workspaceTools,
+          ...(mcpTools?.tools ?? {}),
+        };
         const currentConversation = {
           messages: request.messageHistory ?? request.openAICompatibleConversation?.messages ?? [],
         };
         const currentUserMessage = buildPersistedUserTurnMessage(request.prompt);
-        const result = streamText({
-          abortSignal: abortController.signal,
-          includeRawChunks: true,
-          model: this.provider.languageModel(modelId),
-          messages: [
-            ...toModelMessages(request.messageHistory ?? currentConversation.messages),
+
+        const executePreparedTurn = async (forceCompaction = false) => {
+          finalContent = "";
+          const preparedConversation = await prepareOpenAICompatibleConversation({
+            workspaceRoot: this.projectWorkingDirectory,
+            memberId: request.member.id,
+            binding: this.member.provider,
+            provider: this.provider,
+            modelId,
+            conversation: currentConversation,
             currentUserMessage,
-          ],
-          tools: {
-            ...workspaceTools,
-            ...mcpTools.tools,
-          },
-          onChunk: async ({ chunk }) => {
-            switch (chunk.type) {
-              case "text-delta":
-                finalContent = `${finalContent}${chunk.text}`;
-                await callbacks.onDraft(finalContent);
-                return;
-              case "tool-call": {
-                const toolName = summarizeToolChunk(chunk.input as { toolName?: string } | object | string | number | boolean | null | undefined);
-                const toolCallId = "toolCallId" in chunk && typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined;
-                await callbacks.onStatus(encodeToolStatusSummary({ toolCallId, toolName, status: "running" }));
-                return;
-              }
-              case "tool-result": {
-                const toolCallId = "toolCallId" in chunk && typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined;
-                await callbacks.onStatus(encodeToolStatusSummary({ toolCallId, toolName: chunk.toolName, status: "completed" }));
-                return;
-              }
-              case "reasoning-delta":
-                if (chunk.text.trim().length > 0) {
-                  await callbacks.onStatus(`Reasoning: ${chunk.text}`);
+            abortSignal: abortController.signal,
+            callbacks,
+            forceCompaction,
+          });
+          const result = streamText({
+            abortSignal: abortController.signal,
+            includeRawChunks: true,
+            model: this.provider.languageModel(modelId),
+            messages: preparedConversation.modelMessages,
+            tools: availableTools,
+            onChunk: async ({ chunk }) => {
+              switch (chunk.type) {
+                case "text-delta":
+                  finalContent = `${finalContent}${chunk.text}`;
+                  await callbacks.onDraft(finalContent);
+                  return;
+                case "tool-call": {
+                  const toolName = summarizeToolChunk(chunk.input as { toolName?: string } | object | string | number | boolean | null | undefined);
+                  const toolCallId = "toolCallId" in chunk && typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined;
+                  await callbacks.onStatus(encodeToolStatusSummary({ toolCallId, toolName, status: "running" }));
+                  return;
                 }
-                return;
-              case "raw": {
-                const summary = summarizeRawChunk(chunk.rawValue as JsonValue | object | undefined);
-                if (summary) {
-                  await callbacks.onStatus(summary);
+                case "tool-result": {
+                  const toolCallId = "toolCallId" in chunk && typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined;
+                  await callbacks.onStatus(encodeToolStatusSummary({ toolCallId, toolName: chunk.toolName, status: "completed" }));
+                  return;
                 }
-                return;
+                case "reasoning-delta":
+                  if (chunk.text.trim().length > 0) {
+                    await callbacks.onStatus(`Reasoning: ${chunk.text}`);
+                  }
+                  return;
+                case "raw": {
+                  const summary = summarizeRawChunk(chunk.rawValue as JsonValue | object | undefined);
+                  if (summary) {
+                    await callbacks.onStatus(summary);
+                  }
+                  return;
+                }
+                default:
+                  return;
               }
-              default:
-                return;
-            }
-          },
-        });
+            },
+          });
 
-        await callbacks.onPromptVisible?.();
+          if (!promptVisible) {
+            promptVisible = true;
+            await callbacks.onPromptVisible?.();
+          }
 
-        const [text, finishReason, response] = await Promise.all([
-          result.text,
-          result.finishReason,
-          result.response,
-        ]);
+          const [text, finishReason, response] = await Promise.all([
+            result.text,
+            result.finishReason,
+            result.response,
+          ]);
+
+          return {
+            text,
+            finishReason,
+            response,
+            conversation: preparedConversation.conversation,
+            compacted: preparedConversation.compacted,
+          };
+        };
+
+        let completion;
+        try {
+          completion = await executePreparedTurn();
+        } catch (error) {
+          if (
+            !abortController.signal.aborted
+            && isContextWindowErrorMessage(getErrorMessage(error as RuntimeError))
+          ) {
+            completion = await executePreparedTurn(true);
+          } else {
+            throw error;
+          }
+        }
+
         if (abortController.signal.aborted) {
           return;
         }
 
         await callbacks.onComplete(
-          text.trim().length > 0 ? text : finalContent,
-          finishReason,
+          completion.text.trim().length > 0 ? completion.text : finalContent,
+          completion.finishReason,
           {
             nextOpenAICompatibleConversation: appendConversationTurn({
-              conversation: currentConversation,
+              conversation: completion.conversation,
               userMessage: currentUserMessage,
-              responseMessages: response.messages as Array<AssistantModelMessage | ToolModelMessage>,
+              responseMessages: completion.response.messages as Array<AssistantModelMessage | ToolModelMessage>,
             }),
           },
         );

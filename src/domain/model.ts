@@ -48,6 +48,16 @@ export interface OpenAICompatibleProviderBinding {
   extraBodyFormat: ProviderTextFormat;
   extraBody: { [key: string]: JsonValue };
   mcpServers: OpenAICompatibleMCPServer[];
+  modelLimits?: Record<string, OpenAICompatibleModelLimit>;
+  compactionModelId?: string;
+  compactionReservedTokens?: number;
+  compactionOffloadThresholdChars?: number;
+}
+
+export interface OpenAICompatibleModelLimit {
+  context: number;
+  input?: number;
+  output?: number;
 }
 
 export interface OpenAICompatibleStdioMCPServer {
@@ -88,6 +98,19 @@ export interface PersistedOpenAICompatibleToolResultPart {
   toolCallId: string;
   toolName: string;
   output: JsonValue;
+  offload?: PersistedOpenAICompatibleToolResultOffload;
+}
+
+export interface PersistedOpenAICompatibleToolResultOffload {
+  path: string;
+  chars: number;
+}
+
+export interface PersistedOpenAICompatibleConversationSummary {
+  compactedAt: string;
+  sourceMessageCount: number;
+  tailMessageCount: number;
+  modelId: string;
 }
 
 export type PersistedOpenAICompatibleAssistantPart =
@@ -103,6 +126,7 @@ export interface PersistedOpenAICompatibleUserMessage {
 export interface PersistedOpenAICompatibleAssistantMessage {
   role: "assistant";
   content: string | PersistedOpenAICompatibleAssistantPart[];
+  summary?: PersistedOpenAICompatibleConversationSummary;
 }
 
 export interface PersistedOpenAICompatibleToolMessage {

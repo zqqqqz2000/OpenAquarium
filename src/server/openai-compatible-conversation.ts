@@ -8,12 +8,18 @@ import type {
   OpenAICompatibleConversationState,
   PersistedOpenAICompatibleAssistantMessage,
   PersistedOpenAICompatibleAssistantPart,
+  PersistedOpenAICompatibleConversationSummary,
   PersistedOpenAICompatibleMessage,
   PersistedOpenAICompatibleToolMessage,
   PersistedOpenAICompatibleToolResultPart,
   PersistedOpenAICompatibleUserMessage,
 } from "../domain/model";
 import type { JsonValue } from "../lib/json";
+
+export interface OpenAICompatibleModelMessageOptions {
+  instructions?: string[];
+  useOffloadedToolResults?: boolean;
+}
 
 function sanitizeJsonValue(value: unknown): JsonValue {
   if (
@@ -35,7 +41,31 @@ function sanitizeJsonValue(value: unknown): JsonValue {
     );
   }
 
-  return String(value);
+  if (typeof value === "undefined") {
+    return "undefined";
+  }
+
+  if (typeof value === "bigint") {
+    return value.toString(10);
+  }
+
+  if (typeof value === "symbol") {
+    return value.description ?? "symbol";
+  }
+
+  return "[unsupported]";
+}
+
+function toToolOutputText(value: JsonValue): string {
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+function buildOffloadPlaceholder(part: PersistedOpenAICompatibleToolResultPart): string {
+  if (!part.offload) {
+    return toToolOutputText(part.output);
+  }
+
+  return `[Tool result offloaded to file: ${part.offload.path} (${part.offload.chars} chars). Use oa_read_file to inspect the exact content if needed.]`;
 }
 
 function sanitizeAssistantMessage(message: AssistantModelMessage): PersistedOpenAICompatibleAssistantMessage | undefined {
@@ -108,10 +138,54 @@ function sanitizeToolMessage(message: ToolModelMessage): PersistedOpenAICompatib
     : undefined;
 }
 
+function toAssistantContent(
+  content: PersistedOpenAICompatibleAssistantMessage["content"],
+  options: Pick<OpenAICompatibleModelMessageOptions, "useOffloadedToolResults">,
+): string | PersistedOpenAICompatibleAssistantPart[] {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  return content.map((part) => {
+    if (part.type !== "tool-result" || !options.useOffloadedToolResults) {
+      return part;
+    }
+
+    return {
+      ...part,
+      output: buildOffloadPlaceholder(part),
+    };
+  });
+}
+
+function toToolContent(
+  content: PersistedOpenAICompatibleToolMessage["content"],
+  options: Pick<OpenAICompatibleModelMessageOptions, "useOffloadedToolResults">,
+): PersistedOpenAICompatibleToolResultPart[] {
+  return content.map((part) =>
+    !options.useOffloadedToolResults
+      ? part
+      : {
+          ...part,
+          output: buildOffloadPlaceholder(part),
+        });
+}
+
 export function buildPersistedUserTurnMessage(content: string): PersistedOpenAICompatibleUserMessage {
   return {
     role: "user",
     content,
+  };
+}
+
+export function buildConversationSummaryMessage(args: {
+  content: string;
+  summary: PersistedOpenAICompatibleConversationSummary;
+}): PersistedOpenAICompatibleAssistantMessage {
+  return {
+    role: "assistant",
+    content: args.content,
+    summary: args.summary,
   };
 }
 
@@ -149,8 +223,44 @@ export function appendConversationTurn(args: {
   };
 }
 
-export function toModelMessages(messages: PersistedOpenAICompatibleMessage[]): ModelMessage[] {
-  return messages as ModelMessage[];
+export function toModelMessages(
+  messages: PersistedOpenAICompatibleMessage[],
+  options: OpenAICompatibleModelMessageOptions = {},
+): ModelMessage[] {
+  const modelMessages: ModelMessage[] = [];
+
+  const instructionLines = options.instructions?.map((instruction) => instruction.trim()).filter(Boolean) ?? [];
+  if (instructionLines.length > 0) {
+    modelMessages.push({
+      role: "system",
+      content: instructionLines.join("\n"),
+    } as ModelMessage);
+  }
+
+  for (const message of messages) {
+    switch (message.role) {
+      case "user":
+        modelMessages.push({
+          role: "user",
+          content: message.content,
+        } as ModelMessage);
+        break;
+      case "assistant":
+        modelMessages.push({
+          role: "assistant",
+          content: toAssistantContent(message.content, options),
+        } as ModelMessage);
+        break;
+      case "tool":
+        modelMessages.push({
+          role: "tool",
+          content: toToolContent(message.content, options),
+        } as ModelMessage);
+        break;
+    }
+  }
+
+  return modelMessages;
 }
 
 function formatAssistantContent(content: PersistedOpenAICompatibleAssistantMessage["content"]): string {
@@ -165,7 +275,9 @@ function formatAssistantContent(content: PersistedOpenAICompatibleAssistantMessa
       case "tool-call":
         return `[Tool Call] ${part.toolName}(${JSON.stringify(part.input)})`;
       case "tool-result":
-        return `[Tool Result] ${part.toolName}: ${JSON.stringify(part.output)}`;
+        return part.offload
+          ? `[Tool Result] ${part.toolName}: ${buildOffloadPlaceholder(part)}`
+          : `[Tool Result] ${part.toolName}: ${JSON.stringify(part.output)}`;
     }
   }).join("\n");
 }
@@ -175,11 +287,17 @@ function formatMessage(message: PersistedOpenAICompatibleMessage): string {
     case "user":
       return `User:\n${message.content}`;
     case "assistant":
-      return `Assistant:\n${formatAssistantContent(message.content)}`;
+      return [
+        message.summary ? `[Compaction Summary ${message.summary.compactedAt}]` : "Assistant:",
+        formatAssistantContent(message.content),
+      ].join("\n");
     case "tool":
       return [
         "Tool:",
-        ...message.content.map((part) => `${part.toolName} (${part.toolCallId}): ${JSON.stringify(part.output)}`),
+        ...message.content.map((part) =>
+          `${part.toolName} (${part.toolCallId}): ${
+            part.offload ? buildOffloadPlaceholder(part) : JSON.stringify(part.output)
+          }`),
       ].join("\n");
   }
 }

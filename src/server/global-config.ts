@@ -28,6 +28,12 @@ const providerBindingSchema = z.object({
   capabilities: z.array(z.string().min(1)).default(["prompt", "cancel"]),
 });
 
+const openAICompatibleModelLimitSchema = z.object({
+  context: z.number().int().positive(),
+  input: z.number().int().positive().optional(),
+  output: z.number().int().positive().optional(),
+});
+
 const openaiCompatibleProviderBindingSchema = z.object({
   kind: z.literal("openai-compatible"),
   label: z.string().min(1),
@@ -37,6 +43,10 @@ const openaiCompatibleProviderBindingSchema = z.object({
   headers: z.record(z.string(), z.string()).default({}),
   extraBodyFormat: z.enum(["kv", "json"]).default("json"),
   extraBody: z.record(z.string(), z.json()).default({}),
+  modelLimits: z.record(z.string(), openAICompatibleModelLimitSchema).default({}),
+  compactionModelId: z.string().min(1).optional(),
+  compactionReservedTokens: z.number().int().nonnegative().default(20_000),
+  compactionOffloadThresholdChars: z.number().int().positive().default(12_000),
   mcpServers: z.array(z.discriminatedUnion("transport", [
     z.object({
       id: z.string().min(1),

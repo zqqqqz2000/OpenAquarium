@@ -393,6 +393,35 @@ function ModelProfileEditor(props: {
               <span className="text-sm font-medium">MCP servers (JSON array)</span>
               <JsonEditor value={draft.providerMcpServersText} onChange={(value) => onChange({ providerMcpServersText: value })} />
             </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Model limits (JSON object keyed by model id)</span>
+              <JsonEditor value={draft.providerModelLimitsText} onChange={(value) => onChange({ providerModelLimitsText: value })} />
+            </label>
+            <div className="grid gap-4 md:grid-cols-3">
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium">Compaction model id</span>
+                <Input
+                  value={draft.providerCompactionModelId}
+                  onChange={(event) => onChange({ providerCompactionModelId: event.currentTarget.value })}
+                />
+              </label>
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium">Reserved tokens</span>
+                <Input
+                  inputMode="numeric"
+                  value={draft.providerCompactionReservedTokens}
+                  onChange={(event) => onChange({ providerCompactionReservedTokens: event.currentTarget.value })}
+                />
+              </label>
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium">Offload threshold chars</span>
+                <Input
+                  inputMode="numeric"
+                  value={draft.providerCompactionOffloadThresholdChars}
+                  onChange={(event) => onChange({ providerCompactionOffloadThresholdChars: event.currentTarget.value })}
+                />
+              </label>
+            </div>
           </>
         )}
       </CardContent>

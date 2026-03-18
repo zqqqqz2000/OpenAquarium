@@ -2,6 +2,7 @@ import type {
   ProviderKind,
   GlobalWorkspaceConfig,
   OpenAICompatibleMCPServer,
+  OpenAICompatibleModelLimit,
   ProviderModelProfile,
   ProviderProfileKind,
   ProviderProfileType,
@@ -28,6 +29,10 @@ export interface ModelProfileDraft extends ProviderConfigDraftFields {
   providerExtraBodyFormat: "kv" | "json";
   providerExtraBodyText: string;
   providerMcpServersText: string;
+  providerModelLimitsText: string;
+  providerCompactionModelId: string;
+  providerCompactionReservedTokens: string;
+  providerCompactionOffloadThresholdChars: string;
 }
 
 export interface GlobalConfigDraft {
@@ -66,6 +71,10 @@ export function createModelProfileDraft(profile: ProviderModelProfile): ModelPro
             .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
             .join("\n"),
       providerMcpServersText: JSON.stringify(profile.binding.mcpServers, null, 2),
+      providerModelLimitsText: JSON.stringify(profile.binding.modelLimits ?? {}, null, 2),
+      providerCompactionModelId: profile.binding.compactionModelId ?? "",
+      providerCompactionReservedTokens: String(profile.binding.compactionReservedTokens ?? 20_000),
+      providerCompactionOffloadThresholdChars: String(profile.binding.compactionOffloadThresholdChars ?? 12_000),
     };
   }
 
@@ -90,6 +99,10 @@ export function createModelProfileDraft(profile: ProviderModelProfile): ModelPro
     providerExtraBodyFormat: "json",
     providerExtraBodyText: "",
     providerMcpServersText: "[]",
+    providerModelLimitsText: "{}",
+    providerCompactionModelId: "",
+    providerCompactionReservedTokens: "",
+    providerCompactionOffloadThresholdChars: "",
   };
 }
 
@@ -120,6 +133,10 @@ export function addEmptyModelProfileDraft(): ModelProfileDraft {
     providerExtraBodyFormat: "json",
     providerExtraBodyText: "",
     providerMcpServersText: "[]",
+    providerModelLimitsText: "{}",
+    providerCompactionModelId: "",
+    providerCompactionReservedTokens: "",
+    providerCompactionOffloadThresholdChars: "",
   };
 }
 
@@ -135,6 +152,56 @@ function parseMcpServersText(value: string): OpenAICompatibleMCPServer[] {
   }
 
   return parsed as OpenAICompatibleMCPServer[];
+}
+
+function parseModelLimitsText(value: string): Record<string, OpenAICompatibleModelLimit> {
+  const normalized = value.trim();
+  if (!normalized) {
+    return {};
+  }
+
+  const parsed = JSON.parse(normalized) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Model limits must be a JSON object keyed by model id.");
+  }
+
+  return parsed as Record<string, OpenAICompatibleModelLimit>;
+}
+
+function parseNonNegativeInteger(value: string, fallback: number): number {
+  const normalized = value.trim();
+  if (!normalized) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error("Expected a non-negative integer.");
+  }
+
+  return parsed;
+}
+
+function parsePositiveInteger(value: string, fallback: number): number {
+  const parsed = parseNonNegativeInteger(value, fallback);
+  if (parsed <= 0) {
+    throw new Error("Expected a positive integer.");
+  }
+
+  return parsed;
+}
+
+function stringifyHeaderValue(value: unknown): string {
+  if (
+    typeof value === "string"
+    || typeof value === "number"
+    || typeof value === "boolean"
+    || value === null
+  ) {
+    return String(value);
+  }
+
+  return JSON.stringify(value);
 }
 
 export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: GlobalConfigDraft): UpdateGlobalConfigInput {
@@ -153,6 +220,9 @@ export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: Gl
               extraBodyFormat: "json" as const,
               extraBody: {},
               mcpServers: [],
+              modelLimits: {},
+              compactionReservedTokens: 20_000,
+              compactionOffloadThresholdChars: 12_000,
             };
 
       return {
@@ -169,7 +239,7 @@ export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: Gl
           headers:
             profile.providerHeadersFormat === "json"
               ? Object.fromEntries(
-                  Object.entries(parseJsonObjectText(profile.providerHeadersText)).map(([key, value]) => [key, String(value)]),
+                  Object.entries(parseJsonObjectText(profile.providerHeadersText)).map(([key, value]) => [key, stringifyHeaderValue(value)]),
                 )
               : parseEnvText(profile.providerHeadersText),
           extraBodyFormat: profile.providerExtraBodyFormat,
@@ -178,6 +248,16 @@ export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: Gl
               ? parseJsonObjectText(profile.providerExtraBodyText)
               : parseEnvText(profile.providerExtraBodyText),
           mcpServers: parseMcpServersText(profile.providerMcpServersText),
+          modelLimits: parseModelLimitsText(profile.providerModelLimitsText),
+          compactionModelId: profile.providerCompactionModelId.trim() || undefined,
+          compactionReservedTokens: parseNonNegativeInteger(
+            profile.providerCompactionReservedTokens,
+            fallbackBinding.compactionReservedTokens ?? 20_000,
+          ),
+          compactionOffloadThresholdChars: parsePositiveInteger(
+            profile.providerCompactionOffloadThresholdChars,
+            fallbackBinding.compactionOffloadThresholdChars ?? 12_000,
+          ),
         },
       };
     }
