@@ -389,6 +389,10 @@ function ModelProfileEditor(props: {
                 <Textarea className="min-h-28" value={draft.providerExtraBodyText} onChange={(event) => onChange({ providerExtraBodyText: event.currentTarget.value })} />
               )}
             </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">MCP servers (JSON array)</span>
+              <JsonEditor value={draft.providerMcpServersText} onChange={(value) => onChange({ providerMcpServersText: value })} />
+            </label>
           </>
         )}
       </CardContent>

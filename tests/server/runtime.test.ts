@@ -135,6 +135,7 @@ describe("WorkspaceRuntime", () => {
             headers: {},
             extraBodyFormat: "json",
             extraBody: {},
+            mcpServers: [],
           },
         },
       ],
@@ -351,6 +352,86 @@ describe("WorkspaceRuntime", () => {
     });
 
     expect(seenProviderKinds).toContain("openai-compatible");
+  });
+
+  it("lets room members inherit openai-compatible MCP profile config from their template model profile", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-openai-template-mcp-"));
+    const seenBindings: Array<ExecutionRequest["member"]["provider"]> = [];
+    const initialSnapshot = createEmptyRuntimeSnapshot();
+    const template = initialSnapshot.templates["template-product-pod"];
+    if (!template) {
+      throw new Error("Expected template-product-pod template");
+    }
+
+    initialSnapshot.templates[template.id] = {
+      ...template,
+      members: template.members.map((member) =>
+        member.handle === "lead"
+          ? {
+              ...member,
+              modelProfileId: "model-openai-compatible",
+              modelId: "gpt-4.1-mini",
+            }
+          : member),
+    };
+
+    const globalConfig = createRuntimeGlobalConfig();
+    const openAIProfile = globalConfig.modelProfiles.find((profile) => profile.id === "model-openai-compatible");
+    if (!openAIProfile || openAIProfile.providerType !== "openai-compatible") {
+      throw new Error("Expected openai-compatible model profile");
+    }
+    openAIProfile.binding.mcpServers = [
+      {
+        id: "local-files",
+        transport: "stdio",
+        command: "node",
+        args: ["./mcp-server.js"],
+        env: {
+          MCP_MODE: "test",
+        },
+        cwd: "./mcp",
+      },
+    ];
+
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot,
+      persistence: new WorkspacePersistence(
+        path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      workspaceRoot,
+      globalConfig,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (request, callbacks) => {
+          seenBindings.push(request.member.provider);
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Template MCP Inheritance",
+      templateId: "template-product-pod",
+    });
+    await runtime.sendUserMessage({
+      roomId: created.roomId,
+      content: "@>lead 试一下继承模板里的 openai-compatible MCP profile",
+    });
+
+    await waitFor(() => {
+      expect(seenBindings.length).toBeGreaterThan(0);
+      expect(seenBindings.some((binding) => binding.kind === "openai-compatible")).toBe(true);
+    });
+
+    expect(seenBindings.find((binding) => binding.kind === "openai-compatible")).toMatchObject({
+      kind: "openai-compatible",
+      mcpServers: [
+        {
+          id: "local-files",
+          transport: "stdio",
+          command: "node",
+        },
+      ],
+    });
   });
 
   it("persists openai-compatible conversation history across turns", async () => {

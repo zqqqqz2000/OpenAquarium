@@ -332,7 +332,11 @@ function buildSharedSections(args: {
     "oa_role_add_employee / oa_role_remove_employee / oa_role_rename_employee: structured staffing tools; check the returned `ok` field before claiming success.",
     "oa_room_state: inspect transcript and member/task state before retrying a send.",
     "oa_read_file: read transcript files or source files when you need deeper context.",
+    "apply_patch: preferred for precise file edits when you already know the change.",
+    "exec_command / write_stdin / read_thread_terminal: preferred for iterative terminal work instead of one-shot shelling.",
+    "view_image: inspect local image metadata when a task references screenshots or assets.",
     "oa_run_room_watcher: trigger a watcher immediately when needed.",
+    "Configured MCP tools are also available when the selected provider profile defines MCP servers; call those tools directly by their exposed names.",
     `CLI pause fallback for persistent watch: ${roomWatchScript} --watcher <watcher-id> --pause-until-activity`,
     `CLI fallback examples if the dedicated tools are unavailable: ${roomSendScript} --room ${room.id} --member ${member.id} --scope group --text "your message" | ${roomSendScript} --room ${room.id} --member ${member.id} --scope direct --target @user --text "private message" | ${roomStateScript} --room ${room.id}`,
   ].join("\n");

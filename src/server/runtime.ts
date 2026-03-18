@@ -336,6 +336,7 @@ function bindingSignature(binding: GlobalWorkspaceConfig["modelProfiles"][number
       headers: binding.headers,
       extraBodyFormat: binding.extraBodyFormat,
       extraBody: binding.extraBody,
+      mcpServers: binding.mcpServers,
     });
   }
 

@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionRequest } from "@/server/executor";
@@ -6,10 +8,18 @@ import type { MemberToolHost } from "@/server/member-workspace-tools";
 const {
   openAICompatibleLanguageModelMock,
   openAICompatibleProviderMock,
+  mcpCloseMock,
+  mcpCreateClientMock,
+  mcpStdioTransportMock,
+  mcpToolsMock,
   streamTextMock,
 } = vi.hoisted(() => ({
   openAICompatibleLanguageModelMock: vi.fn((modelId: string) => ({ provider: "openai-compatible", modelId })),
   openAICompatibleProviderMock: vi.fn(),
+  mcpCloseMock: vi.fn(() => Promise.resolve()),
+  mcpCreateClientMock: vi.fn(),
+  mcpStdioTransportMock: vi.fn((options: unknown) => ({ kind: "stdio-transport", options })),
+  mcpToolsMock: vi.fn(() => ({})),
   streamTextMock: vi.fn(),
 }));
 
@@ -19,6 +29,23 @@ vi.mock("@ai-sdk/openai-compatible", () => ({
     return {
       languageModel: openAICompatibleLanguageModelMock,
     };
+  }),
+}));
+
+vi.mock("@ai-sdk/mcp", () => ({
+  createMCPClient: vi.fn((options: unknown) => {
+    mcpCreateClientMock(options);
+    return Promise.resolve({
+      tools: () => Promise.resolve(mcpToolsMock()),
+      close: mcpCloseMock,
+    });
+  }),
+}));
+
+vi.mock("@ai-sdk/mcp/mcp-stdio", () => ({
+  Experimental_StdioMCPTransport: vi.fn(function Experimental_StdioMCPTransport(options: unknown) {
+    mcpStdioTransportMock(options);
+    return { kind: "stdio-transport", options };
   }),
 }));
 
@@ -72,6 +99,7 @@ function createRequest(): ExecutionRequest {
             order: ["reasoning"],
           },
         },
+        mcpServers: [],
       },
       acceptsDirectMessages: true,
       isEntryMember: true,
@@ -128,6 +156,11 @@ describe("OpenAICompatibleMemberExecutor", () => {
     delete process.env.OPENAI_API_KEY;
     openAICompatibleLanguageModelMock.mockClear();
     openAICompatibleProviderMock.mockReset();
+    mcpCloseMock.mockClear();
+    mcpCreateClientMock.mockReset();
+    mcpStdioTransportMock.mockReset();
+    mcpToolsMock.mockReset();
+    mcpToolsMock.mockReturnValue({});
     streamTextMock.mockReset();
     streamTextMock.mockReturnValue({
       text: Promise.resolve("done"),
@@ -201,6 +234,66 @@ describe("OpenAICompatibleMemberExecutor", () => {
       },
     });
     expect(persistMemberSession).not.toHaveBeenCalled();
+  });
+
+  it("merges configured MCP tools into the openai-compatible tool set", async () => {
+    const request = createRequest();
+    if (request.member.provider.kind !== "openai-compatible") {
+      throw new Error("Expected openai-compatible provider");
+    }
+    request.member.provider.mcpServers = [
+      {
+        id: "local-files",
+        transport: "stdio",
+        command: "node",
+        args: ["./mcp-server.js"],
+        env: {
+          MCP_MODE: "test",
+        },
+        cwd: "./mcp",
+      },
+    ];
+    mcpToolsMock.mockReturnValue({
+      mcp_echo: {
+        description: "Echo via MCP",
+        inputSchema: {},
+        execute: vi.fn(),
+      },
+    });
+    const { OpenAICompatibleMemberExecutor } = await import("@/server/openai-compatible-executor");
+    const executor = new OpenAICompatibleMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: createHost(),
+    });
+
+    await executor.execute(request, {
+      onPromptVisible: () => Promise.resolve(),
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError: () => Promise.resolve(),
+    });
+
+    expect(mcpStdioTransportMock).toHaveBeenCalledWith({
+      command: "node",
+      args: ["./mcp-server.js"],
+      env: {
+        MCP_MODE: "test",
+      },
+      cwd: path.join(process.cwd(), "mcp"),
+    });
+    expect(streamTextMock).toHaveBeenCalledWith(expect.objectContaining({
+      tools: expect.objectContaining({
+        oa_send_group_message: expect.any(Object),
+        exec_command: expect.any(Object),
+        apply_patch: expect.any(Object),
+        mcp_echo: expect.objectContaining({
+          description: "Echo via MCP",
+        }),
+      }),
+    }));
+    expect(mcpCloseMock).toHaveBeenCalled();
   });
 
   it("replays persisted message history on subsequent turns", async () => {

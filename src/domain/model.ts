@@ -47,7 +47,29 @@ export interface OpenAICompatibleProviderBinding {
   headers: Record<string, string>;
   extraBodyFormat: ProviderTextFormat;
   extraBody: { [key: string]: JsonValue };
+  mcpServers: OpenAICompatibleMCPServer[];
 }
+
+export interface OpenAICompatibleStdioMCPServer {
+  id: string;
+  transport: "stdio";
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd?: string;
+}
+
+export interface OpenAICompatibleRemoteMCPServer {
+  id: string;
+  transport: "http" | "sse";
+  url: string;
+  headersFormat: ProviderTextFormat;
+  headers: Record<string, string>;
+}
+
+export type OpenAICompatibleMCPServer =
+  | OpenAICompatibleStdioMCPServer
+  | OpenAICompatibleRemoteMCPServer;
 
 export interface PersistedOpenAICompatibleTextPart {
   type: "text";

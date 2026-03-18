@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -17,10 +17,13 @@ import type {
 import { resolveCommandPath } from "./acp-session";
 
 interface TerminalEntry {
-  process: ChildProcessByStdio<null, Readable, Readable>;
+  process: ChildProcessByStdio<Writable, Readable, Readable>;
+  sessionId: string;
   output: string;
+  unreadOutput: string;
   outputByteLimit: number;
   truncated: boolean;
+  unreadTruncated: boolean;
   waitForExit: Promise<WaitForTerminalExitResponse>;
 }
 
@@ -39,6 +42,7 @@ function clampOutput(output: string, byteLimit: number): { output: string; trunc
 
 export class TerminalRegistry {
   private readonly entries = new Map<string, TerminalEntry>();
+  private readonly terminalIdsBySession = new Map<string, string[]>();
 
   create(params: CreateTerminalRequest): Promise<CreateTerminalResponse> {
     const terminalId = randomUUID();
@@ -55,7 +59,7 @@ export class TerminalRegistry {
     const child = spawn(resolvedCommand, params.args ?? [], {
       cwd,
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
 
     let resolveWait: (result: WaitForTerminalExitResponse) => void = () => undefined;
@@ -65,15 +69,21 @@ export class TerminalRegistry {
     const outputByteLimit = params.outputByteLimit ?? 96_000;
     const entry: TerminalEntry = {
       process: child,
+      sessionId: params.sessionId,
       output: "",
+      unreadOutput: "",
       outputByteLimit,
       truncated: false,
+      unreadTruncated: false,
       waitForExit,
     };
     const append = (chunk: Buffer): void => {
       const next = clampOutput(`${entry.output}${chunk.toString("utf8")}`, entry.outputByteLimit);
       entry.output = next.output;
       entry.truncated ||= next.truncated;
+      const nextUnread = clampOutput(`${entry.unreadOutput}${chunk.toString("utf8")}`, entry.outputByteLimit);
+      entry.unreadOutput = nextUnread.output;
+      entry.unreadTruncated ||= nextUnread.truncated;
     };
 
     child.stdout.on("data", append);
@@ -85,11 +95,14 @@ export class TerminalRegistry {
       });
     });
     this.entries.set(terminalId, entry);
+    const terminalIds = this.terminalIdsBySession.get(params.sessionId) ?? [];
+    terminalIds.push(terminalId);
+    this.terminalIdsBySession.set(params.sessionId, terminalIds);
 
     return Promise.resolve({ terminalId });
   }
 
-  output(params: TerminalOutputRequest): Promise<TerminalOutputResponse> {
+  output(params: TerminalOutputRequest & { consume?: boolean }): Promise<TerminalOutputResponse> {
     const entry = this.require(params.terminalId);
     const exitStatus = entry.process.exitCode === null && entry.process.signalCode === null
       ? undefined
@@ -98,9 +111,16 @@ export class TerminalRegistry {
           signal: entry.process.signalCode ?? undefined,
         };
 
+    const output = params.consume ? entry.unreadOutput : entry.output;
+    const truncated = params.consume ? entry.unreadTruncated : entry.truncated;
+    if (params.consume) {
+      entry.unreadOutput = "";
+      entry.unreadTruncated = false;
+    }
+
     return Promise.resolve({
-      output: entry.output,
-      truncated: entry.truncated,
+      output,
+      truncated,
       exitStatus,
     });
   }
@@ -116,12 +136,43 @@ export class TerminalRegistry {
     return Promise.resolve({});
   }
 
+  write(params: { terminalId: string; input: string }): Promise<void> {
+    const entry = this.require(params.terminalId);
+    if (entry.process.exitCode !== null || entry.process.signalCode !== null) {
+      throw new Error(`Terminal "${params.terminalId}" has already exited`);
+    }
+
+    return new Promise((resolve, reject) => {
+      entry.process.stdin.write(params.input, (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  latestTerminalId(sessionId: string): string | undefined {
+    const terminalIds = this.terminalIdsBySession.get(sessionId);
+    return terminalIds?.[terminalIds.length - 1];
+  }
+
   release(params: ReleaseTerminalRequest): Promise<void> {
     const entry = this.require(params.terminalId);
     if (entry.process.exitCode === null && entry.process.signalCode === null) {
       entry.process.kill("SIGTERM");
     }
     this.entries.delete(params.terminalId);
+    const terminalIds = this.terminalIdsBySession.get(entry.sessionId);
+    if (terminalIds) {
+      const nextTerminalIds = terminalIds.filter((terminalId) => terminalId !== params.terminalId);
+      if (nextTerminalIds.length > 0) {
+        this.terminalIdsBySession.set(entry.sessionId, nextTerminalIds);
+      } else {
+        this.terminalIdsBySession.delete(entry.sessionId);
+      }
+    }
     return Promise.resolve();
   }
 

@@ -1,6 +1,7 @@
 import type {
   ProviderKind,
   GlobalWorkspaceConfig,
+  OpenAICompatibleMCPServer,
   ProviderModelProfile,
   ProviderProfileKind,
   ProviderProfileType,
@@ -26,6 +27,7 @@ export interface ModelProfileDraft extends ProviderConfigDraftFields {
   providerHeadersText: string;
   providerExtraBodyFormat: "kv" | "json";
   providerExtraBodyText: string;
+  providerMcpServersText: string;
 }
 
 export interface GlobalConfigDraft {
@@ -63,6 +65,7 @@ export function createModelProfileDraft(profile: ProviderModelProfile): ModelPro
           : Object.entries(profile.binding.extraBody)
             .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
             .join("\n"),
+      providerMcpServersText: JSON.stringify(profile.binding.mcpServers, null, 2),
     };
   }
 
@@ -86,6 +89,7 @@ export function createModelProfileDraft(profile: ProviderModelProfile): ModelPro
     providerHeadersText: "",
     providerExtraBodyFormat: "json",
     providerExtraBodyText: "",
+    providerMcpServersText: "[]",
   };
 }
 
@@ -115,7 +119,22 @@ export function addEmptyModelProfileDraft(): ModelProfileDraft {
     providerHeadersText: "",
     providerExtraBodyFormat: "json",
     providerExtraBodyText: "",
+    providerMcpServersText: "[]",
   };
+}
+
+function parseMcpServersText(value: string): OpenAICompatibleMCPServer[] {
+  const normalized = value.trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const parsed = JSON.parse(normalized) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error("MCP servers must be a JSON array.");
+  }
+
+  return parsed as OpenAICompatibleMCPServer[];
 }
 
 export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: GlobalConfigDraft): UpdateGlobalConfigInput {
@@ -133,6 +152,7 @@ export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: Gl
               headers: {},
               extraBodyFormat: "json" as const,
               extraBody: {},
+              mcpServers: [],
             };
 
       return {
@@ -157,6 +177,7 @@ export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: Gl
             profile.providerExtraBodyFormat === "json"
               ? parseJsonObjectText(profile.providerExtraBodyText)
               : parseEnvText(profile.providerExtraBodyText),
+          mcpServers: parseMcpServersText(profile.providerMcpServersText),
         },
       };
     }

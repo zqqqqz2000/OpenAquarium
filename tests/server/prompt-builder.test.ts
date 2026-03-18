@@ -259,6 +259,7 @@ describe("buildTaskPrompt", () => {
         headers: {},
         extraBodyFormat: "json" as const,
         extraBody: {},
+        mcpServers: [],
       },
     };
 

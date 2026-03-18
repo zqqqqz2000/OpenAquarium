@@ -208,6 +208,18 @@ describe("OpenAquariumGlobalConfigManager", () => {
                 order: ["reasoning"],
               },
             },
+            mcpServers: [
+              {
+                id: "local-files",
+                transport: "stdio",
+                command: "node",
+                args: ["./mcp-server.js"],
+                env: {
+                  MCP_MODE: "test",
+                },
+                cwd: "./mcp",
+              },
+            ],
           },
         },
       ],
@@ -230,6 +242,13 @@ describe("OpenAquariumGlobalConfigManager", () => {
             order: ["reasoning"],
           },
         },
+        mcpServers: [
+          {
+            id: "local-files",
+            transport: "stdio",
+            command: "node",
+          },
+        ],
       },
     });
 
@@ -242,6 +261,13 @@ describe("OpenAquariumGlobalConfigManager", () => {
         baseURL: "https://example.test/v1",
         headersFormat: "kv",
         extraBodyFormat: "json",
+        mcpServers: [
+          {
+            id: "local-files",
+            transport: "stdio",
+            command: "node",
+          },
+        ],
       },
     });
   });

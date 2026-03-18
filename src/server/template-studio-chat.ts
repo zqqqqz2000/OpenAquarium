@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import type { Tool } from "@ai-sdk/provider-utils";
 import { createACPProvider, type ModelInfo } from "@mcpc-tech/acp-ai-provider";
 import { convertToModelMessages, generateText, streamText, type UIMessageChunk } from "ai";
 import * as z from "zod";
@@ -17,6 +18,7 @@ import type {
 import type { JsonValue } from "@/lib/json";
 import type { TemplateStudioChatDataParts, TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import { findProviderModelProfile } from "@/lib/provider-model-profiles";
+import { createConfiguredMcpTools } from "@/server/openai-compatible-mcp";
 
 export interface TemplateStudioChatRequest {
   configDirectory: string;
@@ -78,6 +80,7 @@ const openAICompatibleModelCatalogSchema = z.object({
 
 type TemplateStudioLanguageProvider = {
   languageModel(modelId: string): ReturnType<ReturnType<typeof createOpenAICompatible>["languageModel"]>;
+  tools: Record<string, Tool>;
   cleanup(): void | Promise<void>;
 };
 
@@ -245,6 +248,10 @@ async function cleanupProvider(provider: { cleanup: () => void | Promise<void> }
   }
 }
 
+function getOptionalToolSet(tools: Record<string, Tool>): Record<string, Tool> | undefined {
+  return Object.keys(tools).length > 0 ? tools : undefined;
+}
+
 async function loadTemplateStudioModelCatalog(args: TemplateStudioModelCatalogRequest): Promise<TemplateStudioModelCatalog> {
   const selectedProfile = resolveSelectedProfile(args);
   if (!selectedProfile) {
@@ -374,12 +381,17 @@ async function resolveChatExecution(args: {
         ...buildOpenAICompatibleExtraBody(selectedProfile),
       }),
     });
+    const mcpTools = await createConfiguredMcpTools({
+      binding: selectedProfile.binding,
+      defaultWorkingDirectory: args.configDirectory,
+    });
 
     return {
       selectedProfile,
       provider: {
         languageModel: (modelId: string) => provider.languageModel(modelId),
-        cleanup: () => Promise.resolve(),
+        tools: mcpTools.tools,
+        cleanup: () => mcpTools.close(),
       },
       modelMessages,
       modelId: args.modelId.trim(),
@@ -396,13 +408,14 @@ async function resolveChatExecution(args: {
     },
   });
 
-  return {
-    selectedProfile,
-    provider: {
-      languageModel: (modelId: string) => provider.languageModel(modelId || undefined),
-      cleanup: () => provider.cleanup(),
-    },
-    modelMessages,
+    return {
+      selectedProfile,
+      provider: {
+        languageModel: (modelId: string) => provider.languageModel(modelId || undefined),
+        tools: {},
+        cleanup: () => provider.cleanup(),
+      },
+      modelMessages,
     modelId: args.modelId?.trim() || "",
   };
 }
@@ -448,6 +461,7 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
           selectedProfile,
         }),
         messages: modelMessages,
+        tools: getOptionalToolSet(provider.tools),
       });
 
       return {
@@ -480,6 +494,7 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
         selectedProfile,
       }),
       messages: modelMessages,
+      tools: getOptionalToolSet(provider.tools),
       abortSignal: input.abortSignal,
     });
 

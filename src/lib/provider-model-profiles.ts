@@ -28,6 +28,7 @@ export function createDefaultOpenAICompatibleProviderModelProfile(): OpenAICompa
       headers: {},
       extraBodyFormat: "json",
       extraBody: {},
+      mcpServers: [],
     },
   };
 }

@@ -12,6 +12,10 @@ const {
   cleanupMock,
   generateTextMock,
   languageModelMock,
+  mcpCloseMock,
+  mcpCreateClientMock,
+  mcpStdioTransportMock,
+  mcpToolsMock,
   openAICompatibleLanguageModelMock,
   openAICompatibleProviderMock,
   streamTextMock,
@@ -20,6 +24,10 @@ const {
 } = vi.hoisted(() => ({
   cleanupMock: vi.fn(),
   languageModelMock: vi.fn(() => ({ provider: "mock" })),
+  mcpCloseMock: vi.fn(() => Promise.resolve()),
+  mcpCreateClientMock: vi.fn(),
+  mcpStdioTransportMock: vi.fn((options: unknown) => ({ kind: "stdio-transport", options })),
+  mcpToolsMock: vi.fn(() => ({})),
   openAICompatibleLanguageModelMock: vi.fn((modelId: string) => ({ provider: "openai-compatible", modelId })),
   openAICompatibleProviderMock: vi.fn(),
   generateTextMock: vi.fn(),
@@ -41,6 +49,23 @@ vi.mock("@ai-sdk/openai-compatible", () => ({
     return {
       languageModel: openAICompatibleLanguageModelMock,
     };
+  }),
+}));
+
+vi.mock("@ai-sdk/mcp", () => ({
+  createMCPClient: vi.fn((options: unknown) => {
+    mcpCreateClientMock(options);
+    return Promise.resolve({
+      tools: () => Promise.resolve(mcpToolsMock()),
+      close: mcpCloseMock,
+    });
+  }),
+}));
+
+vi.mock("@ai-sdk/mcp/mcp-stdio", () => ({
+  Experimental_StdioMCPTransport: vi.fn(function Experimental_StdioMCPTransport(options: unknown) {
+    mcpStdioTransportMock(options);
+    return { kind: "stdio-transport", options };
   }),
 }));
 
@@ -96,6 +121,7 @@ function createOpenAICompatibleProfile(): ProviderModelProfile {
           order: ["reasoning"],
         },
       },
+      mcpServers: [],
     },
   };
 }
@@ -146,6 +172,11 @@ describe("TemplateStudioChatService", () => {
     vi.unstubAllGlobals();
     cleanupMock.mockReset();
     languageModelMock.mockClear();
+    mcpCloseMock.mockClear();
+    mcpCreateClientMock.mockReset();
+    mcpStdioTransportMock.mockReset();
+    mcpToolsMock.mockReset();
+    mcpToolsMock.mockReturnValue({});
     openAICompatibleLanguageModelMock.mockClear();
     openAICompatibleProviderMock.mockReset();
     generateTextMock.mockReset();
@@ -316,6 +347,63 @@ describe("TemplateStudioChatService", () => {
         order: ["reasoning"],
       },
     });
+  });
+
+  it("loads MCP tools for openai-compatible template chat profiles", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const { TemplateStudioChatService } =
+      await import("@/server/template-studio-chat");
+    const profile = createOpenAICompatibleProfile();
+    if (profile.providerType !== "openai-compatible") {
+      throw new Error("Expected openai-compatible profile");
+    }
+    profile.binding.mcpServers = [
+      {
+        id: "local-files",
+        transport: "stdio",
+        command: "node",
+        args: ["./mcp-server.js"],
+        env: {
+          MCP_MODE: "test",
+        },
+        cwd: "./mcp",
+      },
+    ];
+    mcpToolsMock.mockReturnValue({
+      mcp_echo: {
+        description: "Echo via MCP",
+        inputSchema: {},
+        execute: vi.fn(),
+      },
+    });
+
+    const service = new TemplateStudioChatService();
+    await service.chat({
+      configDirectory: "/tmp/openaquarium-config",
+      templateId: "template_1",
+      messages: [{ role: "user", content: "Update the selected template." }],
+      templates: [createTemplate()],
+      globalConfig: createGlobalConfig(profile),
+      modelProfileId: profile.id,
+      modelId: "gpt-4.1-mini",
+    });
+
+    expect(mcpStdioTransportMock).toHaveBeenCalledWith({
+      command: "node",
+      args: ["./mcp-server.js"],
+      env: {
+        MCP_MODE: "test",
+      },
+      cwd: "/tmp/openaquarium-config/mcp",
+    });
+    expect(generateTextMock).toHaveBeenCalledWith(expect.objectContaining({
+      tools: expect.objectContaining({
+        mcp_echo: expect.objectContaining({
+          description: "Echo via MCP",
+        }),
+      }),
+    }));
+    expect(mcpCloseMock).toHaveBeenCalled();
   });
 
   it("loads models from an openai-compatible /models endpoint", async () => {

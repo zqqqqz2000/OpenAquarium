@@ -37,6 +37,23 @@ const openaiCompatibleProviderBindingSchema = z.object({
   headers: z.record(z.string(), z.string()).default({}),
   extraBodyFormat: z.enum(["kv", "json"]).default("json"),
   extraBody: z.record(z.string(), z.json()).default({}),
+  mcpServers: z.array(z.discriminatedUnion("transport", [
+    z.object({
+      id: z.string().min(1),
+      transport: z.literal("stdio"),
+      command: z.string().min(1),
+      args: z.array(z.string().min(1)).default([]),
+      env: z.record(z.string(), z.string()).default({}),
+      cwd: z.string().optional(),
+    }),
+    z.object({
+      id: z.string().min(1),
+      transport: z.enum(["http", "sse"]),
+      url: z.string().min(1),
+      headersFormat: z.enum(["kv", "json"]).default("kv"),
+      headers: z.record(z.string(), z.string()).default({}),
+    }),
+  ])).default([]),
 });
 
 const codexThinkingDepthSchema = z.enum(["low", "mid", "high", "extra-high"]);
@@ -305,6 +322,27 @@ function normalizeProviderModelProfiles(
           ),
           extraBodyFormat: profile.binding.extraBodyFormat,
           extraBody: profile.binding.extraBody,
+          mcpServers: profile.binding.mcpServers.map((server) =>
+            server.transport === "stdio"
+              ? {
+                  ...server,
+                  id: server.id.trim(),
+                  command: server.command.trim(),
+                  args: server.args.map((arg) => arg.trim()).filter(Boolean),
+                  env: Object.fromEntries(
+                    Object.entries(server.env).map(([key, value]) => [key.trim(), value]),
+                  ),
+                  cwd: server.cwd?.trim() || undefined,
+                }
+              : {
+                  ...server,
+                  id: server.id.trim(),
+                  url: server.url.trim(),
+                  headersFormat: server.headersFormat,
+                  headers: Object.fromEntries(
+                    Object.entries(server.headers).map(([key, value]) => [key.trim(), value]),
+                  ),
+                }),
         },
       };
     }

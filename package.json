@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.15.0",
+    "@ai-sdk/mcp": "^1.0.25",
     "@ai-sdk/openai-compatible": "^2.0.35",
     "@ai-sdk/react": "^3.0.118",
     "@fontsource-variable/geist": "^5.2.8",

@@ -15,6 +15,7 @@ import type { DiagnosticsLogger } from "./diagnostics";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { createWorkspaceTools, type MemberToolHost, resolveExecutorDirectories } from "./member-workspace-tools";
 import { appendConversationTurn, buildPersistedUserTurnMessage, toModelMessages } from "./openai-compatible-conversation";
+import { createConfiguredMcpTools } from "./openai-compatible-mcp";
 import { TerminalRegistry } from "./terminal-registry";
 
 const TOOL_STATUS_PREFIX = "__oa_tool__";
@@ -135,7 +136,7 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
     this.currentAbortController = abortController;
     let finalContent = "";
 
-    const tools = createWorkspaceTools({
+    const workspaceTools = createWorkspaceTools({
       request,
       host: this.host,
       projectWorkingDirectory: this.projectWorkingDirectory,
@@ -144,7 +145,14 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
     });
 
     const currentTurn = (async () => {
+      let mcpTools:
+        | Awaited<ReturnType<typeof createConfiguredMcpTools>>
+        | undefined;
       try {
+        mcpTools = await createConfiguredMcpTools({
+          binding: this.member.provider,
+          defaultWorkingDirectory: this.projectWorkingDirectory,
+        });
         const currentConversation = {
           messages: request.messageHistory ?? request.openAICompatibleConversation?.messages ?? [],
         };
@@ -157,7 +165,10 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
             ...toModelMessages(request.messageHistory ?? currentConversation.messages),
             currentUserMessage,
           ],
-          tools,
+          tools: {
+            ...workspaceTools,
+            ...mcpTools.tools,
+          },
           onChunk: async ({ chunk }) => {
             switch (chunk.type) {
               case "text-delta":
@@ -229,6 +240,7 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
         });
         await callbacks.onError(getErrorMessage(error as RuntimeError));
       } finally {
+        await mcpTools?.close();
         if (this.currentAbortController === abortController) {
           this.currentAbortController = undefined;
           this.currentTurn = undefined;

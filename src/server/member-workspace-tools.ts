@@ -1,10 +1,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { tool } from "ai";
 import * as z from "zod";
 
 import type { Project, RoomId } from "../domain/model";
+import { applyStructuredPatch } from "./apply-patch";
+import { inspectLocalImage } from "./image-inspector";
 import { isPathInsideRoot, resolveAcpSessionWorkingDirectory, resolveProjectWorkingDirectory } from "./project-paths";
 import { TerminalRegistry } from "./terminal-registry";
 import type { ExecutionRequest } from "./executor";
@@ -18,6 +21,98 @@ export interface MemberToolHost {
   runWatcher(input: { watcherId: string }): Promise<void>;
   inspectRoomState(input: { roomId: RoomId }): Promise<string>;
   persistMemberSession?(input: { memberId: string; sessionId?: string }): Promise<void>;
+}
+
+const DEFAULT_TERMINAL_YIELD_TIME_MS = 1_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 2_000;
+const MAX_OUTPUT_TOKENS = 16_000;
+
+function approximateOutputByteLimit(maxOutputTokens: number): number {
+  return Math.min(Math.max(maxOutputTokens * 8, 4_096), 256_000);
+}
+
+function trimOutputForTokens(output: string, maxOutputTokens: number): { output: string; truncated: boolean } {
+  const maxChars = Math.max(256, maxOutputTokens * 4);
+  if (output.length <= maxChars) {
+    return {
+      output,
+      truncated: false,
+    };
+  }
+
+  return {
+    output: output.slice(-maxChars),
+    truncated: true,
+  };
+}
+
+async function waitForTerminalYield(args: {
+  terminalRegistry: TerminalRegistry;
+  sessionId: string;
+  terminalId: string;
+  yieldTimeMs: number;
+}): Promise<{
+  exitStatus?: {
+    exitCode?: number;
+    signal?: string;
+  };
+}> {
+  const waitForExit = args.terminalRegistry.wait({
+    sessionId: args.sessionId,
+    terminalId: args.terminalId,
+  }).then((exitStatus) => ({
+    exitStatus: {
+      exitCode: exitStatus.exitCode ?? undefined,
+      signal: exitStatus.signal ?? undefined,
+    },
+  }));
+  const timeout = sleep(args.yieldTimeMs, {});
+  return Promise.race([waitForExit, timeout]);
+}
+
+async function readTerminalResult(args: {
+  terminalRegistry: TerminalRegistry;
+  sessionId: string;
+  terminalId: string;
+  maxOutputTokens: number;
+  consume: boolean;
+}) {
+  const output = await args.terminalRegistry.output({
+    sessionId: args.sessionId,
+    terminalId: args.terminalId,
+    consume: args.consume,
+  });
+  const trimmed = trimOutputForTokens(output.output, args.maxOutputTokens);
+
+  return {
+    session_id: args.terminalId,
+    running: !output.exitStatus,
+    exit_code: output.exitStatus?.exitCode ?? null,
+    signal: output.exitStatus?.signal ?? null,
+    truncated: output.truncated || trimmed.truncated,
+    output: trimmed.output,
+  };
+}
+
+function resolveShellCommand(input: {
+  cmd: string;
+  shell?: string;
+  login?: boolean;
+}): {
+  command: string;
+  args: string[];
+} {
+  const shell = input.shell?.trim() || "bash";
+  const shellName = path.basename(shell).toLowerCase();
+  const loginArgs = input.login === false
+    ? []
+    : shellName === "bash" || shellName === "zsh"
+      ? ["-l"]
+      : [];
+  return {
+    command: shell,
+    args: [...loginArgs, "-c", input.cmd],
+  };
 }
 
 export function resolveExecutorDirectories(args: {
@@ -238,6 +333,141 @@ export function createWorkspaceTools(args: {
           truncated: output.truncated,
           output: output.output,
         };
+      },
+    }),
+    exec_command: tool({
+      description: "Run a shell command with Codex-style semantics. Returns a session id while the process is still running so you can poll or write more stdin later.",
+      inputSchema: z.object({
+        cmd: z.string().min(1),
+        workdir: z.string().optional(),
+        yield_time_ms: z.number().int().positive().max(60_000).default(DEFAULT_TERMINAL_YIELD_TIME_MS),
+        max_output_tokens: z.number().int().positive().max(MAX_OUTPUT_TOKENS).default(DEFAULT_MAX_OUTPUT_TOKENS),
+        shell: z.string().optional(),
+        login: z.boolean().default(true),
+        tty: z.boolean().optional(),
+      }),
+      execute: async ({ cmd, workdir, yield_time_ms, max_output_tokens, shell, login, tty: _tty }) => {
+        const resolvedCwd = workdir
+          ? resolveAccessiblePath({
+            filePath: workdir,
+            projectWorkingDirectory,
+            accessibleRoots,
+          })
+          : projectWorkingDirectory;
+        const shellCommand = resolveShellCommand({
+          cmd,
+          shell,
+          login,
+        });
+        const created = await terminalRegistry.create({
+          sessionId: request.task.id,
+          command: shellCommand.command,
+          args: shellCommand.args,
+          cwd: resolvedCwd,
+          outputByteLimit: approximateOutputByteLimit(max_output_tokens),
+        });
+        await waitForTerminalYield({
+          terminalRegistry,
+          sessionId: request.task.id,
+          terminalId: created.terminalId,
+          yieldTimeMs: yield_time_ms,
+        });
+        return readTerminalResult({
+          terminalRegistry,
+          sessionId: request.task.id,
+          terminalId: created.terminalId,
+          maxOutputTokens: max_output_tokens,
+          consume: true,
+        });
+      },
+    }),
+    write_stdin: tool({
+      description: "Write more input to a running exec_command session, or poll it by sending an empty string.",
+      inputSchema: z.object({
+        session_id: z.string().min(1),
+        chars: z.string().optional(),
+        yield_time_ms: z.number().int().positive().max(60_000).default(DEFAULT_TERMINAL_YIELD_TIME_MS),
+        max_output_tokens: z.number().int().positive().max(MAX_OUTPUT_TOKENS).default(DEFAULT_MAX_OUTPUT_TOKENS),
+      }),
+      execute: async ({ session_id, chars, yield_time_ms, max_output_tokens }) => {
+        if (chars && chars.length > 0) {
+          await terminalRegistry.write({
+            terminalId: session_id,
+            input: chars,
+          });
+        }
+        await waitForTerminalYield({
+          terminalRegistry,
+          sessionId: request.task.id,
+          terminalId: session_id,
+          yieldTimeMs: yield_time_ms,
+        });
+        return readTerminalResult({
+          terminalRegistry,
+          sessionId: request.task.id,
+          terminalId: session_id,
+          maxOutputTokens: max_output_tokens,
+          consume: true,
+        });
+      },
+    }),
+    read_thread_terminal: tool({
+      description: "Read recent output from the latest terminal session created during this task.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const terminalId = terminalRegistry.latestTerminalId(request.task.id);
+        if (!terminalId) {
+          return {
+            output: "",
+            running: false,
+            exit_code: null,
+            signal: null,
+            truncated: false,
+            message: "No terminal session has been started for this task.",
+          };
+        }
+        return readTerminalResult({
+          terminalRegistry,
+          sessionId: request.task.id,
+          terminalId,
+          maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+          consume: true,
+        });
+      },
+    }),
+    apply_patch: tool({
+      description: "Apply a structured patch using the same Begin/End Patch format that Codex uses for precise edits.",
+      inputSchema: z.object({
+        patch: z.string().min(1),
+      }),
+      execute: async ({ patch }) => {
+        const result = await applyStructuredPatch({
+          patch,
+          resolvePath: (filePath) =>
+            resolveAccessiblePath({
+              filePath,
+              projectWorkingDirectory,
+              accessibleRoots,
+            }),
+        });
+        return {
+          changed_files: result.changedPaths,
+          count: result.changedPaths.length,
+        };
+      },
+    }),
+    view_image: tool({
+      description: "Inspect a local image file and return metadata such as dimensions and format. This is metadata-only; it does not perform semantic vision analysis.",
+      inputSchema: z.object({
+        path: z.string().min(1),
+      }),
+      execute: async ({ path: filePath }) => {
+        const resolvedPath = resolveAccessiblePath({
+          filePath,
+          projectWorkingDirectory,
+          accessibleRoots,
+        });
+        return inspectLocalImage(resolvedPath);
       },
     }),
   };
