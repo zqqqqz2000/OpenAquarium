@@ -167,6 +167,9 @@ export interface WatchSubscription {
   pausedUntilActivity?: boolean;
   lastConsumedMessageId?: MessageId;
   lastConsumedStateAt?: string;
+  pendingDigestMessageId?: MessageId;
+  pendingConsumedMessageId?: MessageId;
+  pendingConsumedStateAt?: string;
 }
 
 export interface ChatAuthor {

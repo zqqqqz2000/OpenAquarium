@@ -96,8 +96,8 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain(`oa-room-watch --watcher ${watcherId} --pause-until-activity`);
   });
 
-  it("refreshes full prompts every 12 turns", () => {
-    expect(MEMBER_FULL_PROMPT_REFRESH_INTERVAL).toBe(12);
+  it("refreshes full prompts every 50 turns", () => {
+    expect(MEMBER_FULL_PROMPT_REFRESH_INTERVAL).toBe(50);
   });
 
   it("switches to a delta prompt after the first persisted member turn", () => {
@@ -165,18 +165,103 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("prompt mode: delta");
     expect(prompt).toContain("room transcript file: /tmp/room-transcript.md");
     expect(prompt).toContain(`room context directory: ${getRoomContextDirectoryPath(process.cwd(), snapshot.rooms[room.id])}`);
-    expect(prompt).toContain("Recent Delta Transcript");
-    expect(prompt).toContain("@handle: passive reference only.");
-    expect(prompt).toContain("@>handle: active routing.");
-    expect(prompt).toContain("Active routing still works when `@>handle` appears inside backticks or fenced code blocks.");
-    expect(prompt).toContain("It does not notify the member, does not route work");
-    expect(prompt).toContain("render as Markdown");
-    expect(prompt).toContain("Prefer $$...$$ for formulas");
-    expect(prompt).toContain("oa_role_remove_employee");
-    expect(prompt).toContain("Only claim staffing succeeded when the tool result says `ok: true`.");
-    expect(prompt).toContain("If your member/template prompt says `不允许使用岗位员工工具`");
-    expect(prompt).toContain("prompt: omitted on this delta turn");
+    expect(prompt).toContain("[Relevant History]");
+    expect(prompt).toContain(`previous task: ${firstLeadTaskId}`);
+    expect(prompt).toContain("Continue the current task using only the task state");
     expect(prompt).not.toContain(`prompt: ${lead.prompt}`);
+  });
+
+  it("keeps openai-compatible members on a full prompt with the full visible history", () => {
+    const context = createRuntimeContext(505, "2026-03-10T12:00:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "lead");
+
+    if (!lead) {
+      throw new Error("Expected the lead member");
+    }
+
+    snapshot = {
+      ...snapshot,
+      members: {
+        ...snapshot.members,
+        [lead.id]: {
+          ...lead,
+          providerSessionId: "session_openai_previous",
+        },
+      },
+    };
+
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>lead 先做第一轮收口",
+      },
+      context,
+    );
+
+    const firstLeadTaskId = snapshot.members[lead.id].activeTaskId;
+    if (!firstLeadTaskId) {
+      throw new Error("Expected a first lead task");
+    }
+
+    snapshot = completeMemberTask(snapshot, { taskId: firstLeadTaskId }, context);
+
+    for (let index = 0; index < 18; index += 1) {
+      snapshot = postUserMessage(
+        snapshot,
+        {
+          roomId: room.id,
+          content: `openai-history-${index}`,
+        },
+        createRuntimeContext(520 + index, `2026-03-10T12:${String(index).padStart(2, "0")}:00.000Z`),
+      );
+    }
+
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "继续，@>lead 收口一下",
+      },
+      createRuntimeContext(560, "2026-03-10T12:40:00.000Z"),
+    );
+
+    const nextLead = snapshot.members[lead.id];
+    const currentTask = nextLead.activeTaskId ? snapshot.tasks[nextLead.activeTaskId] : undefined;
+    if (!currentTask) {
+      throw new Error("Expected a new lead task");
+    }
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room: snapshot.rooms[room.id],
+      member: {
+        ...nextLead,
+        modelId: "gpt-4.1-mini",
+        provider: {
+          kind: "openai-compatible",
+          label: "OpenAI-Compatible API",
+          baseURL: "https://example.test/v1",
+          apiKeyEnvVar: "OPENAI_API_KEY",
+          headersFormat: "kv",
+          headers: {},
+          extraBodyFormat: "json",
+          extraBody: {},
+        },
+      },
+      task: currentTask,
+      snapshot,
+    });
+
+    expect(prompt).toContain("prompt mode: full");
+    expect(prompt).toContain("[Full Room Transcript]");
+    expect(prompt).toContain("openai-history-0");
+    expect(prompt).toContain("openai-history-17");
+    expect(prompt).not.toContain("[Relevant History]");
   });
 
   it("does not fall back to older room transcript when a watcher heartbeat has no new visible messages", () => {
@@ -276,12 +361,12 @@ describe("buildTaskPrompt", () => {
     });
 
     const deltaSection = prompt.slice(
-      prompt.indexOf("[Recent Delta Transcript]\n") + "[Recent Delta Transcript]\n".length,
-      prompt.indexOf("\n\n[Critical Rules]"),
+      prompt.indexOf("[Relevant History]\n") + "[Relevant History]\n".length,
+      prompt.indexOf("\n\n[Instruction]"),
     );
 
     expect(prompt).toContain("prompt mode: delta");
-    expect(deltaSection.trim()).toBe("(none)");
+    expect(deltaSection.trim()).toBe("previous task: task_previous_digest (Review watcher digest), updated at 2026-03-10T12:10:00.000Z\n(none)");
   });
 
   it("filters a trailing self-authored room message out of the prompt transcript", () => {

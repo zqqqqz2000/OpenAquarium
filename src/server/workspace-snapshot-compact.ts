@@ -221,19 +221,22 @@ function normalizeWatcherCursor(
   return Object.fromEntries(
     Object.entries(snapshot.watchers).map(([watcherId, watcher]) => {
       const roomMessageIds = roomMessageOrder[watcher.roomId] ?? [];
-      const lastConsumedMessageId =
-        watcher.lastConsumedMessageId === undefined
+      const normalizeWatcherMessageId = (messageId?: string) =>
+        messageId === undefined
           ? undefined
-          : roomMessageIds.includes(watcher.lastConsumedMessageId)
-            ? watcher.lastConsumedMessageId
+          : roomMessageIds.includes(messageId)
+            ? messageId
             : roomMessageIds[roomMessageIds.length - 1];
 
       return [
         watcherId,
         {
           ...watcher,
-          lastConsumedMessageId,
+          lastConsumedMessageId: normalizeWatcherMessageId(watcher.lastConsumedMessageId),
           lastConsumedStateAt: watcher.lastConsumedStateAt,
+          pendingDigestMessageId: normalizeWatcherMessageId(watcher.pendingDigestMessageId),
+          pendingConsumedMessageId: normalizeWatcherMessageId(watcher.pendingConsumedMessageId),
+          pendingConsumedStateAt: watcher.pendingConsumedStateAt,
         },
       ];
     }),

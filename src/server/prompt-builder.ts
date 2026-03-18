@@ -1,8 +1,18 @@
-import type { ChatMessage, MemberTask, Project, Room, TeamMember, WorkspaceSnapshot } from "../domain/model";
+import type {
+  ChatMessage,
+  MemberTask,
+  OpenAICompatibleProviderBinding,
+  Project,
+  ProviderBinding,
+  Room,
+  TeamMember,
+  WorkspaceSnapshot,
+} from "../domain/model";
 import { extractAddressedMemberIds } from "../domain/workspace";
 import { resolveAvailableSkills } from "./skills";
 import { isVisibleMemberRoomMessage } from "../lib/message-visibility";
 import { formatTime } from "../lib/utils";
+import type { ExecutionMember, ExecutionSessionContinuation } from "./executor";
 import {
   getOpenAquariumScriptPath,
   quoteShellToken,
@@ -13,9 +23,12 @@ import { getMemberHistoryFilePath, getRoomContextDirectoryPath, getRoomTranscrip
 const FULL_PROMPT_TRANSCRIPT_LIMIT = 14;
 const DELTA_PROMPT_TRANSCRIPT_LIMIT = 6;
 const PROJECT_TOPIC_PREVIEW_LIMIT = 600;
-export const MEMBER_FULL_PROMPT_REFRESH_INTERVAL = 12;
+export const MEMBER_FULL_PROMPT_REFRESH_INTERVAL = 50;
 
 type PromptMode = "full" | "delta";
+type PromptMember = Omit<TeamMember, "provider"> & {
+  provider: ProviderBinding | OpenAICompatibleProviderBinding;
+};
 
 function summarizeHandles(prefix: string, memberIds: string[], snapshot: WorkspaceSnapshot, marker = "@"): string {
   if (memberIds.length === 0) {
@@ -59,7 +72,7 @@ function describeMember(member: TeamMember): string {
   ].join("\n");
 }
 
-function buildAvailableSkillsSection(member: TeamMember, workspaceRoot: string): string[] {
+function buildAvailableSkillsSection(member: PromptMember, workspaceRoot: string): string[] {
   const availableSkills = resolveAvailableSkills(workspaceRoot, member.allowedSkillIds)
     .map((skill) => `- ${skill.id}\n  directory: ${skill.directoryPath}\n  entry: ${skill.entryPath}`)
     .join("\n");
@@ -70,20 +83,13 @@ function buildAvailableSkillsSection(member: TeamMember, workspaceRoot: string):
   ];
 }
 
-function describeMemberHandles(room: Room, snapshot: WorkspaceSnapshot): string {
-  return room.memberIds
-    .map((memberId) => snapshot.members[memberId])
-    .map((member) => `@${member.handle}: ${member.summary}`)
-    .join("\n");
-}
-
 function getVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room): ChatMessage[] {
   return (snapshot.messageOrderByRoom[room.id] ?? [])
     .map((messageId) => snapshot.messages[messageId])
     .filter((message): message is ChatMessage => Boolean(message) && isVisibleMemberRoomMessage(message));
 }
 
-function getPromptVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember): ChatMessage[] {
+function getPromptVisibleRoomMessages(snapshot: WorkspaceSnapshot, room: Room, member: PromptMember): ChatMessage[] {
   return trimTrailingAuthoredMessages(getVisibleRoomMessages(snapshot, room), member.id);
 }
 
@@ -110,19 +116,38 @@ function sortMemberTasks(snapshot: WorkspaceSnapshot, memberId: string): MemberT
     });
 }
 
-function resolvePromptMode(snapshot: WorkspaceSnapshot, member: TeamMember, task: MemberTask): {
+function resolvePromptMode(args: {
+  snapshot: WorkspaceSnapshot;
+  member: PromptMember;
+  task: MemberTask;
+  retryAttempt?: number;
+  sessionContinuation?: ExecutionSessionContinuation;
+}): {
   mode: PromptMode;
   turnsBeforeCurrent: number;
   previousTask?: MemberTask;
 } {
+  const {
+    snapshot,
+    member,
+    task,
+    sessionContinuation = member.providerSessionId ? "resumed" : "fresh",
+  } = args;
   const memberTasks = sortMemberTasks(snapshot, member.id);
   const currentTaskIndex = memberTasks.findIndex((candidate) => candidate.id === task.id);
   const turnsBeforeCurrent = currentTaskIndex >= 0 ? currentTaskIndex : memberTasks.length;
   const previousTask = currentTaskIndex > 0 ? memberTasks[currentTaskIndex - 1] : undefined;
+  if (member.provider.kind === "openai-compatible") {
+    return {
+      mode: "full",
+      turnsBeforeCurrent,
+      previousTask,
+    };
+  }
   const needsFullPrompt =
     turnsBeforeCurrent === 0
-    || !member.providerSessionId
-    || turnsBeforeCurrent % MEMBER_FULL_PROMPT_REFRESH_INTERVAL === 0;
+    || turnsBeforeCurrent % MEMBER_FULL_PROMPT_REFRESH_INTERVAL === 0
+    || sessionContinuation === "fresh";
 
   return {
     mode: needsFullPrompt ? "full" : "delta",
@@ -131,7 +156,7 @@ function resolvePromptMode(snapshot: WorkspaceSnapshot, member: TeamMember, task
   };
 }
 
-function collectDeltaMessages(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember, previousTask?: MemberTask): ChatMessage[] {
+function collectDeltaMessages(snapshot: WorkspaceSnapshot, room: Room, member: PromptMember, previousTask?: MemberTask): ChatMessage[] {
   const visibleMessages = getPromptVisibleRoomMessages(snapshot, room, member);
 
   if (!previousTask) {
@@ -186,7 +211,7 @@ function buildWatcherPromptSections(sourceMessage: ChatMessage, watcherPrompt?: 
   ];
 }
 
-function findEnabledPersistentWatcher(snapshot: WorkspaceSnapshot, room: Room, member: TeamMember) {
+function findEnabledPersistentWatcher(snapshot: WorkspaceSnapshot, room: Room, member: PromptMember) {
   return Object.values(snapshot.watchers).find(
     (watcher) => watcher.roomId === room.id && watcher.memberId === member.id && watcher.enabled && watcher.persistent,
   );
@@ -253,7 +278,7 @@ function buildSharedSections(args: {
   workspaceRoot: string;
   project: Project;
   room: Room;
-  member: TeamMember;
+  member: PromptMember;
   task: MemberTask;
   snapshot: WorkspaceSnapshot;
   transcriptFilePath?: string;
@@ -303,7 +328,6 @@ function buildSharedSections(args: {
     "[Turn Context]",
     `prompt mode: ${promptMode}`,
     `member turn: ${taskSequence}`,
-    `persistent session: ${member.providerSessionId ? "resume existing ACP session when possible" : "initializing session"}`,
     "",
     "[Member Configuration]",
     `name: ${member.name}`,
@@ -333,6 +357,7 @@ function buildSharedSections(args: {
     "",
     "[Task]",
     `taskId: ${task.id}`,
+    `status: ${task.status}`,
     `title: ${task.title}`,
     `source message: ${formatTaskSourceMessage(sourceMessage)}`,
     `source transport: ${sourceMessage.transport}`,
@@ -356,16 +381,22 @@ function buildFullPrompt(args: {
   workspaceRoot: string;
   project: Project;
   room: Room;
-  member: TeamMember;
+  member: PromptMember;
   task: MemberTask;
   snapshot: WorkspaceSnapshot;
   transcriptFilePath?: string;
   routingNote: string;
   taskSequence: number;
+  transcriptLimit?: number;
+  transcriptLabel?: string;
 }): string {
   const { room, snapshot, member } = args;
-  const recentMessages = getPromptVisibleRoomMessages(snapshot, room, member)
-    .slice(-FULL_PROMPT_TRANSCRIPT_LIMIT)
+  const transcriptMessages = getPromptVisibleRoomMessages(snapshot, room, member);
+  const visibleMessages =
+    args.transcriptLimit === undefined
+      ? transcriptMessages
+      : transcriptMessages.slice(-args.transcriptLimit);
+  const recentMessages = visibleMessages
     .map((message) => summarizeMessage(snapshot, message))
     .join("\n");
   const roster = room.memberIds.map((memberId) => describeMember(snapshot.members[memberId])).join("\n");
@@ -390,7 +421,7 @@ function buildFullPrompt(args: {
     "[Team Roster]",
     roster,
     "",
-    "[Recent Room Transcript]",
+    args.transcriptLabel ?? "[Recent Room Transcript]",
     recentMessages || "(none)",
     "",
     "[Communication Rules]",
@@ -411,11 +442,20 @@ function buildFullPrompt(args: {
   ].join("\n");
 }
 
-function buildDeltaPrompt(args: {
+function buildCompactContextPathSections(args: {
+  workspaceRoot: string;
+  room: Room;
+  snapshot: WorkspaceSnapshot;
+  transcriptFilePath?: string;
+}): string[] {
+  return buildRoomContextFileSections(args.workspaceRoot, args.room, args.snapshot, args.transcriptFilePath);
+}
+
+function buildIncrementalPrompt(args: {
   workspaceRoot: string;
   project: Project;
   room: Room;
-  member: TeamMember;
+  member: PromptMember;
   task: MemberTask;
   snapshot: WorkspaceSnapshot;
   transcriptFilePath?: string;
@@ -424,42 +464,56 @@ function buildDeltaPrompt(args: {
   previousTask?: MemberTask;
 }): string {
   const { room, snapshot, previousTask } = args;
+  const sourceMessage = snapshot.messages[args.task.sourceMessageId];
   const deltaMessages = collectDeltaMessages(snapshot, room, args.member, previousTask)
     .map((message) => summarizeMessage(snapshot, message))
     .join("\n");
+  const watcherPrompt =
+    sourceMessage.transport === "watch-digest"
+      ? Object.values(snapshot.watchers).find(
+        (watcher) => watcher.memberId === args.member.id && watcher.roomId === room.id,
+      )?.prompt
+      : undefined;
 
   return [
-    ...buildSharedSections({
-      ...args,
-      promptMode: "delta",
-      includeMemberPrompt: false,
-    }),
+    "You are an agent-team member inside OpenAquarium.",
     "",
-    "[Session Continuity]",
+    "[Turn Context]",
+    "prompt mode: delta",
+    `member turn: ${args.taskSequence}`,
+    "",
+    "[Member Configuration]",
+    `name: ${args.member.name}`,
+    `handle: @${args.member.handle}`,
+    `summary: ${args.member.summary}`,
+    "",
+    "[Task]",
+    `taskId: ${args.task.id}`,
+    `status: ${args.task.status}`,
+    `title: ${args.task.title}`,
+    `source message: ${formatTaskSourceMessage(sourceMessage)}`,
+    `source transport: ${sourceMessage.transport}`,
+    `routing note: ${args.routingNote}`,
+    ...buildWatcherContextSections(
+      sourceMessage,
+      sourceMessage.transport === "watch-digest" && Object.values(snapshot.watchers).some(
+        (watcher) => watcher.memberId === args.member.id && watcher.roomId === room.id && watcher.persistent,
+      )
+        ? "persistent"
+        : undefined,
+    ),
+    ...buildWatcherPromptSections(sourceMessage, watcherPrompt),
+    "",
+    ...buildCompactContextPathSections(args),
+    "",
+    "[Relevant History]",
     previousTask
-      ? `Your previous task in this room was ${previousTask.id} (${previousTask.title}), updated at ${previousTask.updatedAt}.`
-      : "No earlier task was found for this member in this room.",
-    "Reuse your persistent ACP session context when it helps, but treat the current room transcript and source message as the source of truth if they conflict.",
-    "If the delta below is insufficient, read the room transcript file with oa_read_file instead of guessing.",
-    "",
-    "[Team Handles]",
-    describeMemberHandles(room, snapshot) || "(none)",
-    "",
-    "[Recent Delta Transcript]",
+      ? `previous task: ${previousTask.id} (${previousTask.title}), updated at ${previousTask.updatedAt}`
+      : "previous task: (none)",
     deltaMessages || "(none)",
     "",
-    "[Critical Rules]",
-    "1. `@handle` is only a passive reference. Never use plain `@handle` to assign work. It does not notify the member, does not route work, and does not start a task.",
-    "2. `@>handle` is active routing: that teammate immediately receives the message as work and may be interrupted to act on it.",
-    "3. `@>handle` remains active routing even inside backticks or fenced code blocks, but prefer normal message text so the routed instruction stays obvious.",
-    "4. Send progress updates for work that lasts more than a short turn.",
-    "5. Do not leak reasoning or tool narration into user-visible messages.",
-    "6. Do not resend the same room or DM content unless room state confirms it is missing.",
-    "7. Read the shared room context files when you need older context than the delta shown here, especially for watcher-triggered state changes.",
-    "8. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas and send valid Markdown whenever formatting helps.",
-    "",
     "[Instruction]",
-    "Continue from the existing member session with only the new information above. Respond using tools when you need visible output, and finish once the current task is actually handled.",
+    "Continue the current task using only the task state, watcher context, and relevant history above. If older context is needed, read the shared room context files instead of guessing.",
   ].join("\n");
 }
 
@@ -467,17 +521,25 @@ export function buildTaskPrompt(args: {
   workspaceRoot: string;
   project: Project;
   room: Room;
-  member: TeamMember;
+  member: ExecutionMember;
   task: MemberTask;
   snapshot: WorkspaceSnapshot;
   transcriptFilePath?: string;
+  retryAttempt?: number;
+  sessionContinuation?: ExecutionSessionContinuation;
 }): string {
   const { snapshot, room, member, task } = args;
   const sourceMessage = snapshot.messages[task.sourceMessageId];
   const addressedRoutingNote = extractAddressedMemberIds(snapshot, room.id, sourceMessage.content).length > 0
     ? "This source message used one or more active @>handles, so every targeted teammate was routed as a real assignment."
     : "This source message did not use any active @>handle, so it followed the normal fallback routing.";
-  const { mode, turnsBeforeCurrent, previousTask } = resolvePromptMode(snapshot, member, task);
+  const { mode, turnsBeforeCurrent, previousTask } = resolvePromptMode({
+    snapshot,
+    member,
+    task,
+    retryAttempt: args.retryAttempt,
+    sessionContinuation: args.sessionContinuation,
+  });
   const taskSequence = turnsBeforeCurrent + 1;
 
   return mode === "full"
@@ -485,8 +547,10 @@ export function buildTaskPrompt(args: {
         ...args,
         routingNote: addressedRoutingNote,
         taskSequence,
+        transcriptLimit: args.member.provider.kind === "openai-compatible" ? undefined : FULL_PROMPT_TRANSCRIPT_LIMIT,
+        transcriptLabel: args.member.provider.kind === "openai-compatible" ? "[Full Room Transcript]" : undefined,
       })
-    : buildDeltaPrompt({
+    : buildIncrementalPrompt({
         ...args,
         routingNote: addressedRoutingNote,
         taskSequence,

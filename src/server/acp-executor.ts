@@ -5,10 +5,18 @@ import { acpTools, createACPProvider, ACP_PROVIDER_AGENT_DYNAMIC_TOOL_NAME } fro
 import { streamText, tool } from "ai";
 import * as z from "zod";
 
-import type { Project, RoomId, TeamMember } from "../domain/model";
+import type { Project, ProviderBinding, RoomId } from "../domain/model";
 import { CODEX_ACP_MODE_ENV_KEY, ensureCodexAcpSessionMode } from "../lib/acp";
 import { isJsonObject, type JsonValue } from "../lib/json";
-import type { ExecutionRequest, ExecutorCallbacks, MemberExecutor } from "./executor";
+import type {
+  ExecutionMember,
+  ExecutionPreparation,
+  ExecutionPreparationRequest,
+  ExecutionRequest,
+  ExecutionSessionContinuation,
+  ExecutorCallbacks,
+  MemberExecutor,
+} from "./executor";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { isPathInsideRoot, resolveAcpSessionWorkingDirectory, resolveProjectWorkingDirectory } from "./project-paths";
@@ -16,6 +24,9 @@ import { TerminalRegistry } from "./terminal-registry";
 
 const ACP_CANCEL_TIMEOUT_MS = 5 * 1000;
 const TOOL_STATUS_PREFIX = "__oa_tool__";
+type AcpExecutionMember = ExecutionMember & {
+  provider: ProviderBinding;
+};
 
 export interface MemberToolHost {
   sendGroupMessage(input: { roomId: RoomId; memberId: string; taskId: string; content: string }): Promise<void>;
@@ -35,7 +46,7 @@ class TimeoutError extends Error {
   }
 }
 
-function resolveSpawnCommand(member: TeamMember): { command: string; args: string[] } {
+function resolveSpawnCommand(member: AcpExecutionMember): { command: string; args: string[] } {
   if (member.provider.command.trim().length === 0) {
     throw new Error(`ACP provider "${member.provider.label}" for @${member.handle} is missing a command`);
   }
@@ -106,7 +117,7 @@ function isMissingPersistedSessionError(error: RuntimeError, providerSessionId?:
 export class AcpMemberExecutor implements MemberExecutor {
   private readonly workspaceRoot: string;
   private readonly project: Pick<Project, "path">;
-  private readonly member: TeamMember;
+  private readonly member: AcpExecutionMember;
   private readonly host: MemberToolHost;
   private readonly logger?: DiagnosticsLogger;
   private readonly terminalRegistry = new TerminalRegistry();
@@ -115,21 +126,29 @@ export class AcpMemberExecutor implements MemberExecutor {
   private readonly accessibleRoots: string[];
   private provider: ReturnType<typeof createACPProvider>;
   private providerSessionId?: string;
+  private persistedProviderSessionId?: string;
+  private pendingPersistedSessionId?: string;
+  private preparedTaskId?: string;
+  private preparedSessionContinuation?: ExecutionSessionContinuation;
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
 
   constructor(args: {
     workspaceRoot: string;
     project?: Pick<Project, "path">;
-    member: TeamMember;
+    member: ExecutionMember;
     host: MemberToolHost;
     logger?: DiagnosticsLogger;
   }) {
     this.workspaceRoot = args.workspaceRoot;
     this.project = args.project ?? {};
-    this.member = args.member;
+    if (args.member.provider.kind === "openai-compatible") {
+      throw new Error(`AcpMemberExecutor cannot run the openai-compatible provider for @${args.member.handle}`);
+    }
+    this.member = args.member as AcpExecutionMember;
     this.host = args.host;
     this.logger = args.logger;
+    this.persistedProviderSessionId = args.member.providerSessionId;
     this.providerSessionId = args.member.providerSessionId;
     this.projectRoot = resolveProjectWorkingDirectory(this.project, args.workspaceRoot);
     this.projectWorkingDirectory = resolveAcpSessionWorkingDirectory({
@@ -139,6 +158,27 @@ export class AcpMemberExecutor implements MemberExecutor {
     });
     this.accessibleRoots = [...new Set([this.projectRoot, this.workspaceRoot])];
     this.provider = this.createProvider();
+  }
+
+  async prepareExecution(request: ExecutionPreparationRequest): Promise<ExecutionPreparation> {
+    if (this.preparedTaskId === request.task.id && this.preparedSessionContinuation) {
+      return {
+        sessionContinuation: this.preparedSessionContinuation,
+      };
+    }
+
+    await this.resetUncommittedSessionIfNeeded();
+    const tools = this.createWorkspaceTools({
+      ...request,
+      prompt: "",
+    });
+    const { sessionContinuation } = await this.ensurePreparedSession(tools, request);
+    this.preparedTaskId = request.task.id;
+    this.preparedSessionContinuation = sessionContinuation;
+
+    return {
+      sessionContinuation,
+    };
   }
 
   async execute(request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
@@ -157,24 +197,14 @@ export class AcpMemberExecutor implements MemberExecutor {
     });
 
     let finalContent = "";
+    let promptOpened = false;
     const tools = this.createWorkspaceTools(request);
     const currentTurn = (async () => {
       try {
-        this.logger?.info("acp-session-prepare-start", {
-          taskId: request.task.id,
-          memberId: request.member.id,
-          memberHandle: request.member.handle,
-          providerKind: request.member.provider.kind,
-          providerSessionId: this.providerSessionId ?? null,
-        });
-        await this.prepareProviderSession(tools);
-        this.logger?.info("acp-session-prepare-complete", {
-          taskId: request.task.id,
-          memberId: request.member.id,
-          memberHandle: request.member.handle,
-          providerSessionId: this.providerSessionId ?? null,
-        });
-        await this.persistSessionIdIfNeeded();
+        if (this.preparedTaskId !== request.task.id) {
+          await this.resetUncommittedSessionIfNeeded();
+          await this.ensurePreparedSession(tools, request);
+        }
         this.logger?.info("acp-stream-open", {
           taskId: request.task.id,
           memberId: request.member.id,
@@ -260,6 +290,8 @@ export class AcpMemberExecutor implements MemberExecutor {
             }
           },
         });
+        promptOpened = true;
+        await callbacks.onPromptVisible?.();
 
         this.logger?.info("acp-stream-await-finish", {
           taskId: request.task.id,
@@ -285,6 +317,7 @@ export class AcpMemberExecutor implements MemberExecutor {
           finishReason,
           finalText: text.trim().length > 0 ? text : finalContent,
         });
+        await this.commitSessionIdIfNeeded();
         await callbacks.onComplete(text.trim().length > 0 ? text : finalContent, finishReason);
       } catch (error) {
         if (abortController.signal.aborted && abortController.signal.reason === "cancelled") {
@@ -303,6 +336,9 @@ export class AcpMemberExecutor implements MemberExecutor {
           message: getErrorMessage(error as RuntimeError),
           accumulatedText: finalContent,
         });
+        if (promptOpened) {
+          await this.resetProvider();
+        }
         await callbacks.onError(getErrorMessage(error as RuntimeError));
       } finally {
         this.logger?.info("acp-execute-finish", {
@@ -315,11 +351,19 @@ export class AcpMemberExecutor implements MemberExecutor {
           this.currentAbortController = undefined;
           this.currentTurn = undefined;
         }
+        if (this.preparedTaskId === request.task.id) {
+          this.preparedTaskId = undefined;
+          this.preparedSessionContinuation = undefined;
+        }
       }
     })();
 
     this.currentTurn = currentTurn;
     await currentTurn;
+  }
+
+  async discardSession(): Promise<void> {
+    await this.resetProvider();
   }
 
   async cancel(): Promise<void> {
@@ -561,25 +605,56 @@ export class AcpMemberExecutor implements MemberExecutor {
     });
   }
 
-  private async resetProvider(): Promise<void> {
+  private async resetProvider(options: { clearPersistedSession?: boolean } = {}): Promise<void> {
     this.logger?.warn("acp-provider-reset", {
       memberId: this.member.id,
       memberHandle: this.member.handle,
       providerSessionId: this.providerSessionId ?? null,
+      persistedProviderSessionId: this.persistedProviderSessionId ?? null,
+      clearPersistedSession: options.clearPersistedSession ?? false,
     });
     this.provider.cleanup();
     await this.terminalRegistry.disposeAll();
-    this.providerSessionId = undefined;
-    await this.host.persistMemberSession?.({
-      memberId: this.member.id,
-      sessionId: undefined,
-    });
+    this.pendingPersistedSessionId = undefined;
+    this.preparedTaskId = undefined;
+    this.preparedSessionContinuation = undefined;
+    if (options.clearPersistedSession) {
+      this.persistedProviderSessionId = undefined;
+      this.providerSessionId = undefined;
+      await this.host.persistMemberSession?.({
+        memberId: this.member.id,
+        sessionId: undefined,
+      });
+    } else {
+      this.providerSessionId = this.persistedProviderSessionId;
+    }
     this.provider = this.createProvider();
   }
 
-  private async prepareProviderSession(tools: ReturnType<AcpMemberExecutor["createWorkspaceTools"]>): Promise<void> {
+  private async ensurePreparedSession(
+    tools: ReturnType<AcpMemberExecutor["createWorkspaceTools"]>,
+    request: ExecutionPreparationRequest,
+  ): Promise<{ sessionContinuation: ExecutionSessionContinuation }> {
+    this.logger?.info("acp-session-prepare-start", {
+      taskId: request.task.id,
+      memberId: request.member.id,
+      memberHandle: request.member.handle,
+      providerKind: request.member.provider.kind,
+      providerSessionId: this.providerSessionId ?? null,
+      persistedProviderSessionId: this.persistedProviderSessionId ?? null,
+    });
+
     if (this.member.provider.kind !== "codex-acp") {
-      return;
+      const sessionContinuation: ExecutionSessionContinuation = this.persistedProviderSessionId ? "resumed" : "fresh";
+      this.logger?.info("acp-session-prepare-complete", {
+        taskId: request.task.id,
+        memberId: request.member.id,
+        memberHandle: request.member.handle,
+        providerSessionId: this.providerSessionId ?? null,
+        persistedProviderSessionId: this.persistedProviderSessionId ?? null,
+        sessionContinuation,
+      });
+      return { sessionContinuation };
     }
 
     try {
@@ -598,27 +673,73 @@ export class AcpMemberExecutor implements MemberExecutor {
         providerSessionId: this.providerSessionId ?? null,
         message: getErrorMessage(error as RuntimeError),
       });
-      await this.resetProvider();
+      await this.resetProvider({ clearPersistedSession: true });
       await ensureCodexAcpSessionMode(this.provider, {
         mode: this.member.provider.env[CODEX_ACP_MODE_ENV_KEY],
         tools,
       });
     }
+
+    let sessionContinuation: ExecutionSessionContinuation = this.persistedProviderSessionId ? "resumed" : "fresh";
+    this.stageSessionIdIfNeeded();
+    const currentSessionId = this.provider.getSessionId() ?? this.providerSessionId;
+    if (!this.persistedProviderSessionId || currentSessionId !== this.persistedProviderSessionId) {
+      sessionContinuation = "fresh";
+    }
+
+    this.logger?.info("acp-session-prepare-complete", {
+      taskId: request.task.id,
+      memberId: request.member.id,
+      memberHandle: request.member.handle,
+      providerSessionId: this.providerSessionId ?? null,
+      persistedProviderSessionId: this.persistedProviderSessionId ?? null,
+      pendingPersistedSessionId: this.pendingPersistedSessionId ?? null,
+      sessionContinuation,
+    });
+
+    return { sessionContinuation };
   }
 
-  private async persistSessionIdIfNeeded(): Promise<void> {
+  private async resetUncommittedSessionIfNeeded(): Promise<void> {
+    if (!this.pendingPersistedSessionId && this.providerSessionId === this.persistedProviderSessionId) {
+      return;
+    }
+
+    this.logger?.info("acp-session-reset-uncommitted", {
+      memberId: this.member.id,
+      memberHandle: this.member.handle,
+      providerSessionId: this.providerSessionId ?? null,
+      persistedProviderSessionId: this.persistedProviderSessionId ?? null,
+      pendingPersistedSessionId: this.pendingPersistedSessionId ?? null,
+    });
+    await this.resetProvider();
+  }
+
+  private stageSessionIdIfNeeded(): void {
     const sessionId = this.provider.getSessionId() ?? undefined;
-    if (!sessionId || sessionId === this.providerSessionId) {
+    this.providerSessionId = sessionId;
+    this.pendingPersistedSessionId =
+      sessionId && sessionId !== this.persistedProviderSessionId
+        ? sessionId
+        : undefined;
+  }
+
+  private async commitSessionIdIfNeeded(): Promise<void> {
+    const sessionId = this.pendingPersistedSessionId ?? this.provider.getSessionId() ?? undefined;
+    this.providerSessionId = sessionId;
+    if (!sessionId || sessionId === this.persistedProviderSessionId) {
+      this.pendingPersistedSessionId = undefined;
       return;
     }
 
     this.logger?.info("acp-session-persist", {
       memberId: this.member.id,
       memberHandle: this.member.handle,
-      previousSessionId: this.providerSessionId ?? null,
+      previousSessionId: this.persistedProviderSessionId ?? null,
       nextSessionId: sessionId,
     });
-    this.providerSessionId = sessionId;
+    this.persistedProviderSessionId = sessionId;
+    this.pendingPersistedSessionId = undefined;
     await this.host.persistMemberSession?.({
       memberId: this.member.id,
       sessionId,

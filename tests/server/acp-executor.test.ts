@@ -4,24 +4,133 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCodexAcpProvider, createGenericAcpProvider } from "@/lib/acp";
 
-const initSessionMock = vi.fn();
-const setModeMock = vi.fn();
-const cleanupMock = vi.fn();
-const getSessionIdMock = vi.fn(() => "session_1");
-const languageModelMock = vi.fn(() => ({ provider: "mock" }));
-const streamTextMock = vi.fn();
-const createACPProviderMock = vi.fn();
+interface MockSessionMode {
+  id: string;
+  name: string;
+}
+
+interface MockSessionResponse {
+  sessionId: string;
+  modes?: {
+    currentModeId?: string;
+    availableModes?: MockSessionMode[];
+  };
+  models?: {
+    currentModelId?: string;
+  };
+}
+
+interface MockAcpModel {
+  provider: "mock";
+  connection:
+    | {
+        unstable_forkSession?: (params: { sessionId: string; cwd: string }) => Promise<MockSessionResponse>;
+      }
+    | null;
+  sessionId: string | null;
+  sessionResponse: MockSessionResponse | null;
+  isFreshSession: boolean;
+  currentModeId: string | null;
+  currentModelId: string | null;
+  modelId?: string;
+  modeId?: string;
+}
+
+interface MockProviderRecord {
+  config: {
+    existingSessionId?: string;
+    session?: {
+      cwd?: string;
+    };
+  };
+  model: MockAcpModel;
+}
+
+const AVAILABLE_MODES: MockSessionMode[] = [
+  { id: "read-only", name: "Read Only" },
+  { id: "full-access", name: "Full Access" },
+];
+
+function createMockSessionResponse(sessionId: string, currentModeId = "read-only"): MockSessionResponse {
+  return {
+    sessionId,
+    modes: {
+      currentModeId,
+      availableModes: AVAILABLE_MODES,
+    },
+  };
+}
+
+const {
+  initSessionMock,
+  setModeMock,
+  cleanupMock,
+  languageModelMock,
+  streamTextMock,
+  createACPProviderMock,
+  providerRecords,
+} = vi.hoisted(() => ({
+  initSessionMock: vi.fn(),
+  setModeMock: vi.fn(),
+  cleanupMock: vi.fn(),
+  languageModelMock: vi.fn(),
+  streamTextMock: vi.fn(),
+  createACPProviderMock: vi.fn(),
+  providerRecords: [] as MockProviderRecord[],
+}));
 
 vi.mock("@mcpc-tech/acp-ai-provider", () => ({
   ACP_PROVIDER_AGENT_DYNAMIC_TOOL_NAME: "acp-agent-tool",
   acpTools: (tools: object) => tools,
-  createACPProvider: createACPProviderMock.mockImplementation(() => ({
-    initSession: initSessionMock,
-    setMode: setModeMock,
-    cleanup: cleanupMock,
-    getSessionId: getSessionIdMock,
-    languageModel: languageModelMock,
-  })),
+  createACPProvider: createACPProviderMock.mockImplementation((config: MockProviderRecord["config"]) => {
+    const model: MockAcpModel = {
+      provider: "mock",
+      connection: {},
+      sessionId: config.existingSessionId ?? null,
+      sessionResponse: config.existingSessionId ? createMockSessionResponse(config.existingSessionId) : null,
+      isFreshSession: !config.existingSessionId,
+      currentModeId: config.existingSessionId ? "read-only" : null,
+      currentModelId: null,
+    };
+    const provider = {
+      model,
+      initSession: async (tools?: object) => {
+        const response = await initSessionMock({ config, model, tools });
+        model.sessionId = response.sessionId;
+        model.sessionResponse = response;
+        model.isFreshSession = !config.existingSessionId;
+        model.currentModeId = response.modes?.currentModeId ?? model.currentModeId;
+        model.currentModelId = response.models?.currentModelId ?? model.currentModelId;
+        return response;
+      },
+      setMode: async (modeId: string) => {
+        await setModeMock(modeId, { config, model });
+        model.currentModeId = modeId;
+        if (model.sessionResponse?.modes) {
+          model.sessionResponse.modes.currentModeId = modeId;
+        }
+      },
+      cleanup: () => {
+        cleanupMock({ config, model });
+        model.connection = null;
+        model.sessionId = null;
+        model.sessionResponse = null;
+      },
+      getSessionId: () => model.sessionId,
+      languageModel: (modelId?: string, modeId?: string) => {
+        languageModelMock(modelId, modeId, { config, model });
+        if (modelId) {
+          model.modelId = modelId;
+        }
+        if (modeId) {
+          model.modeId = modeId;
+        }
+        return model;
+      },
+    };
+    providerRecords.push({ config, model });
+    return provider;
+  }),
 }));
 
 vi.mock("ai", () => ({
@@ -31,7 +140,7 @@ vi.mock("ai", () => ({
 
 import { AcpMemberExecutor } from "@/server/acp-executor";
 import type { DiagnosticsLogger } from "@/server/diagnostics";
-import type { ExecutionRequest } from "@/server/executor";
+import type { ExecutionPreparationRequest, ExecutionRequest } from "@/server/executor";
 import type { MemberToolHost } from "@/server/acp-executor";
 
 function createRequest(provider = createCodexAcpProvider()): ExecutionRequest {
@@ -113,24 +222,30 @@ function createHost(overrides: Partial<MemberToolHost> = {}): MemberToolHost {
   };
 }
 
+function toPreparationRequest(request: ExecutionRequest): ExecutionPreparationRequest {
+  return {
+    project: request.project,
+    room: request.room,
+    member: request.member,
+    task: request.task,
+    snapshot: request.snapshot,
+  };
+}
+
 describe("AcpMemberExecutor", () => {
   beforeEach(() => {
     vi.useRealTimers();
     createACPProviderMock.mockClear();
+    providerRecords.length = 0;
     initSessionMock.mockReset();
-    initSessionMock.mockResolvedValue({
-      sessionId: "session_1",
-      modes: {
-        currentModeId: "read-only",
-        availableModes: [{ id: "read-only", name: "Read Only" }, { id: "full-access", name: "Full Access" }],
-      },
-    });
+    initSessionMock.mockImplementation(async ({ config }: { config: MockProviderRecord["config"] }) =>
+      createMockSessionResponse(config.existingSessionId ?? "session_1"),
+    );
     setModeMock.mockReset();
     setModeMock.mockResolvedValue(undefined);
     cleanupMock.mockReset();
-    getSessionIdMock.mockReset();
-    getSessionIdMock.mockReturnValue("session_1");
-    languageModelMock.mockClear();
+    languageModelMock.mockReset();
+    languageModelMock.mockImplementation(() => undefined);
     streamTextMock.mockReset();
     streamTextMock.mockReturnValue({
       text: Promise.resolve("done"),
@@ -157,7 +272,7 @@ describe("AcpMemberExecutor", () => {
     });
 
     expect(initSessionMock).toHaveBeenCalledTimes(1);
-    expect(setModeMock).toHaveBeenCalledWith("full-access");
+    expect(setModeMock).toHaveBeenCalledWith("full-access", expect.anything());
     expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
 
@@ -235,7 +350,7 @@ describe("AcpMemberExecutor", () => {
     });
   });
 
-  it("reuses the same codex session across turns", async () => {
+  it("carries codex context across turns without resetting the provider", async () => {
     const request = createRequest();
     const executor = new AcpMemberExecutor({
       workspaceRoot: process.cwd(),
@@ -270,17 +385,110 @@ describe("AcpMemberExecutor", () => {
     expect(cleanupMock).not.toHaveBeenCalled();
   });
 
+  it("treats a provider-rotated codex session id as fresh and persists it after success", async () => {
+    const persistMemberSession = vi.fn(() => Promise.resolve());
+    const baseRequest = createRequest();
+    const request = {
+      ...baseRequest,
+      member: {
+        ...baseRequest.member,
+        providerSessionId: "session_stable",
+      },
+    };
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: createHost({
+        persistMemberSession,
+      }),
+    });
+    initSessionMock.mockResolvedValueOnce(createMockSessionResponse("session_rotated"));
+
+    const preparation = await executor.prepareExecution(toPreparationRequest(request));
+
+    expect(preparation).toEqual({ sessionContinuation: "fresh" });
+    expect(persistMemberSession).not.toHaveBeenCalled();
+
+    await executor.execute(request, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError: () => Promise.resolve(),
+    });
+
+    expect(persistMemberSession).toHaveBeenCalledWith({
+      memberId: "member_1",
+      sessionId: "session_rotated",
+    });
+  });
+
+  it("drops an uncommitted rotated session after a visible failure and retries from the persisted session", async () => {
+    const persistMemberSession = vi.fn(() => Promise.resolve());
+    const baseRequest = createRequest();
+    const request = {
+      ...baseRequest,
+      member: {
+        ...baseRequest.member,
+        providerSessionId: "session_stable",
+      },
+    };
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: createHost({
+        persistMemberSession,
+      }),
+    });
+    const onError = vi.fn(() => Promise.resolve());
+
+    initSessionMock
+      .mockResolvedValueOnce(createMockSessionResponse("session_rotated"))
+      .mockResolvedValueOnce(createMockSessionResponse("session_stable"));
+    streamTextMock
+      .mockReturnValueOnce({
+        text: Promise.reject(new Error("stream exploded")),
+        finishReason: Promise.resolve("error"),
+      })
+      .mockReturnValueOnce({
+        text: Promise.resolve("done"),
+        finishReason: Promise.resolve("stop"),
+      });
+
+    await executor.execute(request, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledWith("stream exploded");
+    expect(persistMemberSession).not.toHaveBeenCalled();
+
+    const nextRequest: ExecutionRequest = {
+      ...request,
+      task: {
+        ...request.task,
+        id: "task_2",
+        updatedAt: "2026-03-10T12:05:00.000Z",
+      },
+    };
+    const preparation = await executor.prepareExecution(toPreparationRequest(nextRequest));
+    expect(preparation).toEqual({ sessionContinuation: "resumed" });
+
+    await executor.execute(nextRequest, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError: () => Promise.resolve(),
+    });
+
+    expect(persistMemberSession).not.toHaveBeenCalled();
+  });
+
   it("resets a stale persisted codex session and retries once", async () => {
     initSessionMock
       .mockRejectedValueOnce(new Error("Resource not found"))
-      .mockResolvedValue({
-        sessionId: "session_2",
-        modes: {
-          currentModeId: "read-only",
-          availableModes: [{ id: "read-only", name: "Read Only" }, { id: "full-access", name: "Full Access" }],
-        },
-      });
-    getSessionIdMock.mockReturnValue("session_2");
+      .mockResolvedValueOnce(createMockSessionResponse("session_2"));
 
     const persistMemberSession = vi.fn(() => Promise.resolve());
     const request = createRequest();

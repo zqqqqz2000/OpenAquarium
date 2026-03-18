@@ -2321,6 +2321,27 @@ function advanceWatcherCursor(
     ...watcher,
     lastConsumedMessageId: nextCursor.lastConsumedMessageId,
     lastConsumedStateAt: nextCursor.lastConsumedStateAt,
+    pendingDigestMessageId: undefined,
+    pendingConsumedMessageId: undefined,
+    pendingConsumedStateAt: undefined,
+  };
+}
+
+function stageWatcherCursor(
+  snapshot: WorkspaceSnapshot,
+  watcher: WatchSubscription,
+  watcherId: string,
+  pendingCursor: {
+    pendingDigestMessageId: MessageId;
+    pendingConsumedMessageId?: MessageId;
+    pendingConsumedStateAt?: string;
+  },
+): void {
+  snapshot.watchers[watcherId] = {
+    ...watcher,
+    pendingDigestMessageId: pendingCursor.pendingDigestMessageId,
+    pendingConsumedMessageId: pendingCursor.pendingConsumedMessageId,
+    pendingConsumedStateAt: pendingCursor.pendingConsumedStateAt,
   };
 }
 
@@ -2411,12 +2432,51 @@ export function runWatcher(current: WorkspaceSnapshot, watcherId: string, contex
   };
 
   insertMessage(snapshot, digestMessage);
-  advanceWatcherCursor(snapshot, effectiveWatcher, watcherId, {
-    lastConsumedMessageId: hasObservedActivity ? digestMessage.id : effectiveWatcher.lastConsumedMessageId,
-    lastConsumedStateAt: nextCursor.lastConsumedStateAt,
+  stageWatcherCursor(snapshot, effectiveWatcher, watcherId, {
+    pendingDigestMessageId: digestMessage.id,
+    pendingConsumedMessageId: hasObservedActivity ? digestMessage.id : effectiveWatcher.lastConsumedMessageId,
+    pendingConsumedStateAt: nextCursor.lastConsumedStateAt,
   });
   routeMessage(snapshot, digestMessage, now, context.createId);
 
+  return snapshot;
+}
+
+export function acknowledgeWatcherDigestVisibility(current: WorkspaceSnapshot, taskId: TaskId): WorkspaceSnapshot {
+  const task = current.tasks[taskId];
+  if (!task) {
+    return current;
+  }
+
+  const sourceMessage = current.messages[task.sourceMessageId];
+  if (sourceMessage?.transport !== "watch-digest") {
+    return current;
+  }
+
+  const watcher = Object.values(current.watchers).find(
+    (candidate) =>
+      candidate.roomId === task.roomId
+      && candidate.memberId === task.memberId
+      && candidate.pendingDigestMessageId === sourceMessage.id,
+  );
+  if (!watcher) {
+    return current;
+  }
+
+  const snapshot = cloneSnapshot(current);
+  const currentWatcher = snapshot.watchers[watcher.id];
+  if (!currentWatcher) {
+    return current;
+  }
+
+  snapshot.watchers[watcher.id] = {
+    ...currentWatcher,
+    lastConsumedMessageId: currentWatcher.pendingConsumedMessageId,
+    lastConsumedStateAt: currentWatcher.pendingConsumedStateAt,
+    pendingDigestMessageId: undefined,
+    pendingConsumedMessageId: undefined,
+    pendingConsumedStateAt: undefined,
+  };
   return snapshot;
 }
 

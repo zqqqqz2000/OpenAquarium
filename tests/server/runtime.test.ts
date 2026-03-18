@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { GlobalWorkspaceConfig } from "@/domain/model";
 import { createRuntimeContext } from "@/domain/identity";
 import {
   createProjectWithRoom,
@@ -41,6 +42,7 @@ class FakeExecutor implements MemberExecutor {
     request: ExecutionRequest,
     callbacks: ExecutorCallbacks,
   ): Promise<void> {
+    await callbacks.onPromptVisible?.();
     await this.handler(request, callbacks);
   }
 
@@ -100,6 +102,45 @@ async function waitForRoomIdle(
 
 describe("WorkspaceRuntime", () => {
   const runtimes: WorkspaceRuntime[] = [];
+
+  function createRuntimeGlobalConfig(): GlobalWorkspaceConfig {
+    return {
+      directory: "/tmp/openaquarium-config",
+      modelProfiles: [
+        {
+          id: "model-codex",
+          name: "Codex ACP",
+          description: "default acp profile",
+          providerType: "acp",
+          binding: {
+            kind: "codex-acp",
+            label: "Codex ACP",
+            command: "npx",
+            args: ["@zed-industries/codex-acp@latest"],
+            env: {},
+            capabilities: ["prompt", "cancel", "loadSession"],
+          },
+        },
+        {
+          id: "model-openai-compatible",
+          name: "OpenAI-Compatible API",
+          description: "stateless http provider",
+          providerType: "openai-compatible",
+          binding: {
+            kind: "openai-compatible",
+            label: "OpenAI-Compatible API",
+            baseURL: "https://example.test/v1",
+            apiKeyEnvVar: "OPENAI_API_KEY",
+            headersFormat: "kv",
+            headers: {},
+            extraBodyFormat: "json",
+            extraBody: {},
+          },
+        },
+      ],
+      templateChatModelProfileId: "model-codex",
+    };
+  }
 
   async function createStartedRuntimeRoom(
     runtime: WorkspaceRuntime,
@@ -250,6 +291,68 @@ describe("WorkspaceRuntime", () => {
     });
   });
 
+  it("resolves openai-compatible model profiles for member execution", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-openai-profile-"));
+    const seenProviderKinds: string[] = [];
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(
+        path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      workspaceRoot,
+      globalConfig: createRuntimeGlobalConfig(),
+      executorFactory: ({ member }) => {
+        seenProviderKinds.push(member.provider.kind);
+        return new FakeExecutor(async (_request, callbacks) => {
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        });
+      },
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "OpenAI Profile Runtime",
+      templateId: "template-product-pod",
+    });
+    const snapshot = runtime.getSnapshot();
+    const room = snapshot.rooms[created.roomId];
+    const lead = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "lead");
+
+    if (!lead) {
+      throw new Error("Expected the lead member");
+    }
+
+    await runtime.updateMemberConfig({
+      memberId: lead.id,
+      isRole: lead.isRole,
+      summary: lead.summary,
+      prompt: lead.prompt,
+      modelProfileId: "model-openai-compatible",
+      modelId: "gpt-4.1-mini",
+      acceptsDirectMessages: lead.acceptsDirectMessages,
+      codexThinkingDepth: lead.codexThinkingDepth,
+      allowedSkillIds: lead.allowedSkillIds,
+      provider: lead.provider,
+    });
+    await runtime.sendUserMessage({
+      roomId: room.id,
+      content: "@>lead 用 openai-compatible provider 回一下",
+    });
+    await waitFor(() => {
+      expect(seenProviderKinds).toContain("openai-compatible");
+      const current = runtime.getSnapshot();
+      const latestLead = current.rooms[room.id].memberIds
+        .map((memberId) => current.members[memberId])
+        .find((member) => member.handle === "lead");
+      const latestTask = latestLead?.activeTaskId ? current.tasks[latestLead.activeTaskId] : undefined;
+      expect(latestTask?.status).not.toBe("running");
+    });
+
+    expect(seenProviderKinds).toContain("openai-compatible");
+  });
+
   it("normalizes project paths against the OpenAquarium workspace root", async () => {
     const workspaceRoot = await mkdtemp(
       path.join(os.tmpdir(), "oa-runtime-path-"),
@@ -258,6 +361,9 @@ describe("WorkspaceRuntime", () => {
       initialSnapshot: createEmptyRuntimeSnapshot(),
       persistence: new WorkspacePersistence(
         path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      globalConfigManager: new OpenAquariumGlobalConfigManager(
+        path.join(workspaceRoot, ".config"),
       ),
       workspaceRoot,
       executorFactory: ({ member }) =>
@@ -452,6 +558,7 @@ describe("WorkspaceRuntime", () => {
     const runtime = await WorkspaceRuntime.create({
       workspaceRoot,
       stateFilePath,
+      configDirPath: path.join(workspaceRoot, ".config"),
       executorFactory: ({ member }) =>
         new FakeExecutor(async (_request, callbacks) => {
           await callbacks.onComplete(`${member.handle} done`, "end_turn");
@@ -511,6 +618,7 @@ describe("WorkspaceRuntime", () => {
     const runtime = await WorkspaceRuntime.create({
       workspaceRoot,
       stateFilePath,
+      configDirPath: path.join(workspaceRoot, ".config"),
       executorFactory: ({ member }) =>
         new FakeExecutor(async (_request, callbacks) => {
           await callbacks.onComplete(`${member.handle} done`, "end_turn");
@@ -1527,6 +1635,7 @@ describe("WorkspaceRuntime", () => {
     const runtime = await WorkspaceRuntime.create({
       workspaceRoot,
       stateFilePath,
+      configDirPath: path.join(workspaceRoot, ".config"),
       executorFactory: () =>
         new FakeExecutor(() => {
           executeCount += 1;
@@ -1612,6 +1721,105 @@ describe("WorkspaceRuntime", () => {
 
     expect(digestMessages).toHaveLength(0);
     expect(snapshot.watchers[watcherId]?.lastConsumedMessageId).toBeDefined();
+  });
+
+  it("keeps unseen watcher messages in the next visible prompt after a pre-prompt failure", async () => {
+    vi.useFakeTimers();
+    const workspaceRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-runtime-watcher-visible-prompt-"),
+    );
+    const promptsSeenByScribe: string[] = [];
+    let firstWatcherAttempt = true;
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(
+        path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      globalConfigManager: new OpenAquariumGlobalConfigManager(
+        path.join(workspaceRoot, ".config"),
+      ),
+      workspaceRoot,
+      executorFactory: ({ member }) => ({
+        execute: async (request, callbacks) => {
+          if (member.handle !== "scribe" || request.task.title !== "Review watcher digest") {
+            await callbacks.onPromptVisible?.();
+            await callbacks.onComplete(`${member.handle} done`, "end_turn");
+            return;
+          }
+
+          if (firstWatcherAttempt) {
+            firstWatcherAttempt = false;
+            await callbacks.onError("Authentication required");
+            return;
+          }
+
+          promptsSeenByScribe.push(request.prompt);
+          await callbacks.onPromptVisible?.();
+          await callbacks.onComplete("scribe done", "end_turn");
+        },
+        cancel: () => Promise.resolve(),
+        dispose: () => Promise.resolve(),
+      }),
+    });
+    runtimes.push(runtime);
+
+    const { roomId } = await runtime.createProject({
+      projectName: "Watcher Prompt Visibility",
+      templateId: "template-product-pod",
+    });
+    await waitForRoomIdle(runtime, roomId);
+
+    let snapshot = runtime.getSnapshot();
+    const scribe = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "scribe");
+    if (!scribe) {
+      throw new Error("Expected scribe member");
+    }
+
+    const watcherId = snapshot.rooms[roomId].watcherIds.find(
+      (candidate) => snapshot.watchers[candidate]?.memberId === scribe.id,
+    );
+    if (!watcherId) {
+      throw new Error("Expected watcher id");
+    }
+
+    await runtime.sendUserMessage({
+      roomId,
+      content: "watcher 基线消息",
+    });
+    await waitForRoomIdle(runtime, roomId);
+
+    await runtime.runWatcherNow(watcherId);
+    await waitForRoomIdle(runtime, roomId);
+
+    await runtime.sendUserMessage({
+      roomId,
+      content: "第一条 watcher 未见消息",
+    });
+    await waitForRoomIdle(runtime, roomId);
+
+    await runtime.runWatcherNow(watcherId);
+    await waitForRoomIdle(runtime, roomId);
+
+    snapshot = runtime.getSnapshot();
+    const failedPromptTraces = Object.values(snapshot.taskTraces).filter(
+      (trace) => trace.roomId === roomId && trace.memberId === scribe.id && trace.kind === "task-prompt",
+    );
+    expect(failedPromptTraces).toHaveLength(0);
+
+    await runtime.sendUserMessage({
+      roomId,
+      content: "第二条 watcher 新消息",
+    });
+    await waitForRoomIdle(runtime, roomId);
+
+    await runtime.runWatcherNow(watcherId);
+    await waitForRoomIdle(runtime, roomId);
+
+    expect(promptsSeenByScribe).toHaveLength(1);
+    expect(promptsSeenByScribe[0]).toContain("第一条 watcher 未见消息");
+    expect(promptsSeenByScribe[0]).toContain("第二条 watcher 新消息");
   });
 
   it("runs a deferred watcher as soon as the watched member becomes idle", async () => {
@@ -1735,6 +1943,9 @@ describe("WorkspaceRuntime", () => {
       initialSnapshot: createEmptyRuntimeSnapshot(),
       persistence: new WorkspacePersistence(
         path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      globalConfigManager: new OpenAquariumGlobalConfigManager(
+        path.join(workspaceRoot, ".config"),
       ),
       workspaceRoot,
       executorFactory: ({ member }) =>
@@ -1935,6 +2146,9 @@ describe("WorkspaceRuntime", () => {
       initialSnapshot: createEmptyRuntimeSnapshot(),
       persistence: new WorkspacePersistence(
         path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      globalConfigManager: new OpenAquariumGlobalConfigManager(
+        path.join(workspaceRoot, ".config"),
       ),
       workspaceRoot,
       executorFactory: ({ member }) =>

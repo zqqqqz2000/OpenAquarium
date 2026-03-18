@@ -1,6 +1,7 @@
 import type {
   ACPProviderModelProfile,
   GlobalWorkspaceConfig,
+  OpenAICompatibleProviderBinding,
   OpenAICompatibleProviderModelProfile,
   ProviderBinding,
   ProviderModelProfile,
@@ -80,10 +81,10 @@ export function findProviderModelProfile(
 }
 
 export function resolveProviderBindingFromProfile(
-  fallbackProvider: ProviderBinding,
+  fallbackProvider: ProviderBinding | OpenAICompatibleProviderBinding,
   modelProfiles: ProviderModelProfile[],
   profileId?: string,
-): ProviderBinding {
+): ProviderBinding | OpenAICompatibleProviderBinding {
   const profile = findProviderModelProfile(modelProfiles, profileId);
-  return profile?.providerType === "acp" ? profile.binding : fallbackProvider;
+  return profile?.binding ?? fallbackProvider;
 }

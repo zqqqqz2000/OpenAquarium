@@ -1,0 +1,244 @@
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { streamText } from "ai";
+
+import type { JsonValue } from "../lib/json";
+import { isJsonObject } from "../lib/json";
+import type { OpenAICompatibleProviderBinding, Project } from "../domain/model";
+import type {
+  ExecutionMember,
+  ExecutionRequest,
+  ExecutorCallbacks,
+  MemberExecutor,
+} from "./executor";
+import type { DiagnosticsLogger } from "./diagnostics";
+import { getErrorMessage, type RuntimeError } from "./error-utils";
+import { createWorkspaceTools, type MemberToolHost, resolveExecutorDirectories } from "./member-workspace-tools";
+import { TerminalRegistry } from "./terminal-registry";
+
+const TOOL_STATUS_PREFIX = "__oa_tool__";
+
+type OpenAICompatibleExecutionMember = ExecutionMember & {
+  provider: OpenAICompatibleProviderBinding;
+};
+
+function summarizeRawChunk(rawValue: JsonValue | object | undefined): string | undefined {
+  if (typeof rawValue !== "string") {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as JsonValue;
+    if (!isJsonObject(parsed)) {
+      return undefined;
+    }
+
+    const type = typeof parsed.type === "string" ? parsed.type : undefined;
+    const entriesCount = Array.isArray(parsed.entries) ? parsed.entries.length : 0;
+    const path = typeof parsed.path === "string" ? parsed.path : undefined;
+    const terminalId = typeof parsed.terminalId === "string" ? parsed.terminalId : undefined;
+    const toolCallId = typeof parsed.toolCallId === "string" ? parsed.toolCallId : undefined;
+
+    switch (type) {
+      case "plan":
+        return `Plan updated (${entriesCount} step(s))`;
+      case "diff":
+        return `Diff ready for ${path ?? "pending file"}`;
+      case "terminal":
+        return `Terminal update ${terminalId ?? toolCallId ?? ""}`.trim();
+      default:
+        return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function summarizeToolChunk(input: { toolName?: string } | object | string | number | boolean | null | undefined): string {
+  if (!input || typeof input !== "object") {
+    return "tool";
+  }
+
+  const maybeToolInput = input as {
+    toolName?: string;
+  };
+
+  return maybeToolInput.toolName?.trim() || "tool";
+}
+
+function encodeToolStatusSummary(input: { toolCallId?: string; toolName: string; status: "running" | "completed" }): string {
+  return `${TOOL_STATUS_PREFIX}${JSON.stringify(input)}`;
+}
+
+function resolveApiKey(binding: OpenAICompatibleProviderBinding): string | undefined {
+  const envVarName = binding.apiKeyEnvVar?.trim();
+  if (!envVarName) {
+    return undefined;
+  }
+
+  return process.env[envVarName]?.trim() || undefined;
+}
+
+export class OpenAICompatibleMemberExecutor implements MemberExecutor {
+  private readonly member: OpenAICompatibleExecutionMember;
+  private readonly host: MemberToolHost;
+  private readonly logger?: DiagnosticsLogger;
+  private readonly terminalRegistry = new TerminalRegistry();
+  private readonly projectWorkingDirectory: string;
+  private readonly accessibleRoots: string[];
+  private readonly provider: ReturnType<typeof createOpenAICompatible>;
+  private currentTurn?: Promise<void>;
+  private currentAbortController?: AbortController;
+
+  constructor(args: {
+    workspaceRoot: string;
+    project?: Pick<Project, "path">;
+    member: ExecutionMember;
+    host: MemberToolHost;
+    logger?: DiagnosticsLogger;
+  }) {
+    if (args.member.provider.kind !== "openai-compatible") {
+      throw new Error(`OpenAICompatibleMemberExecutor requires an openai-compatible provider for @${args.member.handle}`);
+    }
+    const member = args.member as OpenAICompatibleExecutionMember;
+    this.member = member;
+    this.host = args.host;
+    this.logger = args.logger;
+    const directories = resolveExecutorDirectories({
+      workspaceRoot: args.workspaceRoot,
+      project: args.project,
+    });
+    this.projectWorkingDirectory = directories.projectWorkingDirectory;
+    this.accessibleRoots = directories.accessibleRoots;
+    this.provider = createOpenAICompatible({
+      name: member.provider.label,
+      baseURL: member.provider.baseURL,
+      apiKey: resolveApiKey(member.provider),
+      headers: member.provider.headers,
+      transformRequestBody: (body) => ({
+        ...body,
+        ...member.provider.extraBody,
+      }),
+    });
+  }
+
+  async execute(request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
+    await this.cancel();
+
+    const modelId = request.member.modelId?.trim();
+    if (!modelId) {
+      throw new Error(`OpenAI-compatible provider "${request.member.provider.label}" for @${request.member.handle} requires a model id`);
+    }
+
+    const abortController = new AbortController();
+    this.currentAbortController = abortController;
+    let finalContent = "";
+
+    const tools = createWorkspaceTools({
+      request,
+      host: this.host,
+      projectWorkingDirectory: this.projectWorkingDirectory,
+      accessibleRoots: this.accessibleRoots,
+      terminalRegistry: this.terminalRegistry,
+    });
+
+    const currentTurn = (async () => {
+      try {
+        const result = streamText({
+          abortSignal: abortController.signal,
+          includeRawChunks: true,
+          model: this.provider.languageModel(modelId),
+          prompt: request.prompt,
+          tools,
+          onChunk: async ({ chunk }) => {
+            switch (chunk.type) {
+              case "text-delta":
+                finalContent = `${finalContent}${chunk.text}`;
+                await callbacks.onDraft(finalContent);
+                return;
+              case "tool-call": {
+                const toolName = summarizeToolChunk(chunk.input as { toolName?: string } | object | string | number | boolean | null | undefined);
+                const toolCallId = "toolCallId" in chunk && typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined;
+                await callbacks.onStatus(encodeToolStatusSummary({ toolCallId, toolName, status: "running" }));
+                return;
+              }
+              case "tool-result": {
+                const toolCallId = "toolCallId" in chunk && typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined;
+                await callbacks.onStatus(encodeToolStatusSummary({ toolCallId, toolName: chunk.toolName, status: "completed" }));
+                return;
+              }
+              case "reasoning-delta":
+                if (chunk.text.trim().length > 0) {
+                  await callbacks.onStatus(`Reasoning: ${chunk.text}`);
+                }
+                return;
+              case "raw": {
+                const summary = summarizeRawChunk(chunk.rawValue as JsonValue | object | undefined);
+                if (summary) {
+                  await callbacks.onStatus(summary);
+                }
+                return;
+              }
+              default:
+                return;
+            }
+          },
+        });
+
+        await callbacks.onPromptVisible?.();
+
+        const [text, finishReason] = await Promise.all([result.text, result.finishReason]);
+        if (abortController.signal.aborted) {
+          return;
+        }
+
+        await callbacks.onComplete(text.trim().length > 0 ? text : finalContent, finishReason);
+      } catch (error) {
+        if (abortController.signal.aborted && abortController.signal.reason === "cancelled") {
+          return;
+        }
+
+        this.logger?.error("openai-compatible-stream-error", {
+          taskId: request.task.id,
+          memberId: request.member.id,
+          memberHandle: request.member.handle,
+          message: getErrorMessage(error as RuntimeError),
+          accumulatedText: finalContent,
+        });
+        await callbacks.onError(getErrorMessage(error as RuntimeError));
+      } finally {
+        if (this.currentAbortController === abortController) {
+          this.currentAbortController = undefined;
+          this.currentTurn = undefined;
+        }
+      }
+    })();
+
+    this.currentTurn = currentTurn;
+    await currentTurn;
+  }
+
+  async cancel(): Promise<void> {
+    if (!this.currentAbortController || !this.currentTurn) {
+      return;
+    }
+
+    const abortController = this.currentAbortController;
+    const currentTurn = this.currentTurn;
+    abortController.abort("cancelled");
+    try {
+      await currentTurn;
+    } finally {
+      if (this.currentAbortController === abortController) {
+        this.currentAbortController = undefined;
+      }
+      if (this.currentTurn === currentTurn) {
+        this.currentTurn = undefined;
+      }
+    }
+  }
+
+  async dispose(): Promise<void> {
+    await this.cancel();
+    await this.terminalRegistry.disposeAll();
+  }
+}

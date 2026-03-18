@@ -13,6 +13,7 @@ import type {
   WorkspaceSnapshot,
 } from "../domain/model";
 import {
+  acknowledgeWatcherDigestVisibility,
   acknowledgeRoom,
   appendTaskTrace,
   applyRoleStaffingOperation,
@@ -54,8 +55,9 @@ import type {
   UpdateMemberConfigInput,
   UpdateTemplateInput,
 } from "../domain/model";
-import type { MemberExecutor, MemberExecutorFactory } from "./executor";
+import type { ExecutionMember, MemberExecutor, MemberExecutorFactory } from "./executor";
 import { AcpMemberExecutor } from "./acp-executor";
+import { OpenAICompatibleMemberExecutor } from "./openai-compatible-executor";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
@@ -484,79 +486,113 @@ export class WorkspaceRuntime {
     this.startTemplateConfigWatcher();
     this.executorFactory =
       args.executorFactory ??
-      (({ member, project }) =>
-        new AcpMemberExecutor({
-          workspaceRoot: this.workspaceRoot,
-          project,
-          member,
-          logger: this.logger,
-          host: {
-            sendGroupMessage: async (input) => {
-              await this.sendMemberMessage({
-                roomId: input.roomId,
-                memberId: input.memberId,
-                content: input.content,
-                taskId: input.taskId,
-              });
-            },
-            sendDirectMessage: async (input) => {
-              const target = resolveDirectTarget(this.snapshot, input.roomId, input.targetHandle);
-              if (!target.directMemberId && !target.directToUser) {
-                throw new Error(`Unknown direct target "${input.targetHandle}" in room "${input.roomId}"`);
-              }
-
-              await this.sendMemberMessage({
-                roomId: input.roomId,
-                memberId: input.memberId,
-                content: input.content,
-                ...target,
-                taskId: input.taskId,
-              });
-            },
-            addRoleEmployee: async (input) => {
-              return this.applyRoleStaffing({
-                roomId: input.roomId,
-                memberId: input.memberId,
-                operation: {
-                  kind: "add",
-                  role: input.role,
-                  employeeHandle: input.employeeHandle,
-                  reason: input.reason,
-                },
-              });
-            },
-            removeRoleEmployee: async (input) => {
-              return this.applyRoleStaffing({
-                roomId: input.roomId,
-                memberId: input.memberId,
-                operation: {
-                  kind: "remove",
-                  role: input.role,
-                  employeeHandle: input.employeeHandle,
-                  reason: input.reason,
-                },
-              });
-            },
-            renameRoleEmployee: async (input) => {
-              return this.applyRoleStaffing({
-                roomId: input.roomId,
-                memberId: input.memberId,
-                operation: {
-                  kind: "rename",
-                  employeeHandle: input.employeeHandle,
-                  name: input.name,
-                },
-              });
-            },
-            runWatcher: async (input) => {
-              await this.runWatcherNow(input.watcherId);
-            },
-            inspectRoomState: (input) => Promise.resolve(this.describeRoomState(input.roomId)),
-            persistMemberSession: async (input) => {
-              await this.persistMemberProviderSession(input.memberId, input.sessionId);
-            },
+      (({ member, project }) => {
+        const host = {
+          sendGroupMessage: async (input: { roomId: string; memberId: string; taskId: string; content: string }) => {
+            await this.sendMemberMessage({
+              roomId: input.roomId,
+              memberId: input.memberId,
+              content: input.content,
+              taskId: input.taskId,
+            });
           },
-        }));
+          sendDirectMessage: async (input: {
+            roomId: string;
+            memberId: string;
+            taskId: string;
+            targetHandle: string;
+            content: string;
+          }) => {
+            const target = resolveDirectTarget(this.snapshot, input.roomId, input.targetHandle);
+            if (!target.directMemberId && !target.directToUser) {
+              throw new Error(`Unknown direct target "${input.targetHandle}" in room "${input.roomId}"`);
+            }
+
+            await this.sendMemberMessage({
+              roomId: input.roomId,
+              memberId: input.memberId,
+              content: input.content,
+              ...target,
+              taskId: input.taskId,
+            });
+          },
+          addRoleEmployee: async (input: {
+            roomId: string;
+            memberId: string;
+            role: string;
+            employeeHandle: string;
+            reason?: string;
+          }) => {
+            return this.applyRoleStaffing({
+              roomId: input.roomId,
+              memberId: input.memberId,
+              operation: {
+                kind: "add",
+                role: input.role,
+                employeeHandle: input.employeeHandle,
+                reason: input.reason,
+              },
+            });
+          },
+          removeRoleEmployee: async (input: {
+            roomId: string;
+            memberId: string;
+            role: string;
+            employeeHandle: string;
+            reason?: string;
+          }) => {
+            return this.applyRoleStaffing({
+              roomId: input.roomId,
+              memberId: input.memberId,
+              operation: {
+                kind: "remove",
+                role: input.role,
+                employeeHandle: input.employeeHandle,
+                reason: input.reason,
+              },
+            });
+          },
+          renameRoleEmployee: async (input: {
+            roomId: string;
+            memberId: string;
+            employeeHandle: string;
+            name: string;
+          }) => {
+            return this.applyRoleStaffing({
+              roomId: input.roomId,
+              memberId: input.memberId,
+              operation: {
+                kind: "rename",
+                employeeHandle: input.employeeHandle,
+                name: input.name,
+              },
+            });
+          },
+          runWatcher: async (input: { watcherId: string }) => {
+            await this.runWatcherNow(input.watcherId);
+          },
+          inspectRoomState: (input: { roomId: string }) => Promise.resolve(this.describeRoomState(input.roomId)),
+          persistMemberSession: async (input: { memberId: string; sessionId?: string }) => {
+            await this.persistMemberProviderSession(input.memberId, input.sessionId);
+          },
+        };
+
+        return member.provider.kind === "openai-compatible"
+          ? new OpenAICompatibleMemberExecutor({
+              workspaceRoot: this.workspaceRoot,
+              project,
+              member,
+              logger: this.logger,
+              host,
+            })
+          : new AcpMemberExecutor({
+              workspaceRoot: this.workspaceRoot,
+              project,
+              member,
+              logger: this.logger,
+              host,
+            });
+      });
     this.templateGenerator = args.templateGenerator ?? ((brief, generatorArgs) =>
       generateTemplateFromBrief(brief, {
         workspaceRoot: generatorArgs.workspaceRoot,
@@ -1371,32 +1407,29 @@ export class WorkspaceRuntime {
           runningTasks: this.runningTaskIds.size,
         });
         executor = this.getExecutor(member.id, member, room, project);
-        const prompt = buildTaskPrompt({
-          workspaceRoot: this.workspaceRoot,
-          project,
-          room,
-          member: this.resolveMemberForExecution(member),
-          task: currentTask,
-          snapshot: this.snapshot,
-          transcriptFilePath: getRoomTranscriptFilePath(this.workspaceRoot, room),
-        });
-        this.snapshot = compactWorkspaceSnapshot(appendTaskTrace(
-          this.snapshot,
-          {
-            taskId: currentTask.id,
-            roomId: room.id,
-            memberId: member.id,
-            kind: "task-prompt",
-            title: retryAttempt === 0 ? "Task prompt" : `Task prompt (retry ${retryAttempt}/${this.taskExecutionMaxRetries})`,
-            content: prompt,
-          },
-          this.context,
-        ));
-        this.scheduleProgressPersistence();
-        this.emit();
+        const executionMember = this.resolveMemberForExecution(member);
+        let promptVisible = false;
 
         try {
-          const { taskSettled } = await this.executeTaskAttempt({
+          const preparation = await executor.prepareExecution?.({
+            project,
+            room,
+            member: executionMember,
+            task: currentTask,
+            snapshot: this.snapshot,
+          });
+          const prompt = buildTaskPrompt({
+            workspaceRoot: this.workspaceRoot,
+            project,
+            room,
+            member: executionMember,
+            task: currentTask,
+            snapshot: this.snapshot,
+            transcriptFilePath: getRoomTranscriptFilePath(this.workspaceRoot, room),
+            retryAttempt,
+            sessionContinuation: preparation?.sessionContinuation,
+          });
+          const { taskSettled, promptVisible: attemptPromptVisible } = await this.executeTaskAttempt({
             taskId,
             member,
             room,
@@ -1404,7 +1437,9 @@ export class WorkspaceRuntime {
             task: currentTask,
             prompt,
             executor,
+            retryAttempt,
           });
+          promptVisible = attemptPromptVisible;
 
           if (taskSettled) {
             return;
@@ -1436,6 +1471,19 @@ export class WorkspaceRuntime {
                   memberId: latestTask.memberId,
                   message: getErrorMessage(cancelError as RuntimeError),
                 });
+              }
+
+              if (promptVisible) {
+                try {
+                  await executor.discardSession?.();
+                } catch (discardError: unknown) {
+                  this.logger?.warn("task-timeout-discard-session-failed", {
+                    taskId,
+                    roomId: latestTask.roomId,
+                    memberId: latestTask.memberId,
+                    message: getErrorMessage(discardError as RuntimeError),
+                  });
+                }
               }
             }
 
@@ -1565,9 +1613,11 @@ export class WorkspaceRuntime {
     task: WorkspaceSnapshot["tasks"][string];
     prompt: string;
     executor: MemberExecutor;
-  }): Promise<{ taskSettled: boolean }> {
+    retryAttempt: number;
+  }): Promise<{ taskSettled: boolean; promptVisible: boolean }> {
     let acceptingExecutorUpdates = true;
     let taskSettled = false;
+    let promptVisible = false;
     const watchdog = createTaskExecutionWatchdog({
       timeoutMs: this.taskExecutionInactivityTimeoutMs,
       label: `Task ${args.taskId} for @${args.member.handle}`,
@@ -1592,6 +1642,31 @@ export class WorkspaceRuntime {
           prompt: args.prompt,
         },
         {
+        onPromptVisible: async () => {
+          if (!acceptingExecutorUpdates || promptVisible) {
+            return;
+          }
+          touchWatchdog();
+          const currentTask = this.snapshot.tasks[args.taskId];
+          if (!currentTask || currentTask.status !== "running") {
+            return;
+          }
+          this.snapshot = compactWorkspaceSnapshot(appendTaskTrace(
+            acknowledgeWatcherDigestVisibility(this.snapshot, args.taskId),
+            {
+              taskId: args.taskId,
+              roomId: currentTask.roomId,
+              memberId: currentTask.memberId,
+              kind: "task-prompt",
+              title: args.retryAttempt === 0 ? "Task prompt" : `Task prompt (retry ${args.retryAttempt}/${this.taskExecutionMaxRetries})`,
+              content: args.prompt,
+            },
+            this.context,
+          ));
+          this.scheduleProgressPersistence();
+          this.emit();
+          promptVisible = true;
+        },
         onDraft: async (content) => {
           if (!acceptingExecutorUpdates) {
             return;
@@ -1808,7 +1883,7 @@ export class WorkspaceRuntime {
         },
       );
       await (watchdog ? Promise.race([executionPromise, watchdog.timeoutPromise]) : executionPromise);
-      return { taskSettled };
+      return { taskSettled, promptVisible };
     } finally {
       watchdog?.dispose();
     }
@@ -1837,7 +1912,7 @@ export class WorkspaceRuntime {
     return executor;
   }
 
-  private resolveMemberForExecution(member: TeamMember): TeamMember {
+  private resolveMemberForExecution(member: TeamMember): ExecutionMember {
     const resolvedProvider = resolveProviderBindingFromProfile(
       member.provider,
       this.globalConfig.modelProfiles,

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createRuntimeContext } from "@/domain/identity";
 import type { ChatMessage } from "@/domain/model";
 import {
+  acknowledgeWatcherDigestVisibility,
   appendTaskTrace,
   applyRoleStaffingOperation,
   completeMemberTask,
@@ -187,8 +188,24 @@ describe("workspace domain", () => {
 
   it("copies watcher prompt from the template when creating a room", () => {
     const context = createRuntimeContext();
+    const templates = defaultTemplates.map((template) =>
+      template.id !== "template-product-pod"
+        ? template
+        : {
+            ...template,
+            members: template.members.map((member) =>
+              member.id !== "scribe"
+                ? member
+                : {
+                    ...member,
+                    watch: {
+                      ...member.watch!,
+                      prompt: "Only summarize unseen messages and owner/status changes.",
+                    },
+                  }),
+          });
     const snapshot = createProjectWithRoom(
-      createWorkspaceSnapshot(defaultTemplates),
+      createWorkspaceSnapshot(templates),
       {
         projectName: "ACP Lab",
         templateId: "template-product-pod",
@@ -1283,6 +1300,7 @@ describe("workspace domain", () => {
 
     const digestTask = Object.values(snapshot.tasks).find((task) => task.sourceMessageId === firstDigest!.id);
     expect(digestTask).toBeDefined();
+    snapshot = acknowledgeWatcherDigestVisibility(snapshot, digestTask!.id);
 
     snapshot = completeMemberTask(
       snapshot,
