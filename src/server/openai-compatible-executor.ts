@@ -1,5 +1,4 @@
 import type { AssistantModelMessage, ToolModelMessage } from "@ai-sdk/provider-utils";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { streamText } from "ai";
 
 import type { JsonValue } from "../lib/json";
@@ -20,6 +19,7 @@ import {
   prepareOpenAICompatibleConversation,
 } from "./openai-compatible-compaction";
 import { createConfiguredMcpTools } from "./openai-compatible-mcp";
+import { createOpenAICompatibleProvider } from "./openai-compatible-provider";
 import { TerminalRegistry } from "./terminal-registry";
 
 const TOOL_STATUS_PREFIX = "__oa_tool__";
@@ -76,15 +76,6 @@ function encodeToolStatusSummary(input: { toolCallId?: string; toolName: string;
   return `${TOOL_STATUS_PREFIX}${JSON.stringify(input)}`;
 }
 
-function resolveApiKey(binding: OpenAICompatibleProviderBinding): string | undefined {
-  const envVarName = binding.apiKeyEnvVar?.trim();
-  if (!envVarName) {
-    return undefined;
-  }
-
-  return process.env[envVarName]?.trim() || undefined;
-}
-
 export class OpenAICompatibleMemberExecutor implements MemberExecutor {
   private readonly member: OpenAICompatibleExecutionMember;
   private readonly host: MemberToolHost;
@@ -92,7 +83,7 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
   private readonly terminalRegistry = new TerminalRegistry();
   private readonly projectWorkingDirectory: string;
   private readonly accessibleRoots: string[];
-  private readonly provider: ReturnType<typeof createOpenAICompatible>;
+  private readonly provider: ReturnType<typeof createOpenAICompatibleProvider>;
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
 
@@ -116,16 +107,7 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
     });
     this.projectWorkingDirectory = directories.projectWorkingDirectory;
     this.accessibleRoots = directories.accessibleRoots;
-    this.provider = createOpenAICompatible({
-      name: member.provider.label,
-      baseURL: member.provider.baseURL,
-      apiKey: resolveApiKey(member.provider),
-      headers: member.provider.headers,
-      transformRequestBody: (body) => ({
-        ...body,
-        ...member.provider.extraBody,
-      }),
-    });
+    this.provider = createOpenAICompatibleProvider(member.provider);
   }
 
   async execute(request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
@@ -162,8 +144,8 @@ export class OpenAICompatibleMemberExecutor implements MemberExecutor {
           ...workspaceTools,
           ...(mcpTools?.tools ?? {}),
         };
-        const currentConversation = {
-          messages: request.messageHistory ?? request.openAICompatibleConversation?.messages ?? [],
+        const currentConversation = request.openAICompatibleConversation ?? {
+          messages: request.messageHistory ?? [],
         };
         const currentUserMessage = buildPersistedUserTurnMessage(request.prompt);
 

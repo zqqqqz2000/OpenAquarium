@@ -2,176 +2,165 @@ import type {
   AssistantModelMessage,
   ModelMessage,
   ToolModelMessage,
+  ToolResultOutput,
+  ToolResultPart,
+  UserModelMessage,
 } from "@ai-sdk/provider-utils";
 
 import type {
   OpenAICompatibleConversationState,
-  PersistedOpenAICompatibleAssistantMessage,
-  PersistedOpenAICompatibleAssistantPart,
-  PersistedOpenAICompatibleConversationSummary,
-  PersistedOpenAICompatibleMessage,
-  PersistedOpenAICompatibleToolMessage,
-  PersistedOpenAICompatibleToolResultPart,
-  PersistedOpenAICompatibleUserMessage,
+  OpenAICompatibleConversationSummary,
 } from "../domain/model";
-import type { JsonValue } from "../lib/json";
 
 export interface OpenAICompatibleModelMessageOptions {
   instructions?: string[];
-  useOffloadedToolResults?: boolean;
+  transformToolResult?: (part: ToolResultPart) => ToolResultPart;
 }
 
-function sanitizeJsonValue(value: unknown): JsonValue {
-  if (
-    value === null
-    || typeof value === "string"
-    || typeof value === "number"
-    || typeof value === "boolean"
-  ) {
-    return value;
+function formatToolResultOutput(output: ToolResultOutput): string {
+  switch (output.type) {
+    case "text":
+    case "error-text":
+      return output.value;
+    case "json":
+    case "error-json":
+      return JSON.stringify(output.value, null, 2);
+    case "execution-denied":
+      return output.reason ?? "execution denied";
+    case "content":
+      return output.value.map((part) => {
+        switch (part.type) {
+          case "text":
+            return part.text;
+          case "file-data":
+            return `[File ${part.mediaType}]`;
+          case "file-url":
+            return "[File]";
+          case "media":
+            return `[Media ${part.mediaType}]`;
+        }
+      }).join("\n");
   }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeJsonValue(item));
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entryValue]) => [key, sanitizeJsonValue(entryValue)]),
-    );
-  }
-
-  if (typeof value === "undefined") {
-    return "undefined";
-  }
-
-  if (typeof value === "bigint") {
-    return value.toString(10);
-  }
-
-  if (typeof value === "symbol") {
-    return value.description ?? "symbol";
-  }
-
-  return "[unsupported]";
 }
 
-function toToolOutputText(value: JsonValue): string {
-  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
-}
-
-function buildOffloadPlaceholder(part: PersistedOpenAICompatibleToolResultPart): string {
-  if (!part.offload) {
-    return toToolOutputText(part.output);
+function transformAssistantMessage(
+  message: AssistantModelMessage,
+  transformToolResult?: (part: ToolResultPart) => ToolResultPart,
+): AssistantModelMessage {
+  if (!transformToolResult || typeof message.content === "string") {
+    return message;
   }
 
-  return `[Tool result offloaded to file: ${part.offload.path} (${part.offload.chars} chars). Use oa_read_file to inspect the exact content if needed.]`;
+  return {
+    ...message,
+    content: message.content.map((part) =>
+      part.type === "tool-result"
+        ? transformToolResult(part)
+        : part),
+  };
 }
 
-function sanitizeAssistantMessage(message: AssistantModelMessage): PersistedOpenAICompatibleAssistantMessage | undefined {
+function transformToolMessage(
+  message: ToolModelMessage,
+  transformToolResult?: (part: ToolResultPart) => ToolResultPart,
+): ToolModelMessage {
+  if (!transformToolResult) {
+    return message;
+  }
+
+  return {
+    ...message,
+    content: message.content.map((part) =>
+      part.type === "tool-result"
+        ? transformToolResult(part)
+        : part),
+  };
+}
+
+function transformMessageToolResults(
+  message: ModelMessage,
+  transformToolResult?: (part: ToolResultPart) => ToolResultPart,
+): ModelMessage {
+  switch (message.role) {
+    case "assistant":
+      return transformAssistantMessage(message, transformToolResult);
+    case "tool":
+      return transformToolMessage(message, transformToolResult);
+    default:
+      return message;
+  }
+}
+
+function formatUserContent(message: UserModelMessage): string {
   if (typeof message.content === "string") {
-    return {
-      role: "assistant",
-      content: message.content,
-    };
+    return message.content;
   }
 
-  const content = message.content.reduce<PersistedOpenAICompatibleAssistantPart[]>((parts, part) => {
+  return message.content.map((part) => (
+    part.type === "text"
+      ? part.text
+      : `[File ${part.mediaType}]`
+  )).join("\n");
+}
+
+function formatAssistantContent(message: AssistantModelMessage): string {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+
+  return message.content.map((part) => {
     switch (part.type) {
       case "text":
-        parts.push({
-          type: "text",
-          text: part.text,
-        });
-        break;
+        return part.text;
+      case "reasoning":
+        return `[Reasoning] ${part.text}`;
+      case "file":
+        return `[File ${part.mediaType}]`;
       case "tool-call":
-        parts.push({
-          type: "tool-call",
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          input: sanitizeJsonValue(part.input),
-        });
-        break;
+        return `[Tool Call] ${part.toolName}(${JSON.stringify(part.input)})`;
       case "tool-result":
-        parts.push({
-          type: "tool-result",
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          output: sanitizeJsonValue(part.output),
-        });
-        break;
-      default:
-        break;
+        return `[Tool Result] ${part.toolName}: ${formatToolResultOutput(part.output)}`;
+      case "tool-approval-request":
+        return `[Tool Approval Request] ${part.toolCallId}`;
     }
-
-    return parts;
-  }, []);
-
-  return content.length > 0
-    ? {
-        role: "assistant",
-        content,
-      }
-    : undefined;
+  }).join("\n");
 }
 
-function sanitizeToolMessage(message: ToolModelMessage): PersistedOpenAICompatibleToolMessage | undefined {
-  const content = message.content.reduce<PersistedOpenAICompatibleToolResultPart[]>((parts, part) => {
-    if (part.type !== "tool-result") {
-      return parts;
+function formatToolContent(message: ToolModelMessage): string {
+  return message.content.map((part) => {
+    switch (part.type) {
+      case "tool-result":
+        return `${part.toolName} (${part.toolCallId}): ${formatToolResultOutput(part.output)}`;
+      case "tool-approval-response":
+        return `${part.approvalId}: ${part.approved ? "approved" : "rejected"}`;
     }
-
-    parts.push({
-      type: "tool-result",
-      toolCallId: part.toolCallId,
-      toolName: part.toolName,
-      output: sanitizeJsonValue(part.output),
-    });
-    return parts;
-  }, []);
-
-  return content.length > 0
-    ? {
-        role: "tool",
-        content,
-      }
-    : undefined;
+  }).join("\n");
 }
 
-function toAssistantContent(
-  content: PersistedOpenAICompatibleAssistantMessage["content"],
-  options: Pick<OpenAICompatibleModelMessageOptions, "useOffloadedToolResults">,
-): string | PersistedOpenAICompatibleAssistantPart[] {
-  if (typeof content === "string") {
-    return content;
+function formatMessage(
+  message: ModelMessage,
+  summary: OpenAICompatibleConversationSummary | undefined,
+  index: number,
+): string {
+  switch (message.role) {
+    case "system":
+      return `System:\n${message.content}`;
+    case "user":
+      return `User:\n${formatUserContent(message)}`;
+    case "assistant":
+      return [
+        index === 0 && summary ? `[Compaction Summary ${summary.compactedAt}]` : "Assistant:",
+        formatAssistantContent(message),
+      ].join("\n");
+    case "tool":
+      return [
+        "Tool:",
+        formatToolContent(message),
+      ].join("\n");
   }
-
-  return content.map((part) => {
-    if (part.type !== "tool-result" || !options.useOffloadedToolResults) {
-      return part;
-    }
-
-    return {
-      ...part,
-      output: buildOffloadPlaceholder(part),
-    };
-  });
 }
 
-function toToolContent(
-  content: PersistedOpenAICompatibleToolMessage["content"],
-  options: Pick<OpenAICompatibleModelMessageOptions, "useOffloadedToolResults">,
-): PersistedOpenAICompatibleToolResultPart[] {
-  return content.map((part) =>
-    !options.useOffloadedToolResults
-      ? part
-      : {
-          ...part,
-          output: buildOffloadPlaceholder(part),
-        });
-}
-
-export function buildPersistedUserTurnMessage(content: string): PersistedOpenAICompatibleUserMessage {
+export function buildPersistedUserTurnMessage(content: string): UserModelMessage {
   return {
     role: "user",
     content,
@@ -180,134 +169,60 @@ export function buildPersistedUserTurnMessage(content: string): PersistedOpenAIC
 
 export function buildConversationSummaryMessage(args: {
   content: string;
-  summary: PersistedOpenAICompatibleConversationSummary;
-}): PersistedOpenAICompatibleAssistantMessage {
+  summary: OpenAICompatibleConversationSummary;
+}): AssistantModelMessage {
+  void args.summary;
   return {
     role: "assistant",
     content: args.content,
-    summary: args.summary,
   };
-}
-
-export function sanitizeResponseMessages(
-  messages: Array<AssistantModelMessage | ToolModelMessage>,
-): PersistedOpenAICompatibleMessage[] {
-  return messages.reduce<PersistedOpenAICompatibleMessage[]>((sanitizedMessages, message) => {
-    if (message.role === "assistant") {
-      const sanitized = sanitizeAssistantMessage(message);
-      if (sanitized) {
-        sanitizedMessages.push(sanitized);
-      }
-      return sanitizedMessages;
-    }
-
-    const sanitized = sanitizeToolMessage(message);
-    if (sanitized) {
-      sanitizedMessages.push(sanitized);
-    }
-    return sanitizedMessages;
-  }, []);
 }
 
 export function appendConversationTurn(args: {
   conversation: OpenAICompatibleConversationState;
-  userMessage: PersistedOpenAICompatibleUserMessage;
+  userMessage: UserModelMessage;
   responseMessages: Array<AssistantModelMessage | ToolModelMessage>;
 }): OpenAICompatibleConversationState {
   return {
+    ...args.conversation,
     messages: [
       ...args.conversation.messages,
       args.userMessage,
-      ...sanitizeResponseMessages(args.responseMessages),
+      ...structuredClone(args.responseMessages),
     ],
   };
 }
 
 export function toModelMessages(
-  messages: PersistedOpenAICompatibleMessage[],
+  messages: ModelMessage[],
   options: OpenAICompatibleModelMessageOptions = {},
 ): ModelMessage[] {
   const modelMessages: ModelMessage[] = [];
-
   const instructionLines = options.instructions?.map((instruction) => instruction.trim()).filter(Boolean) ?? [];
+
   if (instructionLines.length > 0) {
     modelMessages.push({
       role: "system",
       content: instructionLines.join("\n"),
-    } as ModelMessage);
+    });
   }
 
-  for (const message of messages) {
-    switch (message.role) {
-      case "user":
-        modelMessages.push({
-          role: "user",
-          content: message.content,
-        } as ModelMessage);
-        break;
-      case "assistant":
-        modelMessages.push({
-          role: "assistant",
-          content: toAssistantContent(message.content, options),
-        } as ModelMessage);
-        break;
-      case "tool":
-        modelMessages.push({
-          role: "tool",
-          content: toToolContent(message.content, options),
-        } as ModelMessage);
-        break;
-    }
-  }
+  modelMessages.push(
+    ...messages.map((message) => transformMessageToolResults(message, options.transformToolResult)),
+  );
 
   return modelMessages;
 }
 
-function formatAssistantContent(content: PersistedOpenAICompatibleAssistantMessage["content"]): string {
-  if (typeof content === "string") {
-    return content;
-  }
-
-  return content.map((part) => {
-    switch (part.type) {
-      case "text":
-        return part.text;
-      case "tool-call":
-        return `[Tool Call] ${part.toolName}(${JSON.stringify(part.input)})`;
-      case "tool-result":
-        return part.offload
-          ? `[Tool Result] ${part.toolName}: ${buildOffloadPlaceholder(part)}`
-          : `[Tool Result] ${part.toolName}: ${JSON.stringify(part.output)}`;
-    }
-  }).join("\n");
-}
-
-function formatMessage(message: PersistedOpenAICompatibleMessage): string {
-  switch (message.role) {
-    case "user":
-      return `User:\n${message.content}`;
-    case "assistant":
-      return [
-        message.summary ? `[Compaction Summary ${message.summary.compactedAt}]` : "Assistant:",
-        formatAssistantContent(message.content),
-      ].join("\n");
-    case "tool":
-      return [
-        "Tool:",
-        ...message.content.map((part) =>
-          `${part.toolName} (${part.toolCallId}): ${
-            part.offload ? buildOffloadPlaceholder(part) : JSON.stringify(part.output)
-          }`),
-      ].join("\n");
-  }
-}
-
 export function formatConversationTrace(args: {
-  messageHistory: PersistedOpenAICompatibleMessage[];
-  currentUserMessage: PersistedOpenAICompatibleUserMessage;
+  conversation?: OpenAICompatibleConversationState;
+  currentUserMessage: UserModelMessage;
 }): string {
-  const historyLines = args.messageHistory.length > 0
-    ? args.messageHistory.map((message, index) => `[${index + 1}]\n${formatMessage(message)}`).join("\n\n")
+  const history = args.conversation?.messages ?? [];
+  const historyLines = history.length > 0
+    ? history.map((message, index) => (
+      `[${index + 1}]\n${formatMessage(message, args.conversation?.summary, index)}`
+    )).join("\n\n")
     : "(none)";
 
   return [
@@ -315,6 +230,6 @@ export function formatConversationTrace(args: {
     historyLines,
     "",
     "[Current User Turn]",
-    args.currentUserMessage.content,
+    formatUserContent(args.currentUserMessage),
   ].join("\n");
 }

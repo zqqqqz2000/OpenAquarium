@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import type { LanguageModelV3 } from "@ai-sdk/provider";
 import type { Tool } from "@ai-sdk/provider-utils";
 import { createACPProvider, type ModelInfo } from "@mcpc-tech/acp-ai-provider";
 import { convertToModelMessages, generateText, streamText, type UIMessageChunk } from "ai";
@@ -8,17 +8,21 @@ import * as z from "zod";
 
 import type {
   GlobalWorkspaceConfig,
-  OpenAICompatibleProviderModelProfile,
+  ProviderConnectionTestResult,
   ProviderModelProfile,
   TeamTemplate,
   TemplateStudioModelCatalog,
   TemplateStudioModelOption,
   TemplateStudioChatMessage,
 } from "@/domain/model";
-import type { JsonValue } from "@/lib/json";
 import type { TemplateStudioChatDataParts, TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import { findProviderModelProfile } from "@/lib/provider-model-profiles";
 import { createConfiguredMcpTools } from "@/server/openai-compatible-mcp";
+import {
+  buildOpenAICompatibleRequestHeaders,
+  buildOpenAICompatibleUrl,
+  createOpenAICompatibleProvider,
+} from "@/server/openai-compatible-provider";
 
 export interface TemplateStudioChatRequest {
   configDirectory: string;
@@ -69,6 +73,18 @@ export interface TemplateStudioModelCatalogRequest {
   modelProfileId?: string;
 }
 
+export interface ProviderProfileModelCatalogRequest {
+  configDirectory: string;
+  profile: ProviderModelProfile;
+}
+
+export interface ProviderProfileTestRequest {
+  configDirectory: string;
+  profile: ProviderModelProfile;
+  modelId?: string;
+  prompt: string;
+}
+
 const openAICompatibleModelCatalogSchema = z.object({
   data: z.array(
     z.object({
@@ -79,7 +95,7 @@ const openAICompatibleModelCatalogSchema = z.object({
 });
 
 type TemplateStudioLanguageProvider = {
-  languageModel(modelId: string): ReturnType<ReturnType<typeof createOpenAICompatible>["languageModel"]>;
+  languageModel(modelId: string): LanguageModelV3;
   tools: Record<string, Tool>;
   cleanup(): void | Promise<void>;
 };
@@ -214,32 +230,6 @@ function buildUnavailableCatalog(args: {
   };
 }
 
-function resolveOpenAICompatibleApiKey(profile: OpenAICompatibleProviderModelProfile): string | undefined {
-  const envVarName = profile.binding.apiKeyEnvVar?.trim();
-  if (!envVarName) {
-    return undefined;
-  }
-
-  return process.env[envVarName]?.trim() || undefined;
-}
-
-function buildOpenAICompatibleRequestHeaders(profile: OpenAICompatibleProviderModelProfile): Record<string, string> {
-  const apiKey = resolveOpenAICompatibleApiKey(profile);
-  return {
-    ...profile.binding.headers,
-    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-  };
-}
-
-function buildOpenAICompatibleExtraBody(profile: OpenAICompatibleProviderModelProfile): Record<string, JsonValue> {
-  return profile.binding.extraBody;
-}
-
-function buildOpenAICompatibleUrl(baseURL: string, pathname: string): string {
-  const normalizedBaseUrl = baseURL.endsWith("/") ? baseURL : `${baseURL}/`;
-  return new URL(pathname.replace(/^\//u, ""), normalizedBaseUrl).toString();
-}
-
 async function cleanupProvider(provider: { cleanup: () => void | Promise<void> }): Promise<void> {
   try {
     await provider.cleanup();
@@ -258,10 +248,19 @@ async function loadTemplateStudioModelCatalog(args: TemplateStudioModelCatalogRe
     throw new Error("Template Studio requires at least one configured model profile.");
   }
 
-  if (selectedProfile.providerType === "openai-compatible") {
+  return loadModelCatalogForProfile({
+    configDirectory: args.configDirectory,
+    profile: selectedProfile,
+  });
+}
+
+async function loadModelCatalogForProfile(args: ProviderProfileModelCatalogRequest): Promise<TemplateStudioModelCatalog> {
+  const { configDirectory, profile } = args;
+
+  if (profile.providerType === "openai-compatible") {
     try {
-      const response = await fetch(buildOpenAICompatibleUrl(selectedProfile.binding.baseURL, "/models"), {
-        headers: buildOpenAICompatibleRequestHeaders(selectedProfile),
+      const response = await fetch(buildOpenAICompatibleUrl(profile.binding.baseURL, "/models"), {
+        headers: buildOpenAICompatibleRequestHeaders(profile.binding),
       });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} when loading models`);
@@ -277,33 +276,33 @@ async function loadTemplateStudioModelCatalog(args: TemplateStudioModelCatalogRe
       if (availableModels.length > 0) {
         return {
           source: "runtime",
-          providerType: selectedProfile.providerType,
-          providerKind: selectedProfile.binding.kind,
-          providerLabel: selectedProfile.binding.label,
-          selectedProfileId: selectedProfile.id,
+          providerType: profile.providerType,
+          providerKind: profile.binding.kind,
+          providerLabel: profile.binding.label,
+          selectedProfileId: profile.id,
           currentModelId: undefined,
           availableModels,
         };
       }
 
       return buildUnavailableCatalog({
-        selectedProfile,
+        selectedProfile: profile,
         unavailableMessage: "Runtime model capability unavailable: /models returned no available models.",
       });
     } catch (error) {
       return buildUnavailableCatalog({
-        selectedProfile,
+        selectedProfile: profile,
         unavailableMessage: `Runtime model capability unavailable: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
   }
 
   const provider = createACPProvider({
-    command: selectedProfile.binding.command,
-    args: selectedProfile.binding.args,
-    env: selectedProfile.binding.env,
+    command: profile.binding.command,
+    args: profile.binding.args,
+    env: profile.binding.env,
     session: {
-      cwd: selectedProfile.binding.workingDirectory ?? args.configDirectory,
+      cwd: profile.binding.workingDirectory ?? configDirectory,
       mcpServers: [],
     },
   });
@@ -315,27 +314,87 @@ async function loadTemplateStudioModelCatalog(args: TemplateStudioModelCatalogRe
     if (availableModels.length > 0) {
       return {
         source: "runtime",
-        providerType: selectedProfile.providerType,
-        providerKind: selectedProfile.binding.kind,
-        providerLabel: selectedProfile.binding.label,
-        selectedProfileId: selectedProfile.id,
+        providerType: profile.providerType,
+        providerKind: profile.binding.kind,
+        providerLabel: profile.binding.label,
+        selectedProfileId: profile.id,
         currentModelId: session.models?.currentModelId,
         availableModels,
       };
     }
 
     return buildUnavailableCatalog({
-      selectedProfile,
+      selectedProfile: profile,
       unavailableMessage: "Runtime model capability unavailable: session returned no available models.",
     });
   } catch (error) {
     return buildUnavailableCatalog({
-      selectedProfile,
+      selectedProfile: profile,
       unavailableMessage: `Runtime model capability unavailable: ${error instanceof Error ? error.message : String(error)}`,
     });
   } finally {
     await cleanupProvider(provider);
   }
+}
+
+async function createLanguageProviderForProfile(args: {
+  configDirectory: string;
+  selectedProfile: ProviderModelProfile;
+  modelId?: string;
+}): Promise<{
+  provider: TemplateStudioLanguageProvider;
+  modelId: string;
+}> {
+  const { configDirectory, selectedProfile } = args;
+
+  if (selectedProfile.providerType === "openai-compatible") {
+    if (!args.modelId?.trim()) {
+      throw new Error("OpenAI-compatible provider requires a model id.");
+    }
+
+    const provider = createOpenAICompatibleProvider(selectedProfile.binding);
+    const mcpTools = await createConfiguredMcpTools({
+      binding: selectedProfile.binding,
+      defaultWorkingDirectory: configDirectory,
+    });
+
+    return {
+      provider: {
+        languageModel: (modelId: string) => provider.languageModel(modelId),
+        tools: mcpTools.tools,
+        cleanup: () => mcpTools.close(),
+      },
+      modelId: args.modelId.trim(),
+    };
+  }
+
+  const provider = createACPProvider({
+    command: selectedProfile.binding.command,
+    args: selectedProfile.binding.args,
+    env: selectedProfile.binding.env,
+    session: {
+      cwd: selectedProfile.binding.workingDirectory ?? configDirectory,
+      mcpServers: [],
+    },
+  });
+
+  return {
+    provider: {
+      languageModel: (modelId: string) => provider.languageModel(modelId || undefined),
+      tools: {},
+      cleanup: () => provider.cleanup(),
+    },
+    modelId: args.modelId?.trim() || "",
+  };
+}
+
+function buildProviderTestSystemPrompt(): string {
+  return [
+    "You are running an OpenAquarium provider connectivity check.",
+    "Reply in plain text with exactly one short sentence.",
+    "Do not use markdown.",
+    "Do not call tools during this check.",
+  ].join("\n");
 }
 
 async function resolveChatExecution(args: {
@@ -365,58 +424,17 @@ async function resolveChatExecution(args: {
   const modelMessages = await convertToModelMessages(args.messages, {
     ignoreIncompleteToolCalls: true,
   });
-
-  if (selectedProfile.providerType === "openai-compatible") {
-    if (!args.modelId?.trim()) {
-      throw new Error("OpenAI-compatible provider requires a model id.");
-    }
-
-    const provider = createOpenAICompatible({
-      name: selectedProfile.binding.label,
-      baseURL: selectedProfile.binding.baseURL,
-      apiKey: resolveOpenAICompatibleApiKey(selectedProfile),
-      headers: selectedProfile.binding.headers,
-      transformRequestBody: (body) => ({
-        ...body,
-        ...buildOpenAICompatibleExtraBody(selectedProfile),
-      }),
-    });
-    const mcpTools = await createConfiguredMcpTools({
-      binding: selectedProfile.binding,
-      defaultWorkingDirectory: args.configDirectory,
-    });
-
-    return {
-      selectedProfile,
-      provider: {
-        languageModel: (modelId: string) => provider.languageModel(modelId),
-        tools: mcpTools.tools,
-        cleanup: () => mcpTools.close(),
-      },
-      modelMessages,
-      modelId: args.modelId.trim(),
-    };
-  }
-
-  const provider = createACPProvider({
-    command: selectedProfile.binding.command,
-    args: selectedProfile.binding.args,
-    env: selectedProfile.binding.env,
-    session: {
-      cwd: selectedProfile.binding.workingDirectory ?? args.configDirectory,
-      mcpServers: [],
-    },
+  const { provider, modelId } = await createLanguageProviderForProfile({
+    configDirectory: args.configDirectory,
+    selectedProfile,
+    modelId: args.modelId,
   });
 
-    return {
-      selectedProfile,
-      provider: {
-        languageModel: (modelId: string) => provider.languageModel(modelId || undefined),
-        tools: {},
-        cleanup: () => provider.cleanup(),
-      },
-      modelMessages,
-    modelId: args.modelId?.trim() || "",
+  return {
+    selectedProfile,
+    provider,
+    modelMessages,
+    modelId,
   };
 }
 
@@ -424,6 +442,8 @@ export interface TemplateStudioChatServiceLike {
   chat(input: TemplateStudioChatRequest): Promise<TemplateStudioChatResult>;
   stream(input: TemplateStudioChatStreamRequest): Promise<TemplateStudioChatStreamRun>;
   getModelCatalog(input: TemplateStudioModelCatalogRequest): Promise<TemplateStudioModelCatalog>;
+  getModelCatalogForProfile(input: ProviderProfileModelCatalogRequest): Promise<TemplateStudioModelCatalog>;
+  testProfile(input: ProviderProfileTestRequest): Promise<ProviderConnectionTestResult>;
   dispose(): Promise<void>;
 }
 
@@ -511,6 +531,43 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
 
   async getModelCatalog(input: TemplateStudioModelCatalogRequest): Promise<TemplateStudioModelCatalog> {
     return loadTemplateStudioModelCatalog(input);
+  }
+
+  async getModelCatalogForProfile(input: ProviderProfileModelCatalogRequest): Promise<TemplateStudioModelCatalog> {
+    return loadModelCatalogForProfile(input);
+  }
+
+  async testProfile(input: ProviderProfileTestRequest): Promise<ProviderConnectionTestResult> {
+    const { provider, modelId } = await createLanguageProviderForProfile({
+      configDirectory: input.configDirectory,
+      selectedProfile: input.profile,
+      modelId: input.modelId,
+    });
+    const toolCount = Object.keys(provider.tools).length;
+    const model = provider.languageModel(modelId);
+
+    try {
+      const result = await generateText({
+        model,
+        system: buildProviderTestSystemPrompt(),
+        prompt: input.prompt,
+        tools: getOptionalToolSet(provider.tools),
+      });
+
+      return {
+        profileId: input.profile.id,
+        providerType: input.profile.providerType,
+        providerKind: input.profile.binding.kind,
+        providerLabel: input.profile.binding.label,
+        modelId: modelId || undefined,
+        prompt: input.prompt,
+        responseText: result.text.trim(),
+        toolCount,
+        testedAt: new Date().toISOString(),
+      };
+    } finally {
+      await cleanupProvider(provider);
+    }
   }
 
   dispose(): Promise<void> {

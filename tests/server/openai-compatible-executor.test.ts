@@ -460,13 +460,14 @@ describe("OpenAICompatibleMemberExecutor", () => {
     expect(onStatus).toHaveBeenCalledWith("Compaction completed.");
     expect(onComplete).toHaveBeenCalledWith("done", "stop", {
       nextOpenAICompatibleConversation: expect.objectContaining({
+        summary: expect.objectContaining({
+          tailMessageCount: 10,
+          modelId: "gpt-4.1-nano",
+        }),
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: "assistant",
-            summary: expect.objectContaining({
-              tailMessageCount: 10,
-              modelId: "gpt-4.1-nano",
-            }),
+            content: "<analysis>compaction</analysis>\n\n1. Primary Request and Intent\n- summary",
           }),
           expect.objectContaining({
             role: "user",

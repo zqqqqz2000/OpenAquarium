@@ -41,7 +41,10 @@ describe("prepareOpenAICompatibleConversation", () => {
                 type: "tool-result",
                 toolCallId: "old_tool",
                 toolName: "old_tool",
-                output: "tiny",
+                output: {
+                  type: "text",
+                  value: "tiny",
+                },
               },
             ],
           },
@@ -61,7 +64,10 @@ describe("prepareOpenAICompatibleConversation", () => {
                 type: "tool-result",
                 toolCallId: "tail_tool",
                 toolName: "tail_tool",
-                output: "this tail output is definitely too large",
+                output: {
+                  type: "text",
+                  value: "this tail output is definitely too large",
+                },
               },
             ],
           },
@@ -83,14 +89,44 @@ describe("prepareOpenAICompatibleConversation", () => {
       throw new Error("Expected tool messages");
     }
 
-    expect(oldToolMessage.content[0]?.offload?.path).toBeTruthy();
-    expect(tailToolMessage.content[0]?.offload?.path).toBeTruthy();
-    expect(oldToolMessage.content[0]?.output).toBe("tiny");
-    expect(tailToolMessage.content[0]?.output).toBe("this tail output is definitely too large");
+    const persistedOldToolResult = oldToolMessage.content[0];
+    const persistedTailToolResult = tailToolMessage.content[0];
+    if (
+      persistedOldToolResult?.type !== "tool-result"
+      || persistedTailToolResult?.type !== "tool-result"
+    ) {
+      throw new Error("Expected persisted tool results");
+    }
 
-    const oldOffloadPath = oldToolMessage.content[0]?.offload?.path;
-    const tailOffloadPath = tailToolMessage.content[0]?.offload?.path;
-    if (!oldOffloadPath || !tailOffloadPath) {
+    expect(persistedOldToolResult.output).toEqual({
+      type: "text",
+      value: "tiny",
+    });
+    expect(persistedTailToolResult.output).toEqual({
+      type: "text",
+      value: "this tail output is definitely too large",
+    });
+
+    const visibleOldToolMessage = prepared.modelMessages[1];
+    const visibleTailToolMessage = prepared.modelMessages[11];
+    if (visibleOldToolMessage?.role !== "tool" || visibleTailToolMessage?.role !== "tool") {
+      throw new Error("Expected visible tool messages");
+    }
+
+    const oldPlaceholder = visibleOldToolMessage.content[0];
+    const tailPlaceholder = visibleTailToolMessage.content[0];
+    if (
+      oldPlaceholder?.type !== "tool-result"
+      || tailPlaceholder?.type !== "tool-result"
+      || oldPlaceholder.output.type !== "text"
+      || tailPlaceholder.output.type !== "text"
+    ) {
+      throw new Error("Expected text placeholders");
+    }
+
+    const oldOffloadPath = oldPlaceholder.output.value.match(/\[Tool result offloaded to file: (.+) \(\d+ chars\)/u)?.[1];
+    const tailOffloadPath = tailPlaceholder.output.value.match(/\[Tool result offloaded to file: (.+) \(\d+ chars\)/u)?.[1];
+    if (typeof oldOffloadPath !== "string" || typeof tailOffloadPath !== "string") {
       throw new Error("Expected offload paths");
     }
 

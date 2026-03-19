@@ -1,8 +1,9 @@
+import type { ModelMessage } from "@ai-sdk/provider-utils";
+
 import type {
   MemberTask,
   OpenAICompatibleConversationState,
   OpenAICompatibleProviderBinding,
-  PersistedOpenAICompatibleMessage,
   Project,
   ProviderBinding,
   Room,
@@ -36,7 +37,7 @@ export interface ExecutionRequest {
   snapshot: WorkspaceSnapshot;
   prompt: string;
   promptTraceContent?: string;
-  messageHistory?: PersistedOpenAICompatibleMessage[];
+  messageHistory?: ModelMessage[];
   openAICompatibleConversation?: OpenAICompatibleConversationState;
 }
 

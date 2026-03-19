@@ -535,4 +535,92 @@ describe("workspace persistence state normalization", () => {
     expect(loaded?.watchers.watcher_a.lastConsumedMessageId).toBe("message_b");
     expect(loaded?.watchers.watcher_a.lastConsumedStateAt).toBe("2026-03-10T10:00:03.000Z");
   });
+
+  it("drops legacy openai-compatible conversation history that no longer matches ModelMessage", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-persistence-openai-conversation-"));
+    const filePath = path.join(directory, "state.json");
+
+    const snapshot = {
+      projects: {},
+      projectOrder: [],
+      rooms: {
+        room_a: {
+          id: "room_a",
+          projectId: "project_a",
+          name: "A",
+          topic: "topic a",
+          templateId: "template_a",
+          memberIds: ["member_a"],
+          watcherIds: [],
+          entryMemberId: "member_a",
+          createdAt: "2026-03-10T10:00:00.000Z",
+        },
+      },
+      roomOrderByProject: {},
+      templates: {},
+      templateOrder: [],
+      members: {
+        member_a: {
+          id: "member_a",
+          roomId: "room_a",
+          blueprintId: "blueprint_a",
+          roleId: "blueprint_a",
+          roleName: "member-a",
+          name: "Member A",
+          handle: "member-a",
+          summary: "summary",
+          prompt: "prompt",
+          accentTone: "paper",
+          allowedSkillIds: [],
+          provider: {
+            kind: "codex-acp",
+            label: "Codex ACP",
+            command: CODEX_ACP_NPX_COMMAND,
+            args: CODEX_ACP_NPX_ARGS,
+            env: {
+              [CODEX_ACP_MODE_ENV_KEY]: CODEX_ACP_DEFAULT_MODE,
+            },
+            capabilities: ["prompt"],
+          },
+          acceptsDirectMessages: true,
+          isEntryMember: true,
+          status: "idle",
+          openAICompatibleConversation: {
+            messages: [
+              {
+                role: "tool",
+                content: [
+                  {
+                    type: "tool-result",
+                    toolCallId: "legacy_tool",
+                    toolName: "legacy_tool",
+                    output: "legacy string output",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      messages: {},
+      messageOrderByRoom: {
+        room_a: [],
+      },
+      tasks: {},
+      taskTraces: {},
+      taskTraceOrderByTask: {},
+      watchers: {},
+      selection: {
+        roomId: "room_a",
+      },
+      currentUserName: "You",
+    } as unknown as WorkspaceSnapshot;
+
+    await writeFile(filePath, JSON.stringify({ savedAt: "2026-03-10T10:00:04.000Z", snapshot }, null, 2), "utf8");
+
+    const persistence = new WorkspacePersistence(filePath);
+    const loaded = await persistence.load();
+
+    expect(loaded?.members.member_a.openAICompatibleConversation).toBeUndefined();
+  });
 });

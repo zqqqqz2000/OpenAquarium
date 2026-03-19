@@ -1,3 +1,5 @@
+import type { ModelMessage } from "@ai-sdk/provider-utils";
+
 import type { JsonValue } from "@/lib/json";
 
 export type ProjectId = string;
@@ -81,66 +83,16 @@ export type OpenAICompatibleMCPServer =
   | OpenAICompatibleStdioMCPServer
   | OpenAICompatibleRemoteMCPServer;
 
-export interface PersistedOpenAICompatibleTextPart {
-  type: "text";
-  text: string;
-}
-
-export interface PersistedOpenAICompatibleToolCallPart {
-  type: "tool-call";
-  toolCallId: string;
-  toolName: string;
-  input: JsonValue;
-}
-
-export interface PersistedOpenAICompatibleToolResultPart {
-  type: "tool-result";
-  toolCallId: string;
-  toolName: string;
-  output: JsonValue;
-  offload?: PersistedOpenAICompatibleToolResultOffload;
-}
-
-export interface PersistedOpenAICompatibleToolResultOffload {
-  path: string;
-  chars: number;
-}
-
-export interface PersistedOpenAICompatibleConversationSummary {
+export interface OpenAICompatibleConversationSummary {
   compactedAt: string;
   sourceMessageCount: number;
   tailMessageCount: number;
   modelId: string;
 }
 
-export type PersistedOpenAICompatibleAssistantPart =
-  | PersistedOpenAICompatibleTextPart
-  | PersistedOpenAICompatibleToolCallPart
-  | PersistedOpenAICompatibleToolResultPart;
-
-export interface PersistedOpenAICompatibleUserMessage {
-  role: "user";
-  content: string;
-}
-
-export interface PersistedOpenAICompatibleAssistantMessage {
-  role: "assistant";
-  content: string | PersistedOpenAICompatibleAssistantPart[];
-  summary?: PersistedOpenAICompatibleConversationSummary;
-}
-
-export interface PersistedOpenAICompatibleToolMessage {
-  role: "tool";
-  content: PersistedOpenAICompatibleToolResultPart[];
-}
-
-export type PersistedOpenAICompatibleMessage =
-  | PersistedOpenAICompatibleUserMessage
-  | PersistedOpenAICompatibleAssistantMessage
-  | PersistedOpenAICompatibleToolMessage;
-
 export interface OpenAICompatibleConversationState {
-  messages: PersistedOpenAICompatibleMessage[];
+  messages: ModelMessage[];
+  summary?: OpenAICompatibleConversationSummary;
 }
 
 export interface ACPProviderModelProfile {
@@ -476,6 +428,18 @@ export interface TemplateStudioModelCatalog {
   availableModels: TemplateStudioModelOption[];
   currentModelId?: string;
   unavailableMessage?: string;
+}
+
+export interface ProviderConnectionTestResult {
+  profileId: ProviderModelProfileId;
+  providerType: ProviderProfileType;
+  providerKind: ProviderProfileKind;
+  providerLabel: string;
+  modelId?: string;
+  prompt: string;
+  responseText: string;
+  toolCount: number;
+  testedAt: string;
 }
 
 export interface UpsertWatcherInput {

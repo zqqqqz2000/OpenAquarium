@@ -3,12 +3,15 @@ import path from "node:path";
 
 import type {
   ChatMessage,
+  OpenAICompatibleConversationState,
+  OpenAICompatibleConversationSummary,
   ProviderBinding,
   TeamMember,
   TeamMemberBlueprint,
   TeamTemplate,
   WorkspaceSnapshot,
 } from "../domain/model";
+import { modelMessageSchema } from "ai";
 import { getErrorCode, type RuntimeError } from "./error-utils";
 import {
   CODEX_ACP_NPX_ARGS,
@@ -41,6 +44,41 @@ function normalizeWorkspaceSnapshot(
   snapshot: WorkspaceSnapshot,
 ): WorkspaceSnapshot {
   const legacyPlaceholderCommands = new Set(["clerk-acp", "research-acp"]);
+
+  const isOpenAICompatibleConversationSummary = (
+    value: OpenAICompatibleConversationState["summary"],
+  ): value is OpenAICompatibleConversationSummary => (
+    Boolean(value)
+    && typeof value?.compactedAt === "string"
+    && typeof value?.sourceMessageCount === "number"
+    && typeof value?.tailMessageCount === "number"
+    && typeof value?.modelId === "string"
+  );
+
+  const normalizeOpenAICompatibleConversation = (
+    conversation: TeamMember["openAICompatibleConversation"],
+  ): TeamMember["openAICompatibleConversation"] => {
+    if (!conversation || !Array.isArray(conversation.messages)) {
+      return undefined;
+    }
+
+    const messages = conversation.messages.flatMap((message) => {
+      const parsed = modelMessageSchema.safeParse(message);
+      return parsed.success ? [parsed.data] : [];
+    });
+    const summary = isOpenAICompatibleConversationSummary(conversation.summary)
+      ? conversation.summary
+      : undefined;
+
+    if (messages.length === 0 && !summary) {
+      return undefined;
+    }
+
+    return {
+      messages,
+      summary,
+    };
+  };
 
   const normalizeCodexArgs = (args: string[]): string[] => {
     const normalized: string[] = [];
@@ -119,6 +157,9 @@ function normalizeWorkspaceSnapshot(
     allowedSkillIds: member.allowedSkillIds ?? [],
     provider: normalizeProvider(member.provider),
     providerSessionId: member.providerSessionId,
+    openAICompatibleConversation: normalizeOpenAICompatibleConversation(
+      member.openAICompatibleConversation,
+    ),
   });
 
   const normalizeMessage = (message: ChatMessage): ChatMessage => ({

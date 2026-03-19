@@ -1,8 +1,9 @@
+import type { ModelMessage } from "@ai-sdk/provider-utils";
+
 import type {
   ChatMessage,
   MemberTask,
   OpenAICompatibleProviderBinding,
-  PersistedOpenAICompatibleMessage,
   Project,
   ProviderBinding,
   Room,
@@ -38,7 +39,7 @@ export interface BuiltTaskPrompt {
   prompt: string;
   promptMode: PromptMode;
   promptTraceContent: string;
-  messageHistory?: PersistedOpenAICompatibleMessage[];
+  messageHistory?: ModelMessage[];
 }
 
 function summarizeHandles(prefix: string, memberIds: string[], snapshot: WorkspaceSnapshot, marker = "@"): string {
@@ -670,7 +671,7 @@ export function buildTaskPromptPayload(args: {
     promptMode: mode,
     messageHistory,
     promptTraceContent: formatConversationTrace({
-      messageHistory,
+      conversation: member.openAICompatibleConversation,
       currentUserMessage: buildPersistedUserTurnMessage(prompt),
     }),
   };

@@ -3,19 +3,20 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { LanguageModelV3 } from "@ai-sdk/provider";
-import type { ModelMessage } from "@ai-sdk/provider-utils";
+import type {
+  AssistantModelMessage,
+  ModelMessage,
+  ToolModelMessage,
+  ToolResultOutput,
+  ToolResultPart,
+  UserModelMessage,
+} from "@ai-sdk/provider-utils";
 import { streamText } from "ai";
 
 import type {
   OpenAICompatibleConversationState,
   OpenAICompatibleModelLimit,
   OpenAICompatibleProviderBinding,
-  PersistedOpenAICompatibleAssistantMessage,
-  PersistedOpenAICompatibleAssistantPart,
-  PersistedOpenAICompatibleMessage,
-  PersistedOpenAICompatibleToolMessage,
-  PersistedOpenAICompatibleToolResultPart,
-  PersistedOpenAICompatibleUserMessage,
 } from "../domain/model";
 import type { ExecutorCallbacks } from "./executor";
 import {
@@ -38,14 +39,48 @@ interface OffloadFlags {
   hasTailToolOffloads: boolean;
 }
 
+interface ToolResultOffload {
+  path: string;
+  chars: number;
+}
+
 export interface PreparedOpenAICompatibleConversation {
   conversation: OpenAICompatibleConversationState;
   modelMessages: ModelMessage[];
   compacted: boolean;
 }
 
-function normalizeToolOutputText(output: PersistedOpenAICompatibleToolResultPart["output"]): string {
-  return typeof output === "string" ? output : JSON.stringify(output, null, 2);
+function normalizeToolOutputText(output: ToolResultOutput): string {
+  switch (output.type) {
+    case "text":
+    case "error-text":
+      return output.value;
+    case "json":
+    case "error-json":
+      return JSON.stringify(output.value, null, 2);
+    case "execution-denied":
+      return output.reason ?? "execution denied";
+    case "content":
+      return output.value.map((part) => {
+        switch (part.type) {
+          case "text":
+            return part.text;
+          case "file-data":
+            return `[File ${part.mediaType}]`;
+          case "file-url":
+            return "[File]";
+          case "media":
+            return `[Media ${part.mediaType}]`;
+        }
+      }).join("\n");
+  }
+}
+
+function buildOffloadPlaceholder(offload: ToolResultOffload): ToolResultOutput {
+  return {
+    type: "text",
+    value: `[Tool result offloaded to file: ${offload.path} (${offload.chars} chars). Use oa_read_file to inspect the exact content if needed.]`,
+  };
 }
 
 function slugifyToken(value: string): string {
@@ -56,11 +91,11 @@ function slugifyToken(value: string): string {
 function buildOffloadFilePath(args: {
   workspaceRoot: string;
   memberId: string;
-  part: PersistedOpenAICompatibleToolResultPart;
+  part: ToolResultPart;
   content: string;
 }): string {
   const hash = createHash("sha1").update(`${args.part.toolCallId}\n${args.part.toolName}\n${args.content}`).digest("hex").slice(0, 16);
-  const extension = typeof args.part.output === "string" ? "txt" : "json";
+  const extension = args.part.output.type === "text" || args.part.output.type === "error-text" ? "txt" : "json";
 
   return path.join(
     args.workspaceRoot,
@@ -83,10 +118,10 @@ function resolveReservedTokens(binding: OpenAICompatibleProviderBinding): number
 async function ensureOffload(args: {
   workspaceRoot: string;
   memberId: string;
-  part: PersistedOpenAICompatibleToolResultPart;
-}): Promise<PersistedOpenAICompatibleToolResultPart> {
+  part: ToolResultPart;
+}): Promise<ToolResultOffload> {
   const content = normalizeToolOutputText(args.part.output);
-  const filePath = args.part.offload?.path ?? buildOffloadFilePath({
+  const filePath = buildOffloadFilePath({
     workspaceRoot: args.workspaceRoot,
     memberId: args.memberId,
     part: args.part,
@@ -96,79 +131,90 @@ async function ensureOffload(args: {
   await writeFile(filePath, content, "utf8");
 
   return {
-    ...args.part,
-    offload: {
-      path: filePath,
-      chars: content.length,
-    },
+    path: filePath,
+    chars: content.length,
   };
 }
 
-async function transformAssistantParts(args: {
+async function transformAssistantContent(args: {
   workspaceRoot: string;
   memberId: string;
-  parts: PersistedOpenAICompatibleAssistantPart[];
+  content: AssistantModelMessage["content"];
   olderThanTail: boolean;
   offloadThresholdChars: number;
-}): Promise<{ parts: PersistedOpenAICompatibleAssistantPart[]; offloaded: boolean }> {
-  let offloaded = false;
-  const nextParts: PersistedOpenAICompatibleAssistantPart[] = [];
+}): Promise<{ content: AssistantModelMessage["content"]; offloaded: boolean }> {
+  if (typeof args.content === "string") {
+    return {
+      content: args.content,
+      offloaded: false,
+    };
+  }
 
-  for (const part of args.parts) {
+  let offloaded = false;
+  const nextContent = await Promise.all(args.content.map(async (part) => {
     if (part.type !== "tool-result") {
-      nextParts.push(part);
-      continue;
+      return part;
     }
 
     const outputText = normalizeToolOutputText(part.output);
     const shouldOffload = args.olderThanTail || outputText.length > args.offloadThresholdChars;
     if (!shouldOffload) {
-      nextParts.push(part);
-      continue;
+      return part;
     }
 
     offloaded = true;
-    nextParts.push(await ensureOffload({
+    const offload = await ensureOffload({
       workspaceRoot: args.workspaceRoot,
       memberId: args.memberId,
       part,
-    }));
-  }
+    });
+
+    return {
+      ...part,
+      output: buildOffloadPlaceholder(offload),
+    };
+  }));
 
   return {
-    parts: nextParts,
+    content: nextContent,
     offloaded,
   };
 }
 
-async function transformToolParts(args: {
+async function transformToolContent(args: {
   workspaceRoot: string;
   memberId: string;
-  parts: PersistedOpenAICompatibleToolResultPart[];
+  content: ToolModelMessage["content"];
   olderThanTail: boolean;
   offloadThresholdChars: number;
-}): Promise<{ parts: PersistedOpenAICompatibleToolResultPart[]; offloaded: boolean }> {
+}): Promise<{ content: ToolModelMessage["content"]; offloaded: boolean }> {
   let offloaded = false;
-  const nextParts: PersistedOpenAICompatibleToolResultPart[] = [];
+  const nextContent = await Promise.all(args.content.map(async (part) => {
+    if (part.type !== "tool-result") {
+      return part;
+    }
 
-  for (const part of args.parts) {
     const outputText = normalizeToolOutputText(part.output);
     const shouldOffload = args.olderThanTail || outputText.length > args.offloadThresholdChars;
     if (!shouldOffload) {
-      nextParts.push(part);
-      continue;
+      return part;
     }
 
     offloaded = true;
-    nextParts.push(await ensureOffload({
+    const offload = await ensureOffload({
       workspaceRoot: args.workspaceRoot,
       memberId: args.memberId,
       part,
-    }));
-  }
+    });
+
+    return {
+      ...part,
+      output: buildOffloadPlaceholder(offload),
+    };
+  }));
 
   return {
-    parts: nextParts,
+    content: nextContent,
     offloaded,
   };
 }
@@ -179,10 +225,10 @@ async function applyToolResultOffloads(args: {
   conversation: OpenAICompatibleConversationState;
   offloadThresholdChars: number;
   tailMessageCount?: number;
-}): Promise<{ conversation: OpenAICompatibleConversationState; flags: OffloadFlags }> {
+}): Promise<{ messages: ModelMessage[]; flags: OffloadFlags }> {
   const tailMessageCount = args.tailMessageCount ?? DEFAULT_TAIL_MESSAGE_COUNT;
   const tailStartIndex = Math.max(0, args.conversation.messages.length - tailMessageCount);
-  const nextMessages: PersistedOpenAICompatibleMessage[] = [];
+  const nextMessages: ModelMessage[] = [];
   const flags: OffloadFlags = {
     hasAnyOffloads: false,
     hasOlderToolOffloads: false,
@@ -191,11 +237,12 @@ async function applyToolResultOffloads(args: {
 
   for (const [messageIndex, message] of args.conversation.messages.entries()) {
     const olderThanTail = messageIndex < tailStartIndex;
-    if (message.role === "assistant" && Array.isArray(message.content)) {
-      const transformed = await transformAssistantParts({
+
+    if (message.role === "assistant") {
+      const transformed = await transformAssistantContent({
         workspaceRoot: args.workspaceRoot,
         memberId: args.memberId,
-        parts: message.content,
+        content: message.content,
         olderThanTail,
         offloadThresholdChars: args.offloadThresholdChars,
       });
@@ -209,16 +256,16 @@ async function applyToolResultOffloads(args: {
       }
       nextMessages.push({
         ...message,
-        content: transformed.parts,
-      } satisfies PersistedOpenAICompatibleAssistantMessage);
+        content: transformed.content,
+      });
       continue;
     }
 
     if (message.role === "tool") {
-      const transformed = await transformToolParts({
+      const transformed = await transformToolContent({
         workspaceRoot: args.workspaceRoot,
         memberId: args.memberId,
-        parts: message.content,
+        content: message.content,
         olderThanTail,
         offloadThresholdChars: args.offloadThresholdChars,
       });
@@ -232,8 +279,8 @@ async function applyToolResultOffloads(args: {
       }
       nextMessages.push({
         ...message,
-        content: transformed.parts,
-      } satisfies PersistedOpenAICompatibleToolMessage);
+        content: transformed.content,
+      });
       continue;
     }
 
@@ -241,9 +288,7 @@ async function applyToolResultOffloads(args: {
   }
 
   return {
-    conversation: {
-      messages: nextMessages,
-    },
+    messages: nextMessages,
     flags,
   };
 }
@@ -346,16 +391,22 @@ async function compactConversation(args: {
       {
         role: "system",
         content: "[OA_COMPACTION_AGENT]\nYou are the dedicated conversation compaction agent. Summarize the conversation so the next turn can continue without losing important context. Do not call tools. Do not continue the task yourself.",
-      } as ModelMessage,
+      },
       ...toModelMessages(args.conversation.messages),
       {
         role: "user",
         content: compactionPrompt,
-      } as ModelMessage,
+      },
     ],
   });
   const summaryText = (await result.text).trim();
   const tailMessages = args.conversation.messages.slice(-tailMessageCount);
+  const summary = {
+    compactedAt: new Date().toISOString(),
+    sourceMessageCount: args.conversation.messages.length,
+    tailMessageCount: tailMessages.length,
+    modelId: compactionModelId,
+  };
 
   await args.callbacks.onStatus("Compaction completed.");
 
@@ -363,15 +414,11 @@ async function compactConversation(args: {
     messages: [
       buildConversationSummaryMessage({
         content: summaryText.length > 0 ? summaryText : "Summary unavailable.",
-        summary: {
-          compactedAt: new Date().toISOString(),
-          sourceMessageCount: args.conversation.messages.length,
-          tailMessageCount: tailMessages.length,
-          modelId: compactionModelId,
-        },
+        summary,
       }),
       ...tailMessages,
     ],
+    summary,
   };
 }
 
@@ -394,7 +441,7 @@ export async function prepareOpenAICompatibleConversation(args: {
   provider: LanguageModelFactory;
   modelId: string;
   conversation: OpenAICompatibleConversationState;
-  currentUserMessage: PersistedOpenAICompatibleUserMessage;
+  currentUserMessage: UserModelMessage;
   abortSignal: AbortSignal;
   callbacks: Pick<ExecutorCallbacks, "onStatus">;
   forceCompaction?: boolean;
@@ -402,27 +449,24 @@ export async function prepareOpenAICompatibleConversation(args: {
 }): Promise<PreparedOpenAICompatibleConversation> {
   const tailMessageCount = args.tailMessageCount ?? DEFAULT_TAIL_MESSAGE_COUNT;
   let compacted = false;
-  const rawConversation = structuredClone(args.conversation);
+  let preparedConversation = structuredClone(args.conversation);
 
   let visibleConversation = await applyToolResultOffloads({
     workspaceRoot: args.workspaceRoot,
     memberId: args.memberId,
-    conversation: structuredClone(rawConversation),
+    conversation: preparedConversation,
     offloadThresholdChars: resolveOffloadThresholdChars(args.binding),
     tailMessageCount,
   });
 
   let instructions = buildExecutionInstructions({
-    hasSummary: visibleConversation.conversation.messages.some(
-      (message) => message.role === "assistant" && Boolean(message.summary),
-    ),
+    hasSummary: Boolean(preparedConversation.summary),
     flags: visibleConversation.flags,
   });
 
   let modelMessages = [
-    ...toModelMessages(visibleConversation.conversation.messages, {
+    ...toModelMessages(visibleConversation.messages, {
       instructions,
-      useOffloadedToolResults: true,
     }),
     args.currentUserMessage as ModelMessage,
   ];
@@ -433,16 +477,16 @@ export async function prepareOpenAICompatibleConversation(args: {
       binding: args.binding,
       modelId: args.modelId,
       modelMessages,
-      conversation: rawConversation,
+      conversation: preparedConversation,
     });
 
-  if (needsCompaction && rawConversation.messages.length > tailMessageCount) {
+  if (needsCompaction && preparedConversation.messages.length > tailMessageCount) {
     compacted = true;
-    const compactedConversation = await compactConversation({
+    preparedConversation = await compactConversation({
       binding: args.binding,
       provider: args.provider,
       currentModelId: args.modelId,
-      conversation: rawConversation,
+      conversation: preparedConversation,
       abortSignal: args.abortSignal,
       callbacks: args.callbacks,
       tailMessageCount,
@@ -451,7 +495,7 @@ export async function prepareOpenAICompatibleConversation(args: {
     visibleConversation = await applyToolResultOffloads({
       workspaceRoot: args.workspaceRoot,
       memberId: args.memberId,
-      conversation: compactedConversation,
+      conversation: preparedConversation,
       offloadThresholdChars: resolveOffloadThresholdChars(args.binding),
       tailMessageCount,
     });
@@ -462,16 +506,15 @@ export async function prepareOpenAICompatibleConversation(args: {
     });
 
     modelMessages = [
-      ...toModelMessages(visibleConversation.conversation.messages, {
+      ...toModelMessages(visibleConversation.messages, {
         instructions,
-        useOffloadedToolResults: true,
       }),
       args.currentUserMessage as ModelMessage,
     ];
   }
 
   return {
-    conversation: visibleConversation.conversation,
+    conversation: preparedConversation,
     modelMessages,
     compacted,
   };
