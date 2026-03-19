@@ -22,9 +22,11 @@ import {
 import { getMemberHistoryFilePath, getRoomContextDirectoryPath, getRoomTranscriptFilePath } from "./room-transcript-files";
 import { buildPersistedUserTurnMessage, formatConversationTrace } from "./openai-compatible-conversation";
 
-const FULL_PROMPT_TRANSCRIPT_LIMIT = 14;
+const FULL_PROMPT_TRANSCRIPT_LIMIT = 30;
+const FULL_PROMPT_TRANSCRIPT_CHAR_LIMIT = 12_000;
 const DELTA_PROMPT_TRANSCRIPT_LIMIT = 6;
 const PROJECT_TOPIC_PREVIEW_LIMIT = 600;
+const TRANSCRIPT_LINE_TRUNCATION_SUFFIX = "… (truncated; read room transcript/context files for the full text)";
 export const MEMBER_FULL_PROMPT_REFRESH_INTERVAL = 50;
 
 type PromptMode = "full" | "delta";
@@ -71,6 +73,82 @@ function summarizeProjectTopic(topic: string): string {
   }
 
   return `${normalized.slice(0, PROJECT_TOPIC_PREVIEW_LIMIT)}… (truncated; read room transcript/context files for the full topic if needed)`;
+}
+
+function truncateLineToCharLimit(line: string, charLimit: number): string {
+  if (line.length <= charLimit) {
+    return line;
+  }
+
+  if (charLimit <= TRANSCRIPT_LINE_TRUNCATION_SUFFIX.length) {
+    return TRANSCRIPT_LINE_TRUNCATION_SUFFIX.slice(0, Math.max(0, charLimit));
+  }
+
+  return `${line.slice(0, charLimit - TRANSCRIPT_LINE_TRUNCATION_SUFFIX.length)}${TRANSCRIPT_LINE_TRUNCATION_SUFFIX}`;
+}
+
+function selectMostRecentLinesWithinCharLimit(lines: string[], charLimit: number): {
+  lines: string[];
+  truncated: boolean;
+} {
+  if (charLimit <= 0) {
+    return {
+      lines: [],
+      truncated: lines.length > 0,
+    };
+  }
+
+  const selectedLines: string[] = [];
+  let totalChars = 0;
+  let truncated = false;
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const separatorChars = selectedLines.length > 0 ? 1 : 0;
+    const candidate = lines[index];
+    if (totalChars + separatorChars + candidate.length <= charLimit) {
+      selectedLines.unshift(candidate);
+      totalChars += separatorChars + candidate.length;
+      continue;
+    }
+
+    if (selectedLines.length === 0) {
+      const truncatedCandidate = truncateLineToCharLimit(candidate, charLimit);
+      if (truncatedCandidate.length > 0) {
+        selectedLines.unshift(truncatedCandidate);
+      }
+    }
+    truncated = true;
+    break;
+  }
+
+  if (!truncated && selectedLines.length < lines.length) {
+    truncated = true;
+  }
+
+  return {
+    lines: selectedLines,
+    truncated,
+  };
+}
+
+function buildBoundedTranscriptSection(args: {
+  summaries: string[];
+  messageLimit: number;
+  charLimit: number;
+}): {
+  content: string;
+  note?: string;
+} {
+  const boundedByMessageCount = args.summaries.slice(-args.messageLimit);
+  const boundedByChars = selectMostRecentLinesWithinCharLimit(boundedByMessageCount, args.charLimit);
+  const truncated = boundedByMessageCount.length < args.summaries.length || boundedByChars.truncated;
+
+  return {
+    content: boundedByChars.lines.join("\n") || "(none)",
+    note: truncated
+      ? `limited to the latest ${args.messageLimit} visible room messages and ${args.charLimit} chars; read the room transcript/member history files above with oa_read_file if you need older or more detailed context.`
+      : undefined,
+  };
 }
 
 function describeMember(member: TeamMember): string {
@@ -331,7 +409,7 @@ function buildSharedSections(args: {
     "oa_send_direct_message: preferred for private teammate DMs and replies to @user.",
     "oa_role_add_employee / oa_role_remove_employee / oa_role_rename_employee: structured staffing tools; check the returned `ok` field before claiming success.",
     "oa_room_state: inspect transcript and member/task state before retrying a send.",
-    "oa_read_file: read transcript files or source files when you need deeper context.",
+    "oa_read_file: read room transcript files, member history files, or source files when you need deeper context.",
     "apply_patch: preferred for precise file edits when you already know the change.",
     "exec_command / write_stdin / read_thread_terminal: preferred for iterative terminal work instead of one-shot shelling.",
     "view_image: inspect local image metadata when a task references screenshots or assets.",
@@ -411,13 +489,11 @@ function buildFullPrompt(args: {
 }): string {
   const { room, snapshot, member } = args;
   const transcriptMessages = getPromptVisibleRoomMessages(snapshot, room, member);
-  const visibleMessages =
-    args.transcriptLimit === undefined
-      ? transcriptMessages
-      : transcriptMessages.slice(-args.transcriptLimit);
-  const recentMessages = visibleMessages
-    .map((message) => summarizeMessage(snapshot, message))
-    .join("\n");
+  const transcriptSection = buildBoundedTranscriptSection({
+    summaries: transcriptMessages.map((message) => summarizeMessage(snapshot, message)),
+    messageLimit: args.transcriptLimit ?? FULL_PROMPT_TRANSCRIPT_LIMIT,
+    charLimit: FULL_PROMPT_TRANSCRIPT_CHAR_LIMIT,
+  });
   const roster = room.memberIds.map((memberId) => describeMember(snapshot.members[memberId])).join("\n");
   const persistentWatcher = findEnabledPersistentWatcher(snapshot, room, member);
   const persistentWatchRules = persistentWatcher
@@ -441,7 +517,8 @@ function buildFullPrompt(args: {
     roster,
     "",
     args.transcriptLabel ?? "[Recent Room Transcript]",
-    recentMessages || "(none)",
+    ...(transcriptSection.note ? [transcriptSection.note] : []),
+    transcriptSection.content,
     "",
     "[Communication Rules]",
     "1. Prefer the dedicated ACP tools for room replies, DMs, watcher actions, and room-state checks.",
@@ -451,7 +528,7 @@ function buildFullPrompt(args: {
     "5. Prefer group messages for user-facing progress updates; use direct messages only for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
     "6. Do not paste reasoning, tool narration, or step-by-step plans into room or DM messages, and do not resend the same room or DM content unless room state confirms it is missing.",
     "7. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
-    "8. Treat the shared room context directory as the durable source for older room transcript and member history. Read the files when watcher context or the current transcript is insufficient. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas.",
+    "8. Treat the shared room context directory as the durable source for older room transcript and member history. The inline room transcript below is a bounded excerpt, not the full record. Read the files with oa_read_file when watcher context or the current transcript is insufficient. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas.",
     ...persistentWatchRules,
     "",
     ...buildAvailableSkillsSection(member, args.workspaceRoot),
@@ -570,8 +647,7 @@ export function buildTaskPromptPayload(args: {
         ...args,
         routingNote: addressedRoutingNote,
         taskSequence,
-        transcriptLimit: args.member.provider.kind === "openai-compatible" ? undefined : FULL_PROMPT_TRANSCRIPT_LIMIT,
-        transcriptLabel: args.member.provider.kind === "openai-compatible" ? "[Full Room Transcript]" : undefined,
+        transcriptLimit: FULL_PROMPT_TRANSCRIPT_LIMIT,
       })
     : buildIncrementalPrompt({
         ...args,

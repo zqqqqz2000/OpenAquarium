@@ -697,6 +697,118 @@ describe("buildTaskPrompt", () => {
     expect(regularPrompt).not.toContain("Only summarize unseen messages and owner/status changes.");
   });
 
+  it("limits full prompts to the latest 30 visible room messages", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "lead");
+    const task = Object.values(snapshot.tasks).find((candidate) => candidate.memberId === lead?.id);
+
+    if (!lead || !task) {
+      throw new Error("Expected the lead member and its task");
+    }
+
+    const olderMessageIds = Array.from({ length: 35 }, (_, index) => `message_old_${index}`);
+    const olderMessages = Object.fromEntries(
+      olderMessageIds.map((messageId, index) => [
+        messageId,
+        {
+          id: messageId,
+          roomId: room.id,
+          author: { kind: "user" as const, id: `user_old_${index}`, label: "You" },
+          content: `older transcript message ${index}`,
+          createdAt: `2026-03-10T11:${String(index).padStart(2, "0")}:00.000Z`,
+          transport: "group" as const,
+          status: "sent" as const,
+          mentionedMemberIds: [],
+          quotedMemberIds: [],
+          recipientMemberIds: [],
+        },
+      ]),
+    );
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room,
+      member: lead,
+      task,
+      snapshot: {
+        ...snapshot,
+        messages: {
+          ...olderMessages,
+          ...snapshot.messages,
+        },
+        messageOrderByRoom: {
+          ...snapshot.messageOrderByRoom,
+          [room.id]: [...olderMessageIds, ...(snapshot.messageOrderByRoom[room.id] ?? [])],
+        },
+      },
+    });
+
+    expect(prompt).toContain("[Recent Room Transcript]");
+    expect(prompt).toContain("limited to the latest 30 visible room messages");
+    expect(prompt).not.toContain("older transcript message 0");
+    expect(prompt).not.toContain("older transcript message 5");
+    expect(prompt).toContain("older transcript message 6");
+    expect(prompt).toContain("older transcript message 34");
+  });
+
+  it("drops older transcript messages when the inline transcript hits the char limit", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "lead");
+    const task = Object.values(snapshot.tasks).find((candidate) => candidate.memberId === lead?.id);
+
+    if (!lead || !task) {
+      throw new Error("Expected the lead member and its task");
+    }
+
+    const longMessageIds = Array.from({ length: 20 }, (_, index) => `message_long_${index}`);
+    const longMessages = Object.fromEntries(
+      longMessageIds.map((messageId, index) => [
+        messageId,
+        {
+          id: messageId,
+          roomId: room.id,
+          author: { kind: "user" as const, id: `user_long_${index}`, label: "You" },
+          content: `long transcript chunk ${index} ${"x".repeat(900)}`,
+          createdAt: `2026-03-10T10:${String(index).padStart(2, "0")}:00.000Z`,
+          transport: "group" as const,
+          status: "sent" as const,
+          mentionedMemberIds: [],
+          quotedMemberIds: [],
+          recipientMemberIds: [],
+        },
+      ]),
+    );
+
+    const prompt = buildTaskPrompt({
+      workspaceRoot: process.cwd(),
+      project,
+      room,
+      member: lead,
+      task,
+      snapshot: {
+        ...snapshot,
+        messages: {
+          ...longMessages,
+          ...snapshot.messages,
+        },
+        messageOrderByRoom: {
+          ...snapshot.messageOrderByRoom,
+          [room.id]: [...longMessageIds, ...(snapshot.messageOrderByRoom[room.id] ?? [])],
+        },
+      },
+    });
+
+    expect(prompt).toContain("limited to the latest 30 visible room messages and 12000 chars");
+    expect(prompt).not.toContain("long transcript chunk 0");
+    expect(prompt).toContain("long transcript chunk 19");
+    expect(prompt).toContain("read the room transcript/member history files above with oa_read_file");
+  });
+
   it("keeps room transcript visible for regular members", () => {
     const context = createRuntimeContext(800, "2026-03-10T13:00:00.000Z");
     let snapshot = createSeedWorkspace();
@@ -749,7 +861,7 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain(unrelatedMessage);
   });
 
-  it("keeps the full room transcript for entry members too", () => {
+  it("keeps the bounded room transcript for entry members too", () => {
     const context = createRuntimeContext(820, "2026-03-10T13:10:00.000Z");
     let snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
