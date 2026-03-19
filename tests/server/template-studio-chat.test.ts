@@ -328,19 +328,26 @@ describe("TemplateStudioChatService", () => {
     });
 
     expect(result.assistantMessage).toBe("updated");
-    expect(openAICompatibleProviderMock).toHaveBeenCalledWith({
-      name: "OpenAI-Compatible API",
-      baseURL: "https://example.test/v1",
-      apiKey: "test-key",
-      headers: {
-        "X-Workspace": "OpenAquarium",
-      },
-      transformRequestBody: expect.any(Function),
-    });
-    expect(openAICompatibleLanguageModelMock).toHaveBeenCalledWith("gpt-4.1-mini");
     const createCall = openAICompatibleProviderMock.mock.calls[0]?.[0] as {
+      name: string;
+      baseURL: string;
+      apiKey?: string;
+      headers: Record<string, string>;
       transformRequestBody: (body: Record<string, unknown>) => Record<string, unknown>;
-    };
+    } | undefined;
+    expect(createCall).toBeDefined();
+    if (!createCall) {
+      throw new Error("Expected openai-compatible provider to be created");
+    }
+
+    expect(createCall.name).toBe("OpenAI-Compatible API");
+    expect(createCall.baseURL).toBe("https://example.test/v1");
+    expect(createCall.apiKey).toBe("test-key");
+    expect(createCall.headers).toEqual({
+      "X-Workspace": "OpenAquarium",
+    });
+    expect(typeof createCall.transformRequestBody).toBe("function");
+    expect(openAICompatibleLanguageModelMock).toHaveBeenCalledWith("gpt-4.1-mini");
     expect(createCall.transformRequestBody({ model: "gpt-4.1-mini" })).toEqual({
       model: "gpt-4.1-mini",
       provider: {
@@ -396,13 +403,10 @@ describe("TemplateStudioChatService", () => {
       },
       cwd: "/tmp/openaquarium-config/mcp",
     });
-    expect(generateTextMock).toHaveBeenCalledWith(expect.objectContaining({
-      tools: expect.objectContaining({
-        mcp_echo: expect.objectContaining({
-          description: "Echo via MCP",
-        }),
-      }),
-    }));
+    const generateTextCall = generateTextMock.mock.calls[0]?.[0] as
+      | { tools?: Record<string, { description?: string }> }
+      | undefined;
+    expect(generateTextCall?.tools?.mcp_echo?.description).toBe("Echo via MCP");
     expect(mcpCloseMock).toHaveBeenCalled();
   });
 
@@ -410,7 +414,7 @@ describe("TemplateStudioChatService", () => {
     process.env.OPENAI_API_KEY = "test-key";
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
+      json: () => ({
         data: [
           { id: "gpt-4.1-mini", owned_by: "openai" },
           { id: "gpt-4.1", owned_by: "openai" },
@@ -449,5 +453,57 @@ describe("TemplateStudioChatService", () => {
     });
 
     vi.unstubAllGlobals();
+  });
+
+  it("runs provider connectivity checks against an explicit provider profile", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const { TemplateStudioChatService } =
+      await import("@/server/template-studio-chat");
+    const profile = createOpenAICompatibleProfile();
+    if (profile.providerType !== "openai-compatible") {
+      throw new Error("Expected openai-compatible profile");
+    }
+    profile.binding.mcpServers = [
+      {
+        id: "local-files",
+        transport: "stdio",
+        command: "node",
+        args: ["./mcp-server.js"],
+        env: {},
+      },
+    ];
+    mcpToolsMock.mockReturnValue({
+      local_files: {
+        description: "local files",
+      },
+    });
+
+    const service = new TemplateStudioChatService();
+    const result = await service.testProfile({
+      configDirectory: "/tmp/openaquarium-config",
+      profile,
+      modelId: "gpt-4.1-mini",
+      prompt: "Ping the provider.",
+    });
+
+    const generateTextCall = generateTextMock.mock.calls[0]?.[0] as
+      | {
+          prompt: string;
+          system: string;
+          tools?: unknown;
+        }
+      | undefined;
+
+    expect(generateTextCall?.prompt).toBe("Ping the provider.");
+    expect(generateTextCall?.system).toContain("provider connectivity check");
+    expect(generateTextCall?.tools).toEqual({
+      local_files: {
+        description: "local files",
+      },
+    });
+    expect(result.responseText).toBe("updated");
+    expect(result.toolCount).toBe(1);
+    expect(result.modelId).toBe("gpt-4.1-mini");
+    expect(mcpCloseMock).toHaveBeenCalled();
   });
 });

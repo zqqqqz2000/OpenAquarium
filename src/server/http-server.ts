@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 
 import type { UpdateGlobalConfigInput } from "@/domain/model";
 import type { WorkspaceUIMessage } from "@/lib/chat/workspace-ui-message";
+import type { ModelProfileDraft } from "@/lib/global-config-draft";
 import { extractLastUserText } from "@/lib/chat/workspace-ui-message";
 import { resolveDirectTarget } from "@/lib/direct-target";
 import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
@@ -83,6 +84,20 @@ export async function handleWorkspaceJsonApiRequest(args: {
     return {
       statusCode: 200,
       payload: await runtime.getTemplateStudioModelCatalog((body as { modelProfileId?: string } | undefined) ?? {}),
+    };
+  }
+
+  if (method === "POST" && pathname === "/api/provider-profiles/model-catalog") {
+    return {
+      statusCode: 200,
+      payload: await runtime.getProviderProfileModelCatalog(body as { draft: ModelProfileDraft }),
+    };
+  }
+
+  if (method === "POST" && pathname === "/api/provider-profiles/test") {
+    return {
+      statusCode: 200,
+      payload: await runtime.testProviderProfile(body as { draft: ModelProfileDraft; modelId?: string }),
     };
   }
 
@@ -648,6 +663,18 @@ export async function startWorkspaceHttpServer(args: {
         sendJson(response, 200, await args.runtime.getTemplateStudioModelCatalog({
           modelProfileId: url.searchParams.get("modelProfileId") ?? undefined,
         }));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/provider-profiles/model-catalog") {
+        const body = await readJson<{ draft: ModelProfileDraft }>(request);
+        sendJson(response, 200, await args.runtime.getProviderProfileModelCatalog(body));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/provider-profiles/test") {
+        const body = await readJson<{ draft: ModelProfileDraft; modelId?: string }>(request);
+        sendJson(response, 200, await args.runtime.testProviderProfile(body));
         return;
       }
 

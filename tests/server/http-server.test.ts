@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
 import { getVisibleRoomMessages } from "@/lib/chat/workspace-ui-message";
+import { createModelProfileDraft } from "@/lib/global-config-draft";
 import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import { OpenAquariumGlobalConfigManager } from "@/server/global-config";
 import { WorkspacePersistence } from "@/server/persistence";
@@ -94,6 +95,27 @@ describe("workspace http api routing", () => {
               loadedGlobalConfig.config.modelProfiles[0]?.id ??
               "model-codex-acp-default",
             availableModels: [],
+          }),
+        getModelCatalogForProfile: ({ profile }) =>
+          Promise.resolve({
+            source: "runtime",
+            providerType: profile.providerType,
+            providerKind: profile.binding.kind,
+            providerLabel: profile.binding.label,
+            selectedProfileId: profile.id,
+            availableModels: [],
+          }),
+        testProfile: ({ modelId, profile, prompt }) =>
+          Promise.resolve({
+            profileId: profile.id,
+            providerType: profile.providerType,
+            providerKind: profile.binding.kind,
+            providerLabel: profile.binding.label,
+            modelId,
+            prompt,
+            responseText: "Provider test ok.",
+            toolCount: 0,
+            testedAt: "2026-03-20T00:00:00.000Z",
           }),
         stream: () => Promise.resolve({
           modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
@@ -504,6 +526,27 @@ describe("workspace http api routing", () => {
               "model-codex-acp-default",
             availableModels: [],
           }),
+        getModelCatalogForProfile: ({ profile }) =>
+          Promise.resolve({
+            source: "runtime",
+            providerType: profile.providerType,
+            providerKind: profile.binding.kind,
+            providerLabel: profile.binding.label,
+            selectedProfileId: profile.id,
+            availableModels: [],
+          }),
+        testProfile: ({ modelId, profile, prompt }) =>
+          Promise.resolve({
+            profileId: profile.id,
+            providerType: profile.providerType,
+            providerKind: profile.binding.kind,
+            providerLabel: profile.binding.label,
+            modelId,
+            prompt,
+            responseText: "Provider test ok.",
+            toolCount: 0,
+            testedAt: "2026-03-20T00:00:00.000Z",
+          }),
         stream: ({ templates, templateId }) => {
           const nextTemplates = templates.map((template) =>
             template.id === templateId
@@ -591,6 +634,101 @@ describe("workspace http api routing", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("returns model catalogs and test results for provider profile drafts", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-provider-test-"));
+    const configDirPath = path.join(workspaceRoot, ".config");
+    const globalConfigManager = new OpenAquariumGlobalConfigManager(configDirPath);
+    const loadedGlobalConfig = await globalConfigManager.load();
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      globalConfigManager,
+      globalConfig: loadedGlobalConfig.config,
+      templateStudioChatService: {
+        chat: () => Promise.resolve({
+          assistantMessage: "unused",
+          modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
+        }),
+        getModelCatalog: () =>
+          Promise.resolve({
+            source: "runtime",
+            providerType: "acp",
+            providerKind: loadedGlobalConfig.config.modelProfiles[0]?.binding.kind ?? "codex-acp",
+            providerLabel: loadedGlobalConfig.config.modelProfiles[0]?.binding.label ?? "Codex",
+            selectedProfileId:
+              loadedGlobalConfig.config.templateChatModelProfileId ??
+              loadedGlobalConfig.config.modelProfiles[0]?.id ??
+              "model-codex-acp-default",
+            availableModels: [],
+          }),
+        getModelCatalogForProfile: ({ profile }) =>
+          Promise.resolve({
+            source: "runtime",
+            providerType: profile.providerType,
+            providerKind: profile.binding.kind,
+            providerLabel: profile.binding.label,
+            selectedProfileId: profile.id,
+            currentModelId: "gpt-5.4",
+            availableModels: [{ id: "gpt-5.4", label: "gpt-5.4" }],
+          }),
+        testProfile: ({ modelId, profile, prompt }) =>
+          Promise.resolve({
+            profileId: profile.id,
+            providerType: profile.providerType,
+            providerKind: profile.binding.kind,
+            providerLabel: profile.binding.label,
+            modelId,
+            prompt,
+            responseText: "Provider test ok.",
+            toolCount: 0,
+            testedAt: "2026-03-20T00:00:00.000Z",
+          }),
+        stream: () => Promise.resolve({
+          modelProfileId: loadedGlobalConfig.config.templateChatModelProfileId ?? loadedGlobalConfig.config.modelProfiles[0]?.id ?? "model-codex-acp-default",
+          result: {
+            consumeStream: () => Promise.resolve(),
+            toUIMessageStream: () => new ReadableStream(),
+          },
+          cleanup: () => Promise.resolve(),
+        }),
+        dispose: () => Promise.resolve(),
+      },
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const draft = createModelProfileDraft(loadedGlobalConfig.config.modelProfiles[0]);
+    const catalogResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/provider-profiles/model-catalog",
+      body: { draft },
+    });
+    const testResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/provider-profiles/test",
+      body: {
+        draft,
+        modelId: "gpt-5.4",
+      },
+    });
+
+    expect(catalogResult?.statusCode).toBe(200);
+    expect(catalogResult?.payload).toMatchObject({
+      source: "runtime",
+      selectedProfileId: draft.id,
+      availableModels: [{ id: "gpt-5.4", label: "gpt-5.4" }],
+    });
+    expect(testResult?.statusCode).toBe(200);
+    expect(testResult?.payload).toMatchObject({
+      profileId: draft.id,
+      modelId: "gpt-5.4",
+      responseText: "Provider test ok.",
+    });
   });
 
   it("rejects legacy firstPrompt payloads for project and room creation", async () => {

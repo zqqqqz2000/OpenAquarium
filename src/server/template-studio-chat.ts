@@ -490,7 +490,7 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
         modelId: modelId || undefined,
       };
     } finally {
-      provider.cleanup();
+      await cleanupProvider(provider);
     }
   }
 
@@ -522,10 +522,7 @@ export class TemplateStudioChatService implements TemplateStudioChatServiceLike 
       result,
       modelProfileId: selectedProfile.id,
       modelId: modelId || undefined,
-      cleanup: () => {
-        provider.cleanup();
-        return Promise.resolve();
-      },
+      cleanup: () => cleanupProvider(provider),
     };
   }
 

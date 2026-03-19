@@ -2370,6 +2370,47 @@ describe("WorkspaceRuntime", () => {
             "model-codex-acp-default",
           availableModels: [],
         }),
+      getModelCatalogForProfile: ({ profile }: {
+        profile: {
+          id: string;
+          providerType: "acp" | "openai-compatible";
+          binding: {
+            kind: "codex-acp" | "generic-acp" | "openai-compatible";
+            label: string;
+          };
+        };
+      }) =>
+        Promise.resolve({
+          source: "runtime" as const,
+          providerType: profile.providerType,
+          providerKind: profile.binding.kind,
+          providerLabel: profile.binding.label,
+          selectedProfileId: profile.id,
+          availableModels: [],
+        }),
+      testProfile: ({ modelId, profile, prompt }: {
+        modelId?: string;
+        profile: {
+          id: string;
+          providerType: "acp" | "openai-compatible";
+          binding: {
+            kind: "codex-acp" | "generic-acp" | "openai-compatible";
+            label: string;
+          };
+        };
+        prompt: string;
+      }) =>
+        Promise.resolve({
+          profileId: profile.id,
+          providerType: profile.providerType,
+          providerKind: profile.binding.kind,
+          providerLabel: profile.binding.label,
+          modelId,
+          prompt,
+          responseText: "Provider test ok.",
+          toolCount: 0,
+          testedAt: "2026-03-20T00:00:00.000Z",
+        }),
       stream: ({
         templates,
         templateId,

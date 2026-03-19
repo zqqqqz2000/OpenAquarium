@@ -3,7 +3,7 @@ import type { ChatTransport, UIMessageChunk } from "ai";
 import { simulateReadableStream } from "ai";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import { TemplateStudioDialog } from "@/components/templates/template-studio-dialog";
@@ -192,7 +192,61 @@ function renderTemplateStudio(element: ReactElement) {
   return render(<TooltipProvider>{element}</TooltipProvider>);
 }
 
+function createJsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+    },
+  });
+}
+
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    const pathname = new URL(url).pathname;
+
+    if (pathname === "/api/template-studio/models" || pathname === "/api/provider-profiles/model-catalog") {
+      return Promise.resolve(createJsonResponse({
+        source: "runtime",
+        providerType: "acp",
+        providerKind: "codex-acp",
+        providerLabel: "Codex ACP",
+        selectedProfileId: "model-codex-acp-default",
+        currentModelId: "gpt-5.4",
+        availableModels: [
+          {
+            id: "gpt-5.4",
+            label: "gpt-5.4",
+          },
+        ],
+      }));
+    }
+
+    if (pathname === "/api/provider-profiles/test") {
+      return Promise.resolve(createJsonResponse({
+        profileId: "model-codex-acp-default",
+        providerType: "acp",
+        providerKind: "codex-acp",
+        providerLabel: "Codex ACP",
+        modelId: "gpt-5.4",
+        prompt: "Reply in one short sentence confirming the OpenAquarium provider test succeeded.",
+        responseText: "OpenAquarium provider test succeeded.",
+        toolCount: 1,
+        testedAt: "2026-03-20T00:00:00.000Z",
+      }));
+    }
+
+    throw new Error(`Unhandled fetch request in test: ${url}`);
+  }));
+});
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
@@ -251,7 +305,7 @@ describe("TemplateStudioDialog", () => {
       description: "Product Pod v2 updated.",
     });
     expect(screen.getByTestId("template-summary-card")).toHaveClass("border-b");
-    expect(screen.getByTestId("template-list-scroll").parentElement).toHaveClass("flex", "min-h-0", "flex-1", "flex-col");
+    expect(screen.getByTestId("template-list-scroll").parentElement).toHaveClass("flex", "flex-col", "pt-4");
     expect(screen.getByTestId("template-members-scroll").querySelector("[data-slot='scroll-area-viewport']")).toBeTruthy();
   });
 
@@ -361,8 +415,7 @@ describe("TemplateStudioDialog", () => {
       />,
     );
 
-    await user.click(screen.getByRole("tab", { name: /Chat/i }));
-    expect(screen.queryByText("Team Builder")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /Team Builder/i }));
     expect(screen.getByText(/直接说要改什么就行/i)).toBeInTheDocument();
     expect(screen.queryByText(/The model can read/i)).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "Make builder more QA focused");
@@ -372,8 +425,8 @@ describe("TemplateStudioDialog", () => {
     expect(onApplyChatSync).toHaveBeenCalledWith(syncPayload);
     expect(getMessageTexts(transport.requests[0]?.messages ?? [])).toEqual(["Make builder more QA focused"]);
 
-    await user.click(screen.getByRole("tab", { name: /Models/i }));
-    expect(screen.getByRole("button", { name: /Add model/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /Providers/i }));
+    expect(screen.getByRole("button", { name: /Add provider/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Save$/i })).toBeInTheDocument();
     expect(screen.getByTestId("template-models-scroll").querySelector("[data-slot='scroll-area-viewport']")).toBeTruthy();
   });
@@ -408,7 +461,7 @@ describe("TemplateStudioDialog", () => {
       />,
     );
 
-    await user.click(screen.getByRole("tab", { name: /Chat/i }));
+    await user.click(screen.getByRole("tab", { name: /Team Builder/i }));
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "把 builder 改成 QA lead");
     await user.click(screen.getByRole("button", { name: /Send change request/i }));
 
@@ -460,7 +513,7 @@ describe("TemplateStudioDialog", () => {
       />,
     );
 
-    await user.click(screen.getByRole("tab", { name: /Chat/i }));
+    await user.click(screen.getByRole("tab", { name: /Team Builder/i }));
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "你好");
     await user.click(screen.getByRole("button", { name: /Send change request/i }));
     expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
@@ -522,9 +575,7 @@ describe("TemplateStudioDialog", () => {
     await user.click(incidentTrigger);
     expect(screen.getByRole("textbox", { name: /Template name/i })).toHaveValue("Incident Pod");
 
-    await user.click(screen.getByRole("tab", { name: /Chat/i }));
-    expect(screen.queryByText("Team Builder")).not.toBeInTheDocument();
-
+    await user.click(screen.getByRole("tab", { name: /Team Builder/i }));
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "Tighten the incident workflow");
     await user.click(screen.getByRole("button", { name: /Send change request/i }));
 
@@ -550,7 +601,7 @@ describe("TemplateStudioDialog", () => {
       />,
     );
 
-    await user.click(screen.getByRole("tab", { name: /Chat/i }));
+    await user.click(screen.getByRole("tab", { name: /Team Builder/i }));
     const input = screen.getByRole("textbox", { name: /Template chat input/i });
     await user.type(input, "把 builder 改成 QA lead");
 
@@ -595,7 +646,7 @@ describe("TemplateStudioDialog", () => {
       />,
     );
 
-    await user.click(screen.getByRole("tab", { name: /Chat/i }));
+    await user.click(screen.getByRole("tab", { name: /Team Builder/i }));
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "把 builder 改成 QA lead");
     await user.click(screen.getByRole("button", { name: /Send change request/i }));
     expect(await screen.findByText("First change applied.")).toBeInTheDocument();
@@ -648,7 +699,7 @@ describe("TemplateStudioDialog", () => {
       />,
     );
 
-    await user.click(screen.getByRole("tab", { name: /Chat/i }));
+    await user.click(screen.getByRole("tab", { name: /Team Builder/i }));
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "更新当前产品模板");
     await user.click(screen.getByRole("button", { name: /Send change request/i }));
     expect(await screen.findByText("Product pod updated.")).toBeInTheDocument();
@@ -660,7 +711,7 @@ describe("TemplateStudioDialog", () => {
     }
 
     await user.click(incidentTrigger);
-    await user.click(screen.getByRole("tab", { name: /Chat/i }));
+    await user.click(screen.getByRole("tab", { name: /Team Builder/i }));
     await user.type(screen.getByRole("textbox", { name: /Template chat input/i }), "更新 incident 模板");
     await user.click(screen.getByRole("button", { name: /Send change request/i }));
     expect(await screen.findByText("Incident pod updated.")).toBeInTheDocument();
@@ -672,7 +723,7 @@ describe("TemplateStudioDialog", () => {
     }
 
     await user.click(productTrigger);
-    await user.click(screen.getByRole("tab", { name: /Chat/i }));
+    await user.click(screen.getByRole("tab", { name: /Team Builder/i }));
 
     expect(screen.getByText("Product pod updated.")).toBeInTheDocument();
     expect(screen.queryByText("Incident pod updated.")).not.toBeInTheDocument();
@@ -821,5 +872,89 @@ describe("TemplateStudioDialog", () => {
     );
 
     expect(screen.getByRole("textbox", { name: /^Prompt$/i })).toHaveValue("prompt from latest template props");
+  });
+
+  it("lets users configure MCP servers with structured provider fields", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const templates = snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
+    const onSaveGlobalConfig = vi.fn();
+
+    renderTemplateStudio(
+      <TemplateStudioDialog
+        open
+        templates={templates}
+        selectedTemplateId={templates[0]?.id}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSaveGlobalConfig={onSaveGlobalConfig}
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: /Providers/i }));
+    const openAIProfileTrigger = screen.getAllByText("OpenAI-Compatible API")[0]?.closest("button");
+    expect(openAIProfileTrigger).toBeTruthy();
+    if (!openAIProfileTrigger) {
+      throw new Error("Expected OpenAI-compatible provider trigger");
+    }
+
+    await user.click(openAIProfileTrigger);
+    await user.click(screen.getAllByRole("button", { name: /^Add server$/i })[0]);
+
+    const dialog = await screen.findByRole("dialog", { name: /Connect a custom MCP/i });
+    await user.type(within(dialog).getByRole("textbox", { name: /Server name/i }), "local-files");
+    await user.type(within(dialog).getByRole("textbox", { name: /Command to launch/i }), "node");
+    await user.click(within(dialog).getByRole("button", { name: /^Save$/i }));
+
+    expect(screen.getByText("local-files")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Save$/i }));
+
+    const savedPayload = onSaveGlobalConfig.mock.calls[0]?.[0] as { modelProfiles: Array<{ id: string; binding: { mcpServers?: Array<{ id: string; transport: string; command?: string }> } }> } | undefined;
+    expect(savedPayload?.modelProfiles.find((profile) => profile.id === "model-openai-compatible-default")?.binding.mcpServers).toEqual([
+      expect.objectContaining({
+        id: "local-files",
+        transport: "stdio",
+        command: "node",
+      }),
+    ]);
+  });
+
+  it("runs a provider test against the current draft", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const templates = snapshot.templateOrder.map((templateId) => snapshot.templates[templateId]);
+
+    renderTemplateStudio(
+      <TemplateStudioDialog
+        open
+        templates={templates}
+        selectedTemplateId={templates[0]?.id}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSaveGlobalConfig={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: /Providers/i }));
+    const openAIProfileTrigger = screen.getAllByText("OpenAI-Compatible API")[0]?.closest("button");
+    expect(openAIProfileTrigger).toBeTruthy();
+    if (!openAIProfileTrigger) {
+      throw new Error("Expected OpenAI-compatible provider trigger");
+    }
+
+    await user.click(openAIProfileTrigger);
+    await user.click(screen.getByRole("button", { name: /^Test$/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /Test Provider Connection/i });
+    expect(within(dialog).getByText(/OpenAquarium provider test/i)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: /Start Test/i }));
+
+    expect(await within(dialog).findByText("OpenAquarium provider test succeeded.")).toBeInTheDocument();
+    expect(within(dialog).getByText("MCP tools loaded: 1")).toBeInTheDocument();
   });
 });

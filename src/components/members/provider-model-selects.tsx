@@ -50,16 +50,28 @@ export function ProviderModelSelects(props: {
 
   useEffect(() => {
     let cancelled = false;
+    const schedule = (callback: () => void): void => {
+      queueMicrotask(() => {
+        if (!cancelled) {
+          callback();
+        }
+      });
+    };
 
     if (!selectedProfileId) {
-      setCatalog(undefined);
-      setCatalogError(undefined);
-      onCatalogChange?.(undefined);
+      schedule(() => {
+        setCatalog(undefined);
+        setCatalogError(undefined);
+        setLoadingCatalog(false);
+        onCatalogChange?.(undefined);
+      });
       return;
     }
 
-    setLoadingCatalog(true);
-    setCatalogError(undefined);
+    schedule(() => {
+      setLoadingCatalog(true);
+      setCatalogError(undefined);
+    });
     void runtimeClient.getTemplateStudioModels({ modelProfileId: selectedProfileId }).then(
       (nextCatalog) => {
         if (cancelled) {
@@ -97,7 +109,7 @@ export function ProviderModelSelects(props: {
     <>
       <label className="flex flex-col gap-2">
         <span className="text-sm font-medium">{providerLabel}</span>
-        <Select value={selectedProfileId} onValueChange={onProviderChange} disabled={disabled || selectableProfiles.length === 0}>
+        <Select value={selectedProfileId ?? ""} onValueChange={onProviderChange} disabled={disabled || selectableProfiles.length === 0}>
           <SelectTrigger className="w-full">
             <SelectValue placeholder={providerPlaceholder} />
           </SelectTrigger>
@@ -113,7 +125,7 @@ export function ProviderModelSelects(props: {
       <label className="flex flex-col gap-2">
         <span className="text-sm font-medium">{modelLabel}</span>
         <Select
-          value={modelId}
+          value={modelId ?? ""}
           onValueChange={onModelChange}
           disabled={disabled || loadingCatalog || !catalog || catalog.source !== "runtime" || catalog.availableModels.length === 0}
         >

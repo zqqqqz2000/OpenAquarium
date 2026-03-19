@@ -28,7 +28,7 @@ export interface ModelProfileDraft extends ProviderConfigDraftFields {
   providerHeadersText: string;
   providerExtraBodyFormat: "kv" | "json";
   providerExtraBodyText: string;
-  providerMcpServersText: string;
+  providerMcpServers: OpenAICompatibleMCPServer[];
   providerModelLimitsText: string;
   providerCompactionModelId: string;
   providerCompactionReservedTokens: string;
@@ -38,6 +38,21 @@ export interface ModelProfileDraft extends ProviderConfigDraftFields {
 export interface GlobalConfigDraft {
   modelProfiles: ModelProfileDraft[];
   templateChatModelProfileId?: string;
+}
+
+function cloneMcpServer(server: OpenAICompatibleMCPServer): OpenAICompatibleMCPServer {
+  if (server.transport === "stdio") {
+    return {
+      ...server,
+      args: [...server.args],
+      env: { ...server.env },
+    };
+  }
+
+  return {
+    ...server,
+    headers: { ...server.headers },
+  };
 }
 
 export function createModelProfileDraft(profile: ProviderModelProfile): ModelProfileDraft {
@@ -70,7 +85,7 @@ export function createModelProfileDraft(profile: ProviderModelProfile): ModelPro
           : Object.entries(profile.binding.extraBody)
             .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
             .join("\n"),
-      providerMcpServersText: JSON.stringify(profile.binding.mcpServers, null, 2),
+      providerMcpServers: profile.binding.mcpServers.map(cloneMcpServer),
       providerModelLimitsText: JSON.stringify(profile.binding.modelLimits ?? {}, null, 2),
       providerCompactionModelId: profile.binding.compactionModelId ?? "",
       providerCompactionReservedTokens: String(profile.binding.compactionReservedTokens ?? 20_000),
@@ -98,7 +113,7 @@ export function createModelProfileDraft(profile: ProviderModelProfile): ModelPro
     providerHeadersText: "",
     providerExtraBodyFormat: "json",
     providerExtraBodyText: "",
-    providerMcpServersText: "[]",
+    providerMcpServers: [],
     providerModelLimitsText: "{}",
     providerCompactionModelId: "",
     providerCompactionReservedTokens: "",
@@ -132,26 +147,12 @@ export function addEmptyModelProfileDraft(): ModelProfileDraft {
     providerHeadersText: "",
     providerExtraBodyFormat: "json",
     providerExtraBodyText: "",
-    providerMcpServersText: "[]",
+    providerMcpServers: [],
     providerModelLimitsText: "{}",
     providerCompactionModelId: "",
     providerCompactionReservedTokens: "",
     providerCompactionOffloadThresholdChars: "",
   };
-}
-
-function parseMcpServersText(value: string): OpenAICompatibleMCPServer[] {
-  const normalized = value.trim();
-  if (!normalized) {
-    return [];
-  }
-
-  const parsed = JSON.parse(normalized) as unknown;
-  if (!Array.isArray(parsed)) {
-    throw new Error("MCP servers must be a JSON array.");
-  }
-
-  return parsed as OpenAICompatibleMCPServer[];
 }
 
 function parseModelLimitsText(value: string): Record<string, OpenAICompatibleModelLimit> {
@@ -204,93 +205,103 @@ function stringifyHeaderValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: GlobalConfigDraft): UpdateGlobalConfigInput {
-  const modelProfiles = draft.modelProfiles.map((profile) => {
-    const existing = current.modelProfiles.find((candidate) => candidate.id === profile.id);
-    if (profile.providerType === "openai-compatible") {
-      const fallbackBinding =
-        existing?.providerType === "openai-compatible"
-          ? existing.binding
-          : {
-              kind: "openai-compatible" as const,
-              label: "OpenAI-Compatible API",
-              baseURL: "https://api.openai.com/v1",
-              headersFormat: "kv" as const,
-              headers: {},
-              extraBodyFormat: "json" as const,
-              extraBody: {},
-              mcpServers: [],
-              modelLimits: {},
-              compactionReservedTokens: 20_000,
-              compactionOffloadThresholdChars: 12_000,
-            };
+export function buildProviderModelProfileFromDraft(args: {
+  draft: ModelProfileDraft;
+  existing?: ProviderModelProfile;
+}): ProviderModelProfile {
+  const { draft, existing } = args;
 
-      return {
-        id: profile.id.trim(),
-        name: profile.name.trim(),
-        description: profile.description.trim(),
-        providerType: "openai-compatible" as const,
-        binding: {
-          ...fallbackBinding,
-          label: profile.providerLabel.trim(),
-          baseURL: profile.providerBaseUrl.trim(),
-          apiKeyEnvVar: profile.providerApiKeyEnvVar.trim() || undefined,
-          headersFormat: profile.providerHeadersFormat,
-          headers:
-            profile.providerHeadersFormat === "json"
-              ? Object.fromEntries(
-                  Object.entries(parseJsonObjectText(profile.providerHeadersText)).map(([key, value]) => [key, stringifyHeaderValue(value)]),
-                )
-              : parseEnvText(profile.providerHeadersText),
-          extraBodyFormat: profile.providerExtraBodyFormat,
-          extraBody:
-            profile.providerExtraBodyFormat === "json"
-              ? parseJsonObjectText(profile.providerExtraBodyText)
-              : parseEnvText(profile.providerExtraBodyText),
-          mcpServers: parseMcpServersText(profile.providerMcpServersText),
-          modelLimits: parseModelLimitsText(profile.providerModelLimitsText),
-          compactionModelId: profile.providerCompactionModelId.trim() || undefined,
-          compactionReservedTokens: parseNonNegativeInteger(
-            profile.providerCompactionReservedTokens,
-            fallbackBinding.compactionReservedTokens ?? 20_000,
-          ),
-          compactionOffloadThresholdChars: parsePositiveInteger(
-            profile.providerCompactionOffloadThresholdChars,
-            fallbackBinding.compactionOffloadThresholdChars ?? 12_000,
-          ),
-        },
-      };
-    }
-
+  if (draft.providerType === "openai-compatible") {
     const fallbackBinding =
-      existing?.providerType === "acp"
+      existing?.providerType === "openai-compatible"
         ? existing.binding
         : {
-            kind: "codex-acp" as const,
-            label: "ACP provider",
-            command: "",
-            args: [],
-            env: {},
-            capabilities: ["prompt", "cancel"],
+            kind: "openai-compatible" as const,
+            label: "OpenAI-Compatible API",
+            baseURL: "https://api.openai.com/v1",
+            headersFormat: "kv" as const,
+            headers: {},
+            extraBodyFormat: "json" as const,
+            extraBody: {},
+            mcpServers: [],
+            modelLimits: {},
+            compactionReservedTokens: 20_000,
+            compactionOffloadThresholdChars: 12_000,
           };
 
     return {
-      id: profile.id.trim(),
-      name: profile.name.trim(),
-      description: profile.description.trim(),
-      providerType: "acp" as const,
+      id: draft.id.trim(),
+      name: draft.name.trim(),
+      description: draft.description.trim(),
+      providerType: "openai-compatible",
       binding: {
         ...fallbackBinding,
-        kind: profile.providerKind as ProviderKind,
-        label: profile.providerLabel.trim(),
-        command: profile.providerCommand.trim(),
-        args: splitLines(profile.providerArgsText),
-        capabilities: splitCapabilities(profile.providerCapabilitiesText),
-        workingDirectory: profile.providerWorkingDirectory.trim() || undefined,
-        env: parseEnvText(profile.providerEnvText),
+        label: draft.providerLabel.trim(),
+        baseURL: draft.providerBaseUrl.trim(),
+        apiKeyEnvVar: draft.providerApiKeyEnvVar.trim() || undefined,
+        headersFormat: draft.providerHeadersFormat,
+        headers:
+          draft.providerHeadersFormat === "json"
+            ? Object.fromEntries(
+                Object.entries(parseJsonObjectText(draft.providerHeadersText)).map(([key, value]) => [key, stringifyHeaderValue(value)]),
+              )
+            : parseEnvText(draft.providerHeadersText),
+        extraBodyFormat: draft.providerExtraBodyFormat,
+        extraBody:
+          draft.providerExtraBodyFormat === "json"
+            ? parseJsonObjectText(draft.providerExtraBodyText)
+            : parseEnvText(draft.providerExtraBodyText),
+        mcpServers: draft.providerMcpServers.map(cloneMcpServer),
+        modelLimits: parseModelLimitsText(draft.providerModelLimitsText),
+        compactionModelId: draft.providerCompactionModelId.trim() || undefined,
+        compactionReservedTokens: parseNonNegativeInteger(
+          draft.providerCompactionReservedTokens,
+          fallbackBinding.compactionReservedTokens ?? 20_000,
+        ),
+        compactionOffloadThresholdChars: parsePositiveInteger(
+          draft.providerCompactionOffloadThresholdChars,
+          fallbackBinding.compactionOffloadThresholdChars ?? 12_000,
+        ),
       },
     };
-  });
+  }
+
+  const fallbackBinding =
+    existing?.providerType === "acp"
+      ? existing.binding
+      : {
+          kind: "codex-acp" as const,
+          label: "ACP provider",
+          command: "",
+          args: [],
+          env: {},
+          capabilities: ["prompt", "cancel"],
+        };
+
+  return {
+    id: draft.id.trim(),
+    name: draft.name.trim(),
+    description: draft.description.trim(),
+    providerType: "acp",
+    binding: {
+      ...fallbackBinding,
+      kind: draft.providerKind as ProviderKind,
+      label: draft.providerLabel.trim(),
+      command: draft.providerCommand.trim(),
+      args: splitLines(draft.providerArgsText),
+      capabilities: splitCapabilities(draft.providerCapabilitiesText),
+      workingDirectory: draft.providerWorkingDirectory.trim() || undefined,
+      env: parseEnvText(draft.providerEnvText),
+    },
+  };
+}
+
+export function buildGlobalConfigInput(current: GlobalWorkspaceConfig, draft: GlobalConfigDraft): UpdateGlobalConfigInput {
+  const modelProfiles = draft.modelProfiles.map((profile) =>
+    buildProviderModelProfileFromDraft({
+      draft: profile,
+      existing: current.modelProfiles.find((candidate) => candidate.id === profile.id),
+    }));
 
   return {
     modelProfiles,

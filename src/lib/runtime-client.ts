@@ -1,5 +1,6 @@
 import type {
   GlobalWorkspaceConfig,
+  ProviderConnectionTestResult,
   RoomMessageHistoryPage,
   TemplateStudioModelCatalog,
   UpdateRoomSettingsInput,
@@ -11,6 +12,7 @@ import type {
   UpdateTemplateInput,
   WorkspaceSnapshot,
 } from "@/domain/model";
+import type { ModelProfileDraft } from "@/lib/global-config-draft";
 
 export type WatcherRunOutcome = "triggered" | "busy" | "disabled" | "suspended" | "baselined" | "idle";
 
@@ -274,6 +276,29 @@ export class WorkspaceRuntimeClient {
     }
 
     return parseJson(await fetch(url));
+  }
+
+  async getProviderProfileModelCatalog(input: { draft: ModelProfileDraft }): Promise<TemplateStudioModelCatalog> {
+    return parseJson(
+      await fetch(`${this.baseUrl}/api/provider-profiles/model-catalog`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    );
+  }
+
+  async testProviderProfile(input: {
+    draft: ModelProfileDraft;
+    modelId?: string;
+  }): Promise<ProviderConnectionTestResult> {
+    return parseJson(
+      await fetch(`${this.baseUrl}/api/provider-profiles/test`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    );
   }
 
   async setEntryMember(memberId: string): Promise<WorkspaceSnapshot> {

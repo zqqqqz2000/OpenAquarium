@@ -4,6 +4,7 @@ import { watch, type FSWatcher } from "node:fs";
 import type {
   GlobalWorkspaceConfig,
   ProviderBinding,
+  ProviderConnectionTestResult,
   RoomMessageHistoryPage,
   TeamMember,
   TeamTemplate,
@@ -16,7 +17,6 @@ import {
   acknowledgeWatcherDigestVisibility,
   acknowledgeRoom,
   appendTaskTrace,
-  applyRoleStaffingOperation,
   executeRoleStaffingOperation,
   completeMemberTask,
   createRoomInProject,
@@ -44,6 +44,7 @@ import {
   upsertMemberWatcher,
   syncUnreadStateForMessage,
 } from "../domain/workspace";
+import type { applyRoleStaffingOperation } from "../domain/workspace";
 import { createRuntimeContext, createSystemClockContext, type MutationContext } from "../domain/identity";
 import type {
   CreateProjectInput,
@@ -73,9 +74,11 @@ import { loadRoomMessageHistoryPage, syncRoomMessageHistoryFiles } from "./room-
 import { normalizeProjectPath, resolveProjectWorkingDirectory } from "./project-paths";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
+import { buildProviderModelProfileFromDraft, type ModelProfileDraft } from "../lib/global-config-draft";
 import { isVisibleMemberRoomMessage } from "../lib/message-visibility";
 import { CODEX_ACP_THINKING_DEPTH_ENV_KEY } from "../lib/acp/providers/codex-session";
 import { createDefaultGlobalWorkspaceConfig, findProviderModelProfile, resolveProviderBindingFromProfile } from "../lib/provider-model-profiles";
+import { OPENAQUARIUM_PROVIDER_TEST_PROMPT } from "../lib/provider-test";
 import { resolveRoomTeamSummary } from "../lib/room-team";
 import { loadSkillCatalog, type SkillCatalogEntry } from "./skills";
 import type { TemplateStudioUIMessage } from "../lib/template-studio-ui-message";
@@ -1026,6 +1029,33 @@ export class WorkspaceRuntime {
     });
   }
 
+  async getProviderProfileModelCatalog(input: {
+    draft: ModelProfileDraft;
+  }): Promise<TemplateStudioModelCatalog> {
+    return this.templateStudioChatService.getModelCatalogForProfile({
+      configDirectory: this.globalConfigManager.directory,
+      profile: buildProviderModelProfileFromDraft({
+        draft: input.draft,
+        existing: findProviderModelProfile(this.globalConfig.modelProfiles, input.draft.id),
+      }),
+    });
+  }
+
+  async testProviderProfile(input: {
+    draft: ModelProfileDraft;
+    modelId?: string;
+  }): Promise<ProviderConnectionTestResult> {
+    return this.templateStudioChatService.testProfile({
+      configDirectory: this.globalConfigManager.directory,
+      profile: buildProviderModelProfileFromDraft({
+        draft: input.draft,
+        existing: findProviderModelProfile(this.globalConfig.modelProfiles, input.draft.id),
+      }),
+      modelId: input.modelId,
+      prompt: OPENAQUARIUM_PROVIDER_TEST_PROMPT,
+    });
+  }
+
   async streamTemplateStudioChat(input: {
     templateId: string;
     messages: TemplateStudioUIMessage[];
@@ -1711,7 +1741,7 @@ export class WorkspaceRuntime {
           openAICompatibleConversation: args.openAICompatibleConversation,
         },
         {
-        onPromptVisible: async () => {
+        onPromptVisible: () => {
           if (!acceptingExecutorUpdates || promptVisible) {
             return;
           }

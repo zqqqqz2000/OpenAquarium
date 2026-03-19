@@ -8,6 +8,9 @@ import { ArrowUp, LoaderCircle, MessageSquare, Plus, Save, Settings2, Sparkles, 
 
 import type {
   GlobalWorkspaceConfig,
+  OpenAICompatibleMCPServer,
+  OpenAICompatibleRemoteMCPServer,
+  ProviderConnectionTestResult,
   TeamTemplate,
   TemplateStudioModelCatalog,
   UpdateGlobalConfigInput,
@@ -47,6 +50,7 @@ import {
   DialogClose,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -66,6 +70,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
+import { OPENAQUARIUM_PROVIDER_TEST_PROMPT } from "@/lib/provider-test";
 import { badgeToneProps } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
 
@@ -236,6 +241,661 @@ function InlineHint(props: { content: string }) {
   );
 }
 
+interface ValueRow {
+  id: string;
+  value: string;
+}
+
+interface KeyValueRow {
+  id: string;
+  key: string;
+  value: string;
+}
+
+interface McpServerFormState {
+  id: string;
+  transport: OpenAICompatibleMCPServer["transport"];
+  command: string;
+  args: ValueRow[];
+  env: KeyValueRow[];
+  cwd: string;
+  url: string;
+  headersFormat: OpenAICompatibleRemoteMCPServer["headersFormat"];
+  headers: KeyValueRow[];
+}
+
+function createValueRow(value = ""): ValueRow {
+  return {
+    id: crypto.randomUUID(),
+    value,
+  };
+}
+
+function createKeyValueRow(key = "", value = ""): KeyValueRow {
+  return {
+    id: crypto.randomUUID(),
+    key,
+    value,
+  };
+}
+
+function createValueRows(values: string[]): ValueRow[] {
+  if (values.length === 0) {
+    return [createValueRow()];
+  }
+
+  return values.map((value) => createValueRow(value));
+}
+
+function createKeyValueRows(entries: Record<string, string>): KeyValueRow[] {
+  const rows = Object.entries(entries).map(([key, value]) => createKeyValueRow(key, value));
+  return rows.length > 0 ? rows : [createKeyValueRow()];
+}
+
+function buildValueList(rows: ValueRow[]): string[] {
+  return rows.map((row) => row.value.trim()).filter(Boolean);
+}
+
+function buildKeyValueRecord(rows: KeyValueRow[]): Record<string, string> {
+  return rows.reduce<Record<string, string>>((record, row) => {
+    const key = row.key.trim();
+    if (!key) {
+      return record;
+    }
+
+    record[key] = row.value.trim();
+    return record;
+  }, {});
+}
+
+function createMcpServerFormState(server?: OpenAICompatibleMCPServer): McpServerFormState {
+  if (!server) {
+    return {
+      id: "",
+      transport: "stdio",
+      command: "",
+      args: [createValueRow()],
+      env: [createKeyValueRow()],
+      cwd: "",
+      url: "",
+      headersFormat: "kv",
+      headers: [createKeyValueRow()],
+    };
+  }
+
+  if (server.transport === "stdio") {
+    return {
+      id: server.id,
+      transport: server.transport,
+      command: server.command,
+      args: createValueRows(server.args),
+      env: createKeyValueRows(server.env),
+      cwd: server.cwd ?? "",
+      url: "",
+      headersFormat: "kv",
+      headers: [createKeyValueRow()],
+    };
+  }
+
+  return {
+    id: server.id,
+    transport: server.transport,
+    command: "",
+    args: [createValueRow()],
+    env: [createKeyValueRow()],
+    cwd: "",
+    url: server.url,
+    headersFormat: server.headersFormat,
+    headers: createKeyValueRows(server.headers),
+  };
+}
+
+function buildMcpServerFromFormState(form: McpServerFormState): OpenAICompatibleMCPServer {
+  if (form.transport === "stdio") {
+    return {
+      id: form.id.trim(),
+      transport: "stdio",
+      command: form.command.trim(),
+      args: buildValueList(form.args),
+      env: buildKeyValueRecord(form.env),
+      cwd: form.cwd.trim() || undefined,
+    };
+  }
+
+  return {
+    id: form.id.trim(),
+    transport: form.transport,
+    url: form.url.trim(),
+    headersFormat: form.headersFormat,
+    headers: buildKeyValueRecord(form.headers),
+  };
+}
+
+function describeMcpTransport(transport: OpenAICompatibleMCPServer["transport"]): string {
+  switch (transport) {
+    case "stdio":
+      return "STDIO";
+    case "http":
+      return "Streamable HTTP";
+    case "sse":
+      return "SSE";
+    default:
+      return transport;
+  }
+}
+
+function EditableValueList(props: {
+  label: string;
+  rows: ValueRow[];
+  placeholder: string;
+  addLabel: string;
+  onChange: (rows: ValueRow[]) => void;
+}) {
+  const { addLabel, label, onChange, placeholder, rows } = props;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <span className="text-sm font-medium">{label}</span>
+      <div className="space-y-2 rounded-2xl border border-border/70 bg-muted/15 p-3">
+        {rows.map((row) => (
+          <div key={row.id} className="flex items-center gap-2">
+            <Input
+              value={row.value}
+              placeholder={placeholder}
+              onChange={(event) =>
+                onChange(rows.map((candidate) => (candidate.id === row.id ? { ...candidate, value: event.currentTarget.value } : candidate)))}
+            />
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label={`Remove ${label}`}
+              onClick={() => onChange(rows.filter((candidate) => candidate.id !== row.id))}
+            >
+              <Trash2 size={14} />
+            </Button>
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="w-full"
+          onClick={() => onChange([...rows, createValueRow()])}
+        >
+          <Plus size={16} />
+          {addLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function EditableKeyValueList(props: {
+  label: string;
+  rows: KeyValueRow[];
+  keyPlaceholder: string;
+  valuePlaceholder: string;
+  addLabel: string;
+  onChange: (rows: KeyValueRow[]) => void;
+}) {
+  const { addLabel, keyPlaceholder, label, onChange, rows, valuePlaceholder } = props;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <span className="text-sm font-medium">{label}</span>
+      <div className="space-y-2 rounded-2xl border border-border/70 bg-muted/15 p-3">
+        {rows.map((row) => (
+          <div key={row.id} className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+            <Input
+              value={row.key}
+              placeholder={keyPlaceholder}
+              onChange={(event) =>
+                onChange(rows.map((candidate) => (candidate.id === row.id ? { ...candidate, key: event.currentTarget.value } : candidate)))}
+            />
+            <Input
+              value={row.value}
+              placeholder={valuePlaceholder}
+              onChange={(event) =>
+                onChange(rows.map((candidate) => (candidate.id === row.id ? { ...candidate, value: event.currentTarget.value } : candidate)))}
+            />
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label={`Remove ${label}`}
+              onClick={() => onChange(rows.filter((candidate) => candidate.id !== row.id))}
+            >
+              <Trash2 size={14} />
+            </Button>
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="w-full"
+          onClick={() => onChange([...rows, createKeyValueRow()])}
+        >
+          <Plus size={16} />
+          {addLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function McpServerEditorDialog(props: {
+  open: boolean;
+  server?: OpenAICompatibleMCPServer;
+  onOpenChange: (open: boolean) => void;
+  onSave: (server: OpenAICompatibleMCPServer) => void;
+}) {
+  const { open, server, onOpenChange, onSave } = props;
+  const [form, setForm] = useState(() => createMcpServerFormState(server));
+
+  const isValid =
+    form.id.trim().length > 0
+    && (form.transport === "stdio" ? form.command.trim().length > 0 : form.url.trim().length > 0);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[min(92vw,920px)] max-w-[920px] gap-0 overflow-hidden p-0 sm:max-w-[920px]">
+        <div className="border-b border-border px-5 py-4">
+          <DialogHeader className="gap-1">
+            <DialogTitle className="text-2xl font-semibold tracking-tight">
+              {server ? "Edit MCP server" : "Connect a custom MCP"}
+            </DialogTitle>
+            <DialogDescription>
+              为当前 provider 配置外部工具连接。这里会直接生成 OpenAquarium 的 provider profile 配置。
+            </DialogDescription>
+          </DialogHeader>
+        </div>
+
+        <div className="grid gap-4 overflow-y-auto px-5 py-4">
+          <label className="flex flex-col gap-2">
+            <span className="text-sm font-medium">Server name</span>
+            <Input value={form.id} placeholder="MCP server name" onChange={(event) => setForm((current) => ({ ...current, id: event.currentTarget.value }))} />
+          </label>
+
+          <label className="flex flex-col gap-2">
+            <span className="text-sm font-medium">Transport</span>
+            <Select
+              value={form.transport}
+              onValueChange={(value) => setForm((current) => ({ ...current, transport: value as OpenAICompatibleMCPServer["transport"] }))}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select transport" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="stdio">STDIO</SelectItem>
+                <SelectItem value="http">Streamable HTTP</SelectItem>
+                <SelectItem value="sse">SSE</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+
+          {form.transport === "stdio" ? (
+            <>
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium">Command to launch</span>
+                <Input
+                  value={form.command}
+                  placeholder="openai-dev-mcp serve-sqlite"
+                  onChange={(event) => setForm((current) => ({ ...current, command: event.currentTarget.value }))}
+                />
+              </label>
+              <EditableValueList
+                label="Arguments"
+                rows={form.args}
+                placeholder="Argument"
+                addLabel="Add argument"
+                onChange={(args) => setForm((current) => ({ ...current, args }))}
+              />
+              <EditableKeyValueList
+                label="Environment variables"
+                rows={form.env}
+                keyPlaceholder="Key"
+                valuePlaceholder="Value"
+                addLabel="Add environment variable"
+                onChange={(env) => setForm((current) => ({ ...current, env }))}
+              />
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium">Working directory</span>
+                <Input
+                  value={form.cwd}
+                  placeholder="~/code"
+                  onChange={(event) => setForm((current) => ({ ...current, cwd: event.currentTarget.value }))}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-medium">Server URL</span>
+                <Input
+                  value={form.url}
+                  placeholder={form.transport === "http" ? "https://example.com/mcp" : "https://example.com/sse"}
+                  onChange={(event) => setForm((current) => ({ ...current, url: event.currentTarget.value }))}
+                />
+              </label>
+              <EditableKeyValueList
+                label="Headers"
+                rows={form.headers}
+                keyPlaceholder="Header"
+                valuePlaceholder="Value"
+                addLabel="Add header"
+                onChange={(headers) => setForm((current) => ({ ...current, headers }))}
+              />
+            </>
+          )}
+        </div>
+
+        <DialogFooter className="items-center justify-between">
+          <p className="m-0 text-sm text-muted-foreground">
+            保存后，这些 MCP tools 会跟随当前 provider profile 一起被 Team Builder 和成员继承。
+          </p>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+            <Button
+              type="button"
+              disabled={!isValid}
+              onClick={() => {
+                onSave(buildMcpServerFromFormState(form));
+                onOpenChange(false);
+              }}
+            >
+              Save
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function McpServersEditor(props: {
+  servers: OpenAICompatibleMCPServer[];
+  onChange: (servers: OpenAICompatibleMCPServer[]) => void;
+}) {
+  const { onChange, servers } = props;
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | undefined>(undefined);
+
+  const activeServer = editingIndex === undefined ? undefined : servers[editingIndex];
+
+  const saveServer = (server: OpenAICompatibleMCPServer): void => {
+    const nextServers = [...servers];
+    if (editingIndex === undefined) {
+      nextServers.push(server);
+    } else {
+      nextServers[editingIndex] = server;
+    }
+    onChange(nextServers);
+  };
+
+  return (
+    <>
+      <Card className="rounded-2xl border-border/70 bg-background/70 shadow-none">
+        <CardHeader className="gap-3">
+          <div>
+            <CardTitle className="text-lg tracking-tight">MCP servers</CardTitle>
+            <CardDescription>把外部工具和数据源挂到当前 openai-compatible provider 上，不再手写 JSON 数组。</CardDescription>
+          </div>
+          <CardAction>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setEditingIndex(undefined);
+                setEditorOpen(true);
+              }}
+            >
+              <Plus size={16} />
+              Add server
+            </Button>
+          </CardAction>
+        </CardHeader>
+
+        <CardContent className="flex flex-col gap-3">
+          {servers.length === 0 ? (
+            <div className="flex items-center justify-between gap-4 rounded-2xl border border-dashed border-border/80 bg-muted/20 px-4 py-4">
+              <div>
+                <p className="m-0 text-sm font-medium">No MCP servers connected</p>
+                <p className="m-0 mt-1 text-sm text-muted-foreground">添加后，模型侧会自动拿到这些 server 暴露出来的工具。</p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setEditingIndex(undefined);
+                  setEditorOpen(true);
+                }}
+              >
+                <Plus size={16} />
+                Add server
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {servers.map((server, index) => (
+                <div key={`${server.id}-${index}`} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-border/70 bg-muted/15 px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="m-0 text-sm font-semibold">{server.id}</p>
+                      <Badge variant="outline">{describeMcpTransport(server.transport)}</Badge>
+                    </div>
+                    <p className="m-0 mt-2 truncate text-sm text-muted-foreground">
+                      {server.transport === "stdio" ? `${server.command} ${server.args.join(" ")}`.trim() : server.url}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setEditingIndex(index);
+                        setEditorOpen(true);
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => onChange(servers.filter((_, serverIndex) => serverIndex !== index))}>
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {editorOpen ? (
+        <McpServerEditorDialog
+          open={editorOpen}
+          server={activeServer}
+          onOpenChange={setEditorOpen}
+          onSave={saveServer}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ProviderTestDialog(props: {
+  draft: ModelProfileDraft;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { draft, open, onOpenChange } = props;
+  const runtimeClient = useMemo(() => new WorkspaceRuntimeClient(), []);
+  const [catalog, setCatalog] = useState<TemplateStudioModelCatalog | undefined>(undefined);
+  const [catalogError, setCatalogError] = useState<string | undefined>(undefined);
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState("");
+  const [testResult, setTestResult] = useState<ProviderConnectionTestResult | undefined>(undefined);
+  const [testError, setTestError] = useState<string | undefined>(undefined);
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+
+      setLoadingCatalog(true);
+      setCatalogError(undefined);
+    });
+
+    void runtimeClient.getProviderProfileModelCatalog({ draft }).then((nextCatalog) => {
+      if (cancelled) {
+        return;
+      }
+
+      setCatalog(nextCatalog);
+      setSelectedModelId((current) =>
+        current.trim()
+        || nextCatalog.currentModelId
+        || nextCatalog.availableModels[0]?.id
+        || draft.providerCompactionModelId.trim()
+        || "",
+      );
+    }).catch((error) => {
+      if (cancelled) {
+        return;
+      }
+
+      setCatalog(undefined);
+      setCatalogError(error instanceof Error ? error.message : String(error));
+      setSelectedModelId((current) => current.trim() || draft.providerCompactionModelId.trim() || "");
+    }).finally(() => {
+      if (!cancelled) {
+        setLoadingCatalog(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draft, open, runtimeClient]);
+
+  const requiresModelId = draft.providerType === "openai-compatible";
+  const canRunTest = !testing && (!requiresModelId || selectedModelId.trim().length > 0);
+
+  const outputText =
+    testing
+      ? "Connecting to provider and sending the OpenAquarium probe prompt..."
+      : testError
+        ? testError
+        : testResult?.responseText
+          || "Ready to test. Click “Start Test” to send a short probe message.";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[min(92vw,760px)] max-w-[760px] gap-0 overflow-hidden p-0 sm:max-w-[760px]">
+        <div className="border-b border-border px-5 py-4">
+          <DialogHeader className="gap-1">
+            <DialogTitle className="text-2xl font-semibold tracking-tight">Test Provider Connection</DialogTitle>
+            <DialogDescription>
+              用当前草稿直接探活，不需要先保存 profile。这个测试会验证模型调用链路，以及已配置的 MCP server 是否能完成装配。
+            </DialogDescription>
+          </DialogHeader>
+        </div>
+
+        <div className="grid gap-4 px-5 py-4">
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-muted/15 px-4 py-4">
+            <div>
+              <p className="m-0 text-xl font-semibold">{draft.name}</p>
+              <p className="m-0 mt-1 text-sm text-muted-foreground">
+                {draft.providerLabel} · {draft.providerKind}
+              </p>
+            </div>
+            <Badge variant="secondary">{draft.providerType === "openai-compatible" ? "HTTP API" : "ACP session"}</Badge>
+          </div>
+
+          <label className="flex flex-col gap-2">
+            <span className="text-sm font-medium">Select test model</span>
+            {catalog?.source === "runtime" && catalog.availableModels.length > 0 ? (
+              <Select value={selectedModelId} onValueChange={setSelectedModelId} disabled={loadingCatalog || testing}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder={loadingCatalog ? "Loading models…" : "Select model"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {catalog.availableModels.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input
+                value={selectedModelId}
+                placeholder={requiresModelId ? "Enter model id" : "Optional model id"}
+                disabled={testing}
+                onChange={(event) => setSelectedModelId(event.currentTarget.value)}
+              />
+            )}
+          </label>
+
+          <div className="rounded-[1.5rem] border border-border/70 bg-slate-950 px-4 py-4 text-sm text-slate-200 shadow-sm">
+            <pre className="m-0 min-h-40 whitespace-pre-wrap break-words font-mono leading-7 text-inherit">{outputText}</pre>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>Probe prompt: “{OPENAQUARIUM_PROVIDER_TEST_PROMPT}”</span>
+            {testResult ? <span>MCP tools loaded: {testResult.toolCount}</span> : null}
+          </div>
+          {catalog?.source === "unavailable" ? <p className="m-0 text-sm text-muted-foreground">{catalog.unavailableMessage}</p> : null}
+          {catalogError ? <p className="m-0 text-sm text-destructive">{catalogError}</p> : null}
+        </div>
+
+        <DialogFooter className="items-center justify-between">
+          <p className="m-0 text-sm text-muted-foreground">
+            {requiresModelId ? "openai-compatible provider 需要明确的 model id 才能开始测试。" : "ACP provider 可直接使用默认模型，也可以手动指定 model id。"}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+            <Button
+              type="button"
+              disabled={!canRunTest}
+              onClick={() => {
+                setTesting(true);
+                setTestError(undefined);
+                setTestResult(undefined);
+                void runtimeClient.testProviderProfile({
+                  draft,
+                  modelId: selectedModelId.trim() || undefined,
+                }).then((result) => {
+                  setTestResult(result);
+                }).catch((error) => {
+                  setTestError(error instanceof Error ? error.message : String(error));
+                }).finally(() => {
+                  setTesting(false);
+                });
+              }}
+            >
+              {testing ? <LoaderCircle size={16} className="animate-spin" /> : <Sparkles size={16} />}
+              Start Test
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ModelProfileEditor(props: {
   draft: ModelProfileDraft;
   disableRemove: boolean;
@@ -243,8 +903,10 @@ function ModelProfileEditor(props: {
   onRemove: () => void;
 }) {
   const { draft, disableRemove, onChange, onRemove } = props;
+  const [testDialogOpen, setTestDialogOpen] = useState(false);
 
   return (
+    <>
     <Card className="rounded-2xl border-border/70 bg-background/70 shadow-none">
       <CardHeader className="gap-3">
         <div>
@@ -252,10 +914,16 @@ function ModelProfileEditor(props: {
           <CardDescription>Provider config lives here. Team templates still pick model profiles and thinking depth separately.</CardDescription>
         </div>
         <CardAction>
-          <Button size="sm" variant="ghost" disabled={disableRemove} onClick={onRemove}>
-            <Trash2 size={16} />
-            Remove
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" type="button" onClick={() => setTestDialogOpen(true)}>
+              <Sparkles size={16} />
+              Test
+            </Button>
+            <Button size="sm" variant="ghost" disabled={disableRemove} onClick={onRemove}>
+              <Trash2 size={16} />
+              Remove
+            </Button>
+          </div>
         </CardAction>
       </CardHeader>
 
@@ -389,10 +1057,10 @@ function ModelProfileEditor(props: {
                 <Textarea className="min-h-28" value={draft.providerExtraBodyText} onChange={(event) => onChange({ providerExtraBodyText: event.currentTarget.value })} />
               )}
             </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium">MCP servers (JSON array)</span>
-              <JsonEditor value={draft.providerMcpServersText} onChange={(value) => onChange({ providerMcpServersText: value })} />
-            </label>
+            <McpServersEditor
+              servers={draft.providerMcpServers}
+              onChange={(providerMcpServers) => onChange({ providerMcpServers })}
+            />
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">Model limits (JSON object keyed by model id)</span>
               <JsonEditor value={draft.providerModelLimitsText} onChange={(value) => onChange({ providerModelLimitsText: value })} />
@@ -426,6 +1094,8 @@ function ModelProfileEditor(props: {
         )}
       </CardContent>
     </Card>
+    <ProviderTestDialog draft={draft} open={testDialogOpen} onOpenChange={setTestDialogOpen} />
+    </>
   );
 }
 
@@ -558,8 +1228,14 @@ function TemplateStudioChatPanel(props: {
 
   useEffect(() => {
     let cancelled = false;
-    setLoadingModelCatalog(true);
-    setModelCatalogError(undefined);
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+
+      setLoadingModelCatalog(true);
+      setModelCatalogError(undefined);
+    });
 
     void runtimeClient.getTemplateStudioModels({ modelProfileId }).then((catalog) => {
       if (cancelled) {
@@ -729,7 +1405,7 @@ function TemplateStudioChatPanel(props: {
                 <label className="flex min-w-0 flex-1 flex-col gap-2 md:max-w-[16rem]">
                   <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Model</span>
                   <Select
-                    value={selectedModelValue}
+                    value={selectedModelValue ?? ""}
                     onValueChange={(value) => {
                       if (modelCatalog?.source === "runtime") {
                         onModelIdChange(value);
@@ -1704,6 +2380,7 @@ export function TemplateStudioDialog(props: {
                   <div className="flex flex-col gap-4 pr-3 pb-4">
                     {activeModelProfile ? (
                       <ModelProfileEditor
+                        key={activeModelProfile.id}
                         draft={activeModelProfile}
                         disableRemove={globalConfigDraft.modelProfiles.length <= 1}
                         onChange={(patch) =>
