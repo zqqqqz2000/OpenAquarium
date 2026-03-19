@@ -30,6 +30,30 @@ import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { buildProjectActivitySummaries } from "@/lib/workspace-activity";
 import { AppThemeProvider } from "@/theme/theme-provider";
 
+Object.defineProperty(window, "localStorage", {
+  configurable: true,
+  value: {
+    getItem: vi.fn(() => null),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+    clear: vi.fn(),
+  },
+});
+
+Object.defineProperty(window, "matchMedia", {
+  configurable: true,
+  value: vi.fn().mockImplementation(() => ({
+    matches: false,
+    media: "(prefers-color-scheme: dark)",
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+});
+
 function buildSidebarData(snapshot: ReturnType<typeof createSeedWorkspace>) {
   const projectSummaries = buildProjectActivitySummaries(snapshot);
 
@@ -344,6 +368,65 @@ describe("Sidebar", () => {
     expect(roomCard).toBeTruthy();
     expect(roomCard).toHaveClass("border-ring");
     expect(roomCard).not.toHaveClass("ring-1");
+  });
+
+  it("shows the room watcher hold status and toggles it from the sidebar button", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const projectId = snapshot.projectOrder[0];
+    const roomId = snapshot.selection.roomId;
+    if (!projectId || !roomId) {
+      throw new Error("Expected seeded project and room ids");
+    }
+
+    const project = snapshot.projects[projectId];
+    const room = snapshot.rooms[roomId];
+    if (!project || !room) {
+      throw new Error("Expected seeded project and room");
+    }
+
+    snapshot.rooms[roomId] = {
+      ...room,
+      watchersSuspended: true,
+    };
+    const sidebarData = buildSidebarViewState(snapshot);
+    const onToggleRoomWatcherSuspension = vi.fn();
+
+    render(
+      <AppThemeProvider>
+        <TooltipProvider>
+          <Sidebar
+            collapsed={false}
+            projects={sidebarData.projects}
+            roomsByProject={sidebarData.roomsByProject}
+            projectActivityById={sidebarData.projectActivityById}
+            roomActivityById={sidebarData.roomActivityById}
+            projectUnreadCountById={sidebarData.projectUnreadCountById}
+            roomUnreadCountById={sidebarData.roomUnreadCountById}
+            projectRunningMembersById={sidebarData.projectRunningMembersById}
+            roomRunningMembersById={sidebarData.roomRunningMembersById}
+            activeProjectId={project.id}
+            activeRoomId={room.id}
+            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+            connected
+            loading={false}
+            onDeleteProject={vi.fn()}
+            onDeleteRoom={vi.fn()}
+            onToggleRoomWatcherSuspension={onToggleRoomWatcherSuspension}
+            onDeleteTemplate={vi.fn()}
+            onResizeStart={vi.fn()}
+            onOpenTemplate={vi.fn()}
+            onOpenTemplateStudio={vi.fn()}
+          />
+        </TooltipProvider>
+      </AppThemeProvider>,
+    );
+
+    expect(screen.getByText("Watch hold")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: `Resume watcher execution for ${room.name}` }));
+
+    expect(onToggleRoomWatcherSuspension).toHaveBeenCalledWith(room.id);
   });
 
   it("preserves the active focus ring when a room is running", () => {

@@ -25,6 +25,7 @@ import {
   updateMemberConfig,
   upsertMemberWatcher,
   syncUnreadStateForMessage,
+  toggleRoomWatcherSuspension,
   toggleWatcher,
 } from "@/domain/workspace";
 import { formatTime } from "@/lib/time";
@@ -1182,6 +1183,43 @@ describe("workspace domain", () => {
     expect(snapshot.watchers[watcherId].pausedUntilActivity).toBe(false);
     expect(digestMessages).toHaveLength(1);
     expect(digestMessages[0].content).toContain("pause 后的新消息");
+  });
+
+  it("blocks watcher execution with a room-level suspension without changing the watcher state", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const watcherId = snapshot.rooms[roomId].watcherIds[0];
+
+    snapshot = runWatcher(snapshot, watcherId, context);
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId,
+        content: "room suspend 期间的新消息",
+      },
+      context,
+    );
+    snapshot = toggleRoomWatcherSuspension(snapshot, roomId);
+
+    const suspendedRun = runWatcher(snapshot, watcherId, context);
+    const suspendedDigestMessages = (suspendedRun.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => suspendedRun.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(suspendedRun.rooms[roomId].watchersSuspended).toBe(true);
+    expect(suspendedRun.watchers[watcherId].enabled).toBe(true);
+    expect(suspendedDigestMessages).toHaveLength(0);
+
+    const resumedRun = runWatcher(toggleRoomWatcherSuspension(suspendedRun, roomId), watcherId, context);
+    const resumedDigestMessages = (resumedRun.messageOrderByRoom[roomId] ?? [])
+      .map((messageId) => resumedRun.messages[messageId])
+      .filter((message) => message.transport === "watch-digest");
+
+    expect(resumedRun.rooms[roomId].watchersSuspended).toBe(false);
+    expect(resumedDigestMessages).toHaveLength(1);
+    expect(resumedDigestMessages[0].content).toContain("room suspend 期间的新消息");
   });
 
   it("keeps a paused persistent watcher paused when only watcher-task output arrives", () => {

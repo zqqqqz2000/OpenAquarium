@@ -348,6 +348,22 @@ export async function handleWorkspaceJsonApiRequest(args: {
     };
   }
 
+  const roomWatcherSuspensionToggleMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/watcher-suspension\/toggle$/u);
+  if (method === "POST" && roomWatcherSuspensionToggleMatch) {
+    const [, roomId] = roomWatcherSuspensionToggleMatch;
+    if (!roomId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing room id" },
+      };
+    }
+    const snapshot = await runtime.toggleRoomWatcherSuspension(roomId);
+    return {
+      statusCode: 200,
+      payload: { snapshot },
+    };
+  }
+
   const roomTeamMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/team$/u);
   if (method === "POST" && roomTeamMatch) {
     const [, roomId] = roomTeamMatch;
@@ -1019,6 +1035,18 @@ export async function startWorkspaceHttpServer(args: {
           roomId,
           visibleMemberIds: body.visibleMemberIds,
         });
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
+      const roomWatcherSuspensionToggleMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/watcher-suspension\/toggle$/u);
+      if (request.method === "POST" && roomWatcherSuspensionToggleMatch) {
+        const [, roomId] = roomWatcherSuspensionToggleMatch;
+        if (!roomId) {
+          sendJson(response, 400, { error: "Missing room id" });
+          return;
+        }
+        const snapshot = await args.runtime.toggleRoomWatcherSuspension(roomId);
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }

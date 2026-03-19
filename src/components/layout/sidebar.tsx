@@ -1,7 +1,7 @@
 import { useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, ChevronRight, FolderKanban, LoaderCircle, Settings2, Trash2, Waves, X } from "lucide-react";
+import { ChevronDown, ChevronRight, FolderKanban, LoaderCircle, Pause, Play, Settings2, Trash2, Waves, X } from "lucide-react";
 
 import type { Project, Room, TeamTemplate } from "@/domain/model";
 import { RunningMembersHoverCard, type RunningMemberPreview } from "@/components/members/running-members-hover-card";
@@ -101,6 +101,38 @@ function SidebarRunningBadge(props: {
   );
 }
 
+function RoomWatcherSuspensionButton(props: {
+  room: Room;
+  disabled: boolean;
+  pending: boolean;
+  onToggle?: (roomId: string) => void;
+}) {
+  const { room, disabled, pending, onToggle } = props;
+  const suspended = room.watchersSuspended === true;
+  const actionLabel = suspended ? `Resume watcher execution for ${room.name}` : `Suspend watcher execution for ${room.name}`;
+  const tooltipLabel = suspended
+    ? "Resume watcher execution. Existing watcher config will stay unchanged."
+    : "Suspend watcher execution for this room without changing any watcher's original state.";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant={suspended ? "secondary" : "ghost"}
+          size="icon-xs"
+          aria-label={actionLabel}
+          disabled={disabled || pending || !onToggle}
+          onClick={() => onToggle?.(room.id)}
+        >
+          {pending ? <LoaderCircle size={14} className="animate-spin" /> : suspended ? <Play size={14} /> : <Pause size={14} />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{tooltipLabel}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ProjectRow(props: {
   project: Project;
   rooms: Room[];
@@ -117,12 +149,14 @@ function ProjectRow(props: {
   templates: TeamTemplate[];
   deletingProjectId?: string;
   deletingRoomId?: string;
+  togglingRoomWatcherSuspensionRoomId?: string;
   pendingDelete?: { kind: "project" | "room" | "template"; id: string };
   onClearPendingDelete: () => void;
   onToggleExpanded: () => void;
   onSetPendingDelete: (payload: { kind: "project" | "room" | "template"; id: string }) => void;
   onDeleteProject: (projectId: string) => void;
   onDeleteRoom: (roomId: string) => void;
+  onToggleRoomWatcherSuspension?: (roomId: string) => void;
   onOpenMember?: (projectId: string, roomId: string, memberId: string) => void;
 }) {
   const {
@@ -141,12 +175,14 @@ function ProjectRow(props: {
     templates,
     deletingProjectId,
     deletingRoomId,
+    togglingRoomWatcherSuspensionRoomId,
     pendingDelete,
     onClearPendingDelete,
     onToggleExpanded,
     onSetPendingDelete,
     onDeleteProject,
     onDeleteRoom,
+    onToggleRoomWatcherSuspension,
     onOpenMember,
   } = props;
   const isPendingDelete = pendingDelete?.kind === "project" && pendingDelete.id === project.id;
@@ -271,6 +307,14 @@ function ProjectRow(props: {
                           {summarizePrompt(room.topic || "No topic yet.", 54)}
                         </p>
                         <div className="mt-1.5 flex items-center gap-2">
+                          {room.watchersSuspended ? (
+                            <Badge
+                              variant="outline"
+                              className="h-5 rounded-full border-amber-500/45 bg-amber-500/10 px-1.5 text-[10px] uppercase tracking-[0.14em] text-amber-700 dark:text-amber-300"
+                            >
+                              Watch hold
+                            </Badge>
+                          ) : null}
                           <ActivityTimestamp updatedAt={roomActivity?.updatedAt ?? room.updatedAt ?? room.createdAt} />
                         </div>
                       </div>
@@ -283,6 +327,12 @@ function ProjectRow(props: {
                         runningCount={roomActivity?.runningCount ?? 0}
                         idleLabel="Ready"
                         onOpenMember={onOpenMember ? (preview) => onOpenMember(project.id, preview.roomId, preview.memberId) : undefined}
+                      />
+                      <RoomWatcherSuspensionButton
+                        room={room}
+                        disabled={actionsDisabled}
+                        pending={togglingRoomWatcherSuspensionRoomId === room.id}
+                        onToggle={onToggleRoomWatcherSuspension}
                       />
                     </div>
                   </div>
@@ -349,9 +399,11 @@ export function Sidebar(props: {
   deletingProjectId?: string;
   deletingRoomId?: string;
   deletingTemplateId?: string;
+  togglingRoomWatcherSuspensionRoomId?: string;
   onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onDeleteProject: (projectId: string) => void;
   onDeleteRoom: (roomId: string) => void;
+  onToggleRoomWatcherSuspension?: (roomId: string) => void;
   onDeleteTemplate: (templateId: string) => void;
   onOpenTemplate: (templateId: string) => void;
   onOpenTemplateStudio: () => void;
@@ -377,9 +429,11 @@ export function Sidebar(props: {
     deletingProjectId,
     deletingRoomId,
     deletingTemplateId,
+    togglingRoomWatcherSuspensionRoomId,
     onResizeStart,
     onDeleteProject,
     onDeleteRoom,
+    onToggleRoomWatcherSuspension,
     onDeleteTemplate,
     onOpenTemplate,
     onOpenTemplateStudio,
@@ -466,6 +520,7 @@ export function Sidebar(props: {
                   templates={templates}
                   deletingProjectId={deletingProjectId}
                   deletingRoomId={deletingRoomId}
+                  togglingRoomWatcherSuspensionRoomId={togglingRoomWatcherSuspensionRoomId}
                   pendingDelete={pendingDelete}
                   onClearPendingDelete={() => setPendingDelete(undefined)}
                   onToggleExpanded={() =>
@@ -477,6 +532,7 @@ export function Sidebar(props: {
                   onSetPendingDelete={setPendingDelete}
                   onDeleteProject={onDeleteProject}
                   onDeleteRoom={onDeleteRoom}
+                  onToggleRoomWatcherSuspension={onToggleRoomWatcherSuspension}
                   onOpenMember={onOpenMember}
                 />
               ))}

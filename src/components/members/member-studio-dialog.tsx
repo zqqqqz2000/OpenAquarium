@@ -230,6 +230,11 @@ export function MemberStudioDialog(props: {
             description: `Enable ${member.name}'s watcher before running it manually.`,
           });
           return;
+        case "suspended":
+          toast.error("Room watcher execution is suspended", {
+            description: `${member.name}'s room is temporarily blocking watcher runs without changing the watcher's original state.`,
+          });
+          return;
         case "baselined":
           toast.success("Watcher primed", {
             description: `${member.name} established a watcher baseline. The next run will inspect newer activity.`,

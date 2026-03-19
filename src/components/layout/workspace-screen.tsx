@@ -172,6 +172,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     selectRoom,
     selectMember,
     runWatcher,
+    toggleRoomWatcherSuspension,
     updateMemberConfig,
     updateRoomSettings,
     updateRoomTeam,
@@ -193,6 +194,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
       selectRoom: state.selectRoom,
       selectMember: state.selectMember,
       runWatcher: state.runWatcher,
+      toggleRoomWatcherSuspension: state.toggleRoomWatcherSuspension,
       updateMemberConfig: state.updateMemberConfig,
       updateRoomSettings: state.updateRoomSettings,
       updateRoomTeam: state.updateRoomTeam,
@@ -211,6 +213,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const [deletingProjectId, setDeletingProjectId] = useState<string | undefined>(undefined);
   const [deletingRoomId, setDeletingRoomId] = useState<string | undefined>(undefined);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | undefined>(undefined);
+  const [togglingRoomWatcherSuspensionRoomId, setTogglingRoomWatcherSuspensionRoomId] = useState<string | undefined>(undefined);
   const {
     leftCollapsed,
     leftWidth,
@@ -378,6 +381,15 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     }
   };
 
+  const handleToggleRoomWatcherSuspension = async (targetRoomId: string): Promise<void> => {
+    try {
+      setTogglingRoomWatcherSuspensionRoomId(targetRoomId);
+      await toggleRoomWatcherSuspension(targetRoomId);
+    } finally {
+      setTogglingRoomWatcherSuspensionRoomId(undefined);
+    }
+  };
+
   const handleSaveRoomTeam = async (input: Parameters<typeof updateRoomTeam>[0]): Promise<void> => {
     const nextSnapshot = await updateRoomTeam(input);
     syncRouteAfterStructureChange(nextSnapshot);
@@ -460,9 +472,11 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           deletingProjectId={deletingProjectId}
           deletingRoomId={deletingRoomId}
           deletingTemplateId={deletingTemplateId}
+          togglingRoomWatcherSuspensionRoomId={togglingRoomWatcherSuspensionRoomId}
           onResizeStart={startSidebarResize}
           onDeleteProject={(targetProjectId) => void handleDeleteProject(targetProjectId)}
           onDeleteRoom={(targetRoomId) => void handleDeleteRoom(targetRoomId)}
+          onToggleRoomWatcherSuspension={(targetRoomId) => void handleToggleRoomWatcherSuspension(targetRoomId)}
           onDeleteTemplate={(templateIdToDelete) => void handleDeleteTemplate(templateIdToDelete)}
           onOpenMember={openRoomMemberFromSidebar}
           onOpenTemplate={openTemplateStudio}

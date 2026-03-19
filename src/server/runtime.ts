@@ -33,6 +33,7 @@ import {
   pauseWatcherUntilActivity as pauseWatcherUntilActivityInWorkspace,
   runWatcher,
   setEntryMember,
+  toggleRoomWatcherSuspension as toggleRoomWatcherSuspensionInWorkspace,
   toggleWatcher,
   updateMemberConfig,
   updateRoomSettings as updateRoomSettingsInWorkspace,
@@ -121,7 +122,7 @@ interface WatcherTimerEntry {
   timer: ReturnType<typeof setInterval>;
 }
 
-export type WatcherRunOutcome = "triggered" | "busy" | "disabled" | "baselined" | "idle";
+export type WatcherRunOutcome = "triggered" | "busy" | "disabled" | "suspended" | "baselined" | "idle";
 
 class TaskExecutionTimeoutError extends Error {
   constructor(message: string) {
@@ -421,6 +422,7 @@ export class WorkspaceRuntime {
   private readonly runningTaskIds = new Set<string>();
   private readonly watcherTimers = new Map<string, WatcherTimerEntry>();
   private readonly pendingWatcherRuns = new Set<string>();
+  private readonly suspendedWatcherRoomIds = new Set<string>();
   private readonly taskObservers = new Map<string, TaskObserverEntry>();
   private readonly persistence: WorkspacePersistence;
   private readonly workspaceRoot: string;
@@ -461,6 +463,11 @@ export class WorkspaceRuntime {
     logger?: DiagnosticsLogger;
   }) {
     this.snapshot = args.initialSnapshot;
+    Object.values(args.initialSnapshot.rooms).forEach((room) => {
+      if (room.watchersSuspended === true) {
+        this.suspendedWatcherRoomIds.add(room.id);
+      }
+    });
     this.activeRoomId = args.initialSnapshot.selection.roomId;
     this.context = args.context ?? createRuntimeContext(10_000, "2026-03-09T10:00:00.000Z");
     this.persistence = args.persistence;
@@ -1078,6 +1085,21 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
+  async toggleRoomWatcherSuspension(roomId: string): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    if (!previous.rooms[roomId]) {
+      throw new Error(`Unknown room "${roomId}"`);
+    }
+    if (this.suspendedWatcherRoomIds.has(roomId)) {
+      this.suspendedWatcherRoomIds.delete(roomId);
+    } else {
+      this.suspendedWatcherRoomIds.add(roomId);
+    }
+    const next = toggleRoomWatcherSuspensionInWorkspace(previous, roomId);
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
   async pauseWatcherUntilActivity(watcherId: string): Promise<WorkspaceSnapshot> {
     const previous = this.snapshot;
     const next = pauseWatcherUntilActivityInWorkspace(previous, watcherId);
@@ -1090,6 +1112,9 @@ export class WorkspaceRuntime {
     if (!watcher || !watcher.enabled) {
       this.pendingWatcherRuns.delete(watcherId);
       return { snapshot: this.snapshot, outcome: "disabled" };
+    }
+    if (this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true) {
+      return { snapshot: this.snapshot, outcome: "suspended" };
     }
 
     if (this.hasRunningTaskForMember(watcher.memberId)) {
@@ -1235,13 +1260,47 @@ export class WorkspaceRuntime {
       previous,
       next: prepared,
     });
-    this.snapshot = compactWorkspaceSnapshot(prepared);
+    this.snapshot = compactWorkspaceSnapshot(this.applyWatcherRoomSuspensions(prepared));
     await this.persistImmediately(this.snapshot);
     this.logger?.info("snapshot-applied", summarizeWorkspaceSnapshot(this.snapshot));
     this.syncWatchers();
     this.emit();
     this.dispatchNewTasks(previous, this.snapshot);
     await this.flushPendingWatchers();
+  }
+
+  private applyWatcherRoomSuspensions(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
+    let nextSnapshot = snapshot;
+    let rooms = snapshot.rooms;
+
+    Object.entries(snapshot.rooms).forEach(([roomId, room]) => {
+      const shouldSuspend = this.suspendedWatcherRoomIds.has(roomId);
+      if ((room.watchersSuspended === true) === shouldSuspend) {
+        return;
+      }
+      if (rooms === snapshot.rooms) {
+        rooms = { ...snapshot.rooms };
+      }
+      rooms[roomId] = {
+        ...room,
+        watchersSuspended: shouldSuspend,
+      };
+    });
+
+    [...this.suspendedWatcherRoomIds].forEach((roomId) => {
+      if (!snapshot.rooms[roomId]) {
+        this.suspendedWatcherRoomIds.delete(roomId);
+      }
+    });
+
+    if (rooms !== snapshot.rooms) {
+      nextSnapshot = {
+        ...snapshot,
+        rooms,
+      };
+    }
+
+    return nextSnapshot;
   }
 
   private applyUnreadState(previous: WorkspaceSnapshot, next: WorkspaceSnapshot): WorkspaceSnapshot {
@@ -2170,14 +2229,14 @@ export class WorkspaceRuntime {
     this.watcherTimers.forEach((entry, watcherId) => {
       const watcher = this.snapshot.watchers[watcherId];
       const intervalMs = watcher ? watcher.intervalMinutes * 60 * 1000 : undefined;
-      if (!watcher || !watcher.enabled || intervalMs !== entry.intervalMs) {
+      if (!watcher || !watcher.enabled || this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true || intervalMs !== entry.intervalMs) {
         clearInterval(entry.timer);
         this.watcherTimers.delete(watcherId);
       }
     });
 
     Object.entries(this.snapshot.watchers).forEach(([watcherId, watcher]) => {
-      if (!watcher.enabled || this.watcherTimers.has(watcherId)) {
+      if (!watcher.enabled || this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true || this.watcherTimers.has(watcherId)) {
         return;
       }
 
@@ -2218,7 +2277,7 @@ export class WorkspaceRuntime {
 
   private canRunWatcherNow(watcherId: string): boolean {
     const watcher = this.snapshot.watchers[watcherId];
-    if (!watcher || !watcher.enabled) {
+    if (!watcher || !watcher.enabled || this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true) {
       return false;
     }
 

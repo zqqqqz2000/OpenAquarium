@@ -216,6 +216,7 @@ export interface Room {
   teamAccentTone?: AccentTone;
   memberIds: MemberId[];
   watcherIds: WatcherId[];
+  watchersSuspended?: boolean;
   entryMemberId: MemberId;
   createdAt: string;
   updatedAt?: string;

@@ -2103,6 +2103,126 @@ describe("WorkspaceRuntime", () => {
     });
   });
 
+  it("keeps room-level watcher suspension separate from the watcher state and resumes pending work after reopening", async () => {
+    const workspaceRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-runtime-room-watcher-suspension-"),
+    );
+    let holdScribe = false;
+    let releaseScribe: (() => void) | undefined;
+    const scribeReleasePromise = new Promise<void>((resolve) => {
+      releaseScribe = resolve;
+    });
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(
+        path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (_request, callbacks) => {
+          if (member.handle === "scribe" && holdScribe) {
+            await scribeReleasePromise;
+          }
+
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const { roomId } = await runtime.createProject({
+      projectName: "Room Watcher Suspension",
+      templateId: "template-product-pod",
+    });
+
+    let snapshot = runtime.getSnapshot();
+    const scribe = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "scribe");
+    expect(scribe).toBeDefined();
+    if (!scribe) {
+      throw new Error("Expected scribe member");
+    }
+
+    await runtime.sendUserMessage({
+      roomId,
+      content: "先建立 watcher 基线",
+    });
+    await waitFor(() => {
+      const current = runtime.getSnapshot();
+      expect(
+        Object.values(current.tasks).some(
+          (task) => task.roomId === roomId && task.status === "running",
+        ),
+      ).toBe(false);
+    });
+
+    const watcherId = runtime.getSnapshot().rooms[roomId].watcherIds.find(
+      (candidate) => runtime.getSnapshot().watchers[candidate]?.memberId === scribe.id,
+    );
+    expect(watcherId).toBeDefined();
+    if (!watcherId) {
+      throw new Error("Expected watcher id");
+    }
+
+    await runtime.runWatcherNow(watcherId);
+
+    holdScribe = true;
+    await runtime.sendUserMessage({
+      roomId,
+      directMemberId: scribe.id,
+      content: "先让 scribe 忙起来",
+    });
+    await flushMicrotasks();
+
+    await runtime.sendUserMessage({
+      roomId,
+      content: "这条消息应该在 room watcher 恢复后再被处理",
+    });
+    await flushMicrotasks();
+
+    const busyRun = await runtime.runWatcherNow(watcherId);
+    expect(busyRun.outcome).toBe("busy");
+
+    await runtime.toggleRoomWatcherSuspension(roomId);
+    snapshot = runtime.getSnapshot();
+    expect(snapshot.rooms[roomId].watchersSuspended).toBe(true);
+    expect(snapshot.watchers[watcherId].enabled).toBe(true);
+
+    holdScribe = false;
+    releaseScribe?.();
+    await waitFor(() => {
+      const current = runtime.getSnapshot();
+      expect(
+        Object.values(current.tasks).some(
+          (task) => task.roomId === roomId && task.status === "running",
+        ),
+      ).toBe(false);
+    });
+
+    snapshot = runtime.getSnapshot();
+    expect(
+      Object.values(snapshot.messages).filter(
+        (message) => message.roomId === roomId && message.transport === "watch-digest",
+      ),
+    ).toHaveLength(0);
+
+    const suspendedRun = await runtime.runWatcherNow(watcherId);
+    expect(suspendedRun.outcome).toBe("suspended");
+
+    await runtime.toggleRoomWatcherSuspension(roomId);
+    await waitFor(() => {
+      const current = runtime.getSnapshot();
+      const digestMessages = Object.values(current.messages).filter(
+        (message) => message.roomId === roomId && message.transport === "watch-digest",
+      );
+      expect(current.rooms[roomId].watchersSuspended).toBe(false);
+      expect(digestMessages).toHaveLength(1);
+      expect(digestMessages[0]?.content).toContain(
+        "这条消息应该在 room watcher 恢复后再被处理",
+      );
+    });
+  });
+
   it("reschedules watcher timers when the interval changes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-13T01:00:00.000Z"));

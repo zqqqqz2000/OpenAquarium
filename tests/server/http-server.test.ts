@@ -275,6 +275,17 @@ describe("workspace http api routing", () => {
     };
     expect(roomReadPayload.snapshot.rooms[roomId]?.id).toBe(roomId);
 
+    const roomWatcherSuspensionResult = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: `/api/rooms/${roomId}/watcher-suspension/toggle`,
+    });
+    expect(roomWatcherSuspensionResult?.statusCode).toBe(200);
+    const roomWatcherSuspensionPayload = roomWatcherSuspensionResult?.payload as {
+      snapshot: { rooms: Record<string, { watchersSuspended?: boolean }> };
+    };
+    expect(roomWatcherSuspensionPayload.snapshot.rooms[roomId]?.watchersSuspended).toBe(true);
+
     const roomTeamResult = await handleWorkspaceJsonApiRequest({
       runtime,
       method: "POST",

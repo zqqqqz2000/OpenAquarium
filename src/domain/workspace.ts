@@ -1041,6 +1041,7 @@ export function createRoomInProject(
     ...buildRoomTeamFields(template),
     memberIds: roomMembers.map((member) => member.id),
     watcherIds: watcherIds.map((watcher) => watcher.id),
+    watchersSuspended: false,
     entryMemberId: memberIdByBlueprint[entryBlueprint.id],
     createdAt: now,
     updatedAt: now,
@@ -2111,6 +2112,22 @@ export function toggleWatcher(current: WorkspaceSnapshot, watcherId: string): Wo
   return snapshot;
 }
 
+export function toggleRoomWatcherSuspension(current: WorkspaceSnapshot, roomId: RoomId): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const room = snapshot.rooms[roomId];
+
+  if (!room) {
+    throw new Error(`Unknown room "${roomId}"`);
+  }
+
+  snapshot.rooms[roomId] = {
+    ...room,
+    watchersSuspended: room.watchersSuspended !== true,
+  };
+
+  return snapshot;
+}
+
 export function pauseWatcherUntilActivity(current: WorkspaceSnapshot, watcherId: string): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
   const watcher = snapshot.watchers[watcherId];
@@ -2348,8 +2365,9 @@ function stageWatcherCursor(
 export function runWatcher(current: WorkspaceSnapshot, watcherId: string, context: MutationContext): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
   const watcher = snapshot.watchers[watcherId];
+  const room = watcher ? snapshot.rooms[watcher.roomId] : undefined;
 
-  if (!watcher || !watcher.enabled) {
+  if (!watcher || !watcher.enabled || room?.watchersSuspended === true) {
     return snapshot;
   }
 

@@ -12,7 +12,7 @@ import type {
   WorkspaceSnapshot,
 } from "@/domain/model";
 
-export type WatcherRunOutcome = "triggered" | "busy" | "disabled" | "baselined" | "idle";
+export type WatcherRunOutcome = "triggered" | "busy" | "disabled" | "suspended" | "baselined" | "idle";
 
 export interface WatcherRunResult {
   snapshot: WorkspaceSnapshot;
@@ -304,6 +304,15 @@ export class WorkspaceRuntimeClient {
   async toggleWatcher(watcherId: string): Promise<WorkspaceSnapshot> {
     const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
       await fetch(`${this.baseUrl}/api/watchers/${watcherId}/toggle`, {
+        method: "POST",
+      }),
+    );
+    return payload.snapshot;
+  }
+
+  async toggleRoomWatcherSuspension(roomId: string): Promise<WorkspaceSnapshot> {
+    const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
+      await fetch(`${this.baseUrl}/api/rooms/${roomId}/watcher-suspension/toggle`, {
         method: "POST",
       }),
     );

@@ -33,6 +33,7 @@ function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
     setEntryMember: () => Promise.reject(new Error("not implemented")),
     upsertWatcher: () => Promise.reject(new Error("not implemented")),
     toggleWatcher: () => Promise.reject(new Error("not implemented")),
+    toggleRoomWatcherSuspension: () => Promise.reject(new Error("not implemented")),
     runWatcher: () => Promise.reject(new Error("not implemented")),
     generateTemplate: (brief: string) => {
       void brief;
