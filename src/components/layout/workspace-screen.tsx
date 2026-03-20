@@ -6,6 +6,7 @@ import { shallow } from "zustand/shallow";
 import type { Room, WorkspaceSnapshot } from "@/domain/model";
 import { ChatPane } from "@/components/chat/chat-pane";
 import { clampLeftPanelWidth, clampRightPanelWidth, getRoomGridColumns } from "@/lib/shell-panels";
+import { buildRoomWatcherPauseSummaryById, type RoomWatcherPauseSummary } from "@/lib/watcher-state";
 import { buildProjectActivitySummaries } from "@/lib/workspace-activity";
 import { Sidebar } from "@/components/layout/sidebar";
 import { useShellPanels } from "@/components/layout/use-shell-panels";
@@ -101,6 +102,7 @@ interface WorkspaceSidebarData {
   roomsByProject: Record<string, Room[]>;
   projectActivityById: Record<string, ReturnType<typeof buildProjectActivitySummaries>[number]>;
   roomActivityById: ReturnType<typeof buildRoomActivityIndex>;
+  roomWatcherPauseById: Record<string, RoomWatcherPauseSummary>;
   projectUnreadCountById: Record<string, number>;
   roomUnreadCountById: Record<string, number>;
   projectRunningMembersById: Record<string, ReturnType<typeof buildRunningMemberPreviewsForRoom>>;
@@ -123,6 +125,7 @@ function buildWorkspaceSidebarData(snapshot: WorkspaceSnapshot): WorkspaceSideba
     projectSummaries.map((summary) => [summary.project.id, summary]),
   ) as Record<string, ReturnType<typeof buildProjectActivitySummaries>[number]>;
   const roomActivityById = buildRoomActivityIndex(projectSummaries);
+  const roomWatcherPauseById = buildRoomWatcherPauseSummaryById(snapshot);
   const roomUnreadCountById = Object.fromEntries(
     Object.values(snapshot.rooms).map((candidateRoom) => [candidateRoom.id, candidateRoom.unreadMemberMessageCount ?? 0]),
   ) as Record<string, number>;
@@ -150,6 +153,7 @@ function buildWorkspaceSidebarData(snapshot: WorkspaceSnapshot): WorkspaceSideba
     roomsByProject,
     projectActivityById,
     roomActivityById,
+    roomWatcherPauseById,
     projectUnreadCountById,
     roomUnreadCountById,
     projectRunningMembersById,
@@ -458,6 +462,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
           roomsByProject={sidebarData.roomsByProject}
           projectActivityById={sidebarData.projectActivityById}
           roomActivityById={sidebarData.roomActivityById}
+          roomWatcherPauseById={sidebarData.roomWatcherPauseById}
           projectUnreadCountById={sidebarData.projectUnreadCountById}
           roomUnreadCountById={sidebarData.roomUnreadCountById}
           projectRunningMembersById={sidebarData.projectRunningMembersById}

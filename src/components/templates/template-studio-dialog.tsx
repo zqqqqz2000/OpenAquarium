@@ -2186,7 +2186,7 @@ export function TemplateStudioDialog(props: {
                               <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
                                 <span className="flex items-center gap-2 text-sm font-medium">
                                   <span>Persistent watch</span>
-                                  <InlineHint content="新建 room 后，即使没有新变化，这个 watcher 也会按周期持续触发。" />
+                                  <InlineHint content="新建 room 后，即使没有新变化，这个 watcher 也可以按周期产出 heartbeat digest；后续仍可能被 room-level Watch hold 或 watcher-level pause until activity 暂停。" />
                                 </span>
                                 <Switch
                                   aria-label="Template persistent watch"

@@ -429,6 +429,61 @@ describe("Sidebar", () => {
     expect(onToggleRoomWatcherSuspension).toHaveBeenCalledWith(room.id);
   });
 
+  it("shows watcher pause-until-activity separately from room-level watch hold", () => {
+    const snapshot = createSeedWorkspace();
+    const projectId = snapshot.projectOrder[0];
+    const roomId = snapshot.selection.roomId;
+    if (!projectId || !roomId) {
+      throw new Error("Expected seeded project and room ids");
+    }
+
+    const project = snapshot.projects[projectId];
+    const room = snapshot.rooms[roomId];
+    if (!project || !room) {
+      throw new Error("Expected seeded project and room");
+    }
+
+    const sidebarData = buildSidebarViewState(snapshot);
+
+    render(
+      <AppThemeProvider>
+        <TooltipProvider>
+          <Sidebar
+            collapsed={false}
+            projects={sidebarData.projects}
+            roomsByProject={sidebarData.roomsByProject}
+            projectActivityById={sidebarData.projectActivityById}
+            roomActivityById={sidebarData.roomActivityById}
+            roomWatcherPauseById={{
+              [room.id]: {
+                enabledCount: 1,
+                pausedUntilActivityCount: 1,
+              },
+            }}
+            projectUnreadCountById={sidebarData.projectUnreadCountById}
+            roomUnreadCountById={sidebarData.roomUnreadCountById}
+            projectRunningMembersById={sidebarData.projectRunningMembersById}
+            roomRunningMembersById={sidebarData.roomRunningMembersById}
+            activeProjectId={project.id}
+            activeRoomId={room.id}
+            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+            connected
+            loading={false}
+            onDeleteProject={vi.fn()}
+            onDeleteRoom={vi.fn()}
+            onDeleteTemplate={vi.fn()}
+            onResizeStart={vi.fn()}
+            onOpenTemplate={vi.fn()}
+            onOpenTemplateStudio={vi.fn()}
+          />
+        </TooltipProvider>
+      </AppThemeProvider>,
+    );
+
+    expect(screen.getByText("Watch waiting")).toBeInTheDocument();
+    expect(screen.queryByText("Watch hold")).not.toBeInTheDocument();
+  });
+
   it("preserves the active focus ring when a room is running", () => {
     const snapshot = createSeedWorkspace();
     const projectId = snapshot.projectOrder[0];

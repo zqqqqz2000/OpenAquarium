@@ -657,7 +657,7 @@ export function RoomTeamDialog(props: {
                           <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
                             {activeMember.isRole
                               ? "Role owner 不允许配置 Watch。先关闭 Role owner，才能在当前 room 为这个成员保存 watcher。"
-                              : "开启 Persistent watch 后，不会立刻触发；要等第一个 interval 到达。之后即使没有新消息，也会生成 heartbeat digest；如果有新消息或成员状态变化，digest 会带上新增内容。"}
+                              : "开启 Persistent watch 后，不会立刻触发；要等第一个 interval 到达。之后即使没有新消息，也可以生成 heartbeat digest；如果有新消息或成员状态变化，digest 会带上新增内容。后续仍可能被 room-level Watch hold 或 watcher-level pause until activity 暂停。"}
                           </div>
 
                           <div className="flex flex-col gap-2">

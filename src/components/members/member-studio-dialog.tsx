@@ -49,6 +49,8 @@ import { badgeToneProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
 
 const CODEX_THINKING_DEPTHS = ["low", "mid", "high", "extra-high"] as const;
+const ROOM_WATCH_HOLD_BADGE_CLASS_NAME = "border-amber-500/45 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+const WATCHER_PAUSED_BADGE_CLASS_NAME = "border-sky-500/45 bg-sky-500/10 text-sky-700 dark:text-sky-300";
 
 function FactTile(props: { label: string; value: string }) {
   const { label, value } = props;
@@ -289,6 +291,17 @@ export function MemberStudioDialog(props: {
                   <Badge variant="secondary">{skillCount} skills</Badge>
                   {member.isEntryMember ? <Badge variant="outline">Entry member</Badge> : null}
                   {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
+                  {watcher?.persistent ? <Badge variant="outline">Persistent</Badge> : null}
+                  {room.watchersSuspended ? (
+                    <Badge variant="outline" className={ROOM_WATCH_HOLD_BADGE_CLASS_NAME}>
+                      Room watch hold
+                    </Badge>
+                  ) : null}
+                  {watcher?.pausedUntilActivity ? (
+                    <Badge variant="outline" className={WATCHER_PAUSED_BADGE_CLASS_NAME}>
+                      Paused until activity
+                    </Badge>
+                  ) : null}
                 </div>
               </CardContent>
             </Card>
@@ -497,6 +510,35 @@ export function MemberStudioDialog(props: {
                       <Clock3 size={18} />
                       <p className="m-0 text-lg font-semibold tracking-tight">Watcher</p>
                     </div>
+                    {watcher ? (
+                      <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3">
+                        <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Runtime status</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Badge variant={watcher.enabled ? "outline" : "secondary"}>
+                            {watcher.enabled ? "Watcher enabled" : "Watcher disabled"}
+                          </Badge>
+                          <Badge variant={watcher.persistent ? "outline" : "secondary"}>
+                            {watcher.persistent ? "Persistent watch" : "Activity-only watch"}
+                          </Badge>
+                          {room.watchersSuspended ? (
+                            <Badge variant="outline" className={ROOM_WATCH_HOLD_BADGE_CLASS_NAME}>
+                              Room watch hold
+                            </Badge>
+                          ) : null}
+                          {watcher.pausedUntilActivity ? (
+                            <Badge variant="outline" className={WATCHER_PAUSED_BADGE_CLASS_NAME}>
+                              Paused until activity
+                            </Badge>
+                          ) : null}
+                        </div>
+                        <p className="mt-2 mb-0 text-sm text-muted-foreground">
+                          Room watch hold comes from the sidebar button and suspends watcher execution for the whole room.
+                          {" "}
+                          Paused until activity is watcher-level state from `pause-until-activity`; it resumes automatically on the next room
+                          message or member state change.
+                        </p>
+                      </div>
+                    ) : null}
                     <label className="flex flex-col gap-2">
                       <span className="text-sm font-medium">Interval minutes</span>
                       <Input
@@ -530,7 +572,7 @@ export function MemberStudioDialog(props: {
                       <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
                         <span className="flex items-center gap-2 text-sm font-medium">
                           <span>Persistent watch</span>
-                          <InlineHint content="开启后，即使没有新消息或状态变化，watcher 也会按周期持续触发；直到成员主动停止。" />
+                          <InlineHint content="开启后，即使没有新消息或状态变化，watcher 也可以按周期产出 heartbeat digest。若 room 处于 Watch hold，或该 watcher 已 pause until activity，则不会继续产出 heartbeat。" />
                         </span>
                         <Switch
                           aria-label="Persistent watch"
@@ -543,7 +585,7 @@ export function MemberStudioDialog(props: {
                     <div className="rounded-xl border border-dashed border-border/80 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
                       {configDraft.isRole
                         ? "Role 成员不允许配置 Watch。先关闭 Role，才能在当前 room 为这个成员保存 watcher。"
-                        : "Persistent watch 会等首个 interval 到达后才触发；之后即使没有新房间消息，也会产出 heartbeat digest。若期间出现新消息或成员状态变化，digest 会带上这些增量。"}
+                        : "Persistent watch 会等首个 interval 到达后才触发；之后即使没有新房间消息，也可以产出 heartbeat digest。Room-level Watch hold 会暂停整个房间的 watcher；watcher-level pause until activity 会暂停当前 watcher，直到出现新房间消息或成员状态变化。"}
                     </div>
                     <div className="flex flex-wrap justify-end gap-2">
                       <Button size="sm" onClick={() => void saveWatcher()} disabled={configDraft.isRole}>

@@ -11,6 +11,7 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { RoomWatcherPauseSummary } from "@/lib/watcher-state";
 import { badgeToneProps, compactBadgeClassName } from "@/lib/ui-tone";
 import { cn, summarizePrompt } from "@/lib/utils";
 import { formatRelativeActivityShort, type ProjectActivitySummary, type RoomActivitySummary } from "@/lib/workspace-activity";
@@ -133,11 +134,41 @@ function RoomWatcherSuspensionButton(props: {
   );
 }
 
+function RoomWatcherPausedBadge(props: { summary?: RoomWatcherPauseSummary }) {
+  const { summary } = props;
+  const pausedUntilActivityCount = summary?.pausedUntilActivityCount ?? 0;
+  const enabledCount = summary?.enabledCount ?? 0;
+
+  if (pausedUntilActivityCount <= 0) {
+    return null;
+  }
+
+  const tooltipLabel =
+    enabledCount > 1
+      ? `${pausedUntilActivityCount} of ${enabledCount} enabled watchers are paused until room activity. This is separate from room-level Watch hold.`
+      : "This room has an enabled watcher paused until room activity. This is separate from room-level Watch hold.";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          className="h-5 rounded-full border-sky-500/45 bg-sky-500/10 px-1.5 text-[10px] uppercase tracking-[0.14em] text-sky-700 dark:text-sky-300"
+        >
+          Watch waiting
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent side="top">{tooltipLabel}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ProjectRow(props: {
   project: Project;
   rooms: Room[];
   projectActivity?: ProjectActivitySummary;
   roomActivityById: Record<string, RoomActivitySummary>;
+  roomWatcherPauseById?: Record<string, RoomWatcherPauseSummary>;
   projectUnreadCount: number;
   roomUnreadCountById: Record<string, number>;
   projectRunningMembers: RunningMemberPreview[];
@@ -164,6 +195,7 @@ function ProjectRow(props: {
     rooms,
     projectActivity,
     roomActivityById,
+    roomWatcherPauseById,
     projectUnreadCount,
     roomUnreadCountById,
     projectRunningMembers,
@@ -281,6 +313,7 @@ function ProjectRow(props: {
           {rooms.length > 0 ? (
             rooms.map((room) => {
               const roomActivity = roomActivityById[room.id];
+              const roomWatcherPauseSummary = roomWatcherPauseById?.[room.id];
               const isActiveRoom = room.id === activeRoomId;
               const roomPendingDelete = pendingDelete?.kind === "room" && pendingDelete.id === room.id;
 
@@ -315,6 +348,7 @@ function ProjectRow(props: {
                               Watch hold
                             </Badge>
                           ) : null}
+                          <RoomWatcherPausedBadge summary={roomWatcherPauseSummary} />
                           <ActivityTimestamp updatedAt={roomActivity?.updatedAt ?? room.updatedAt ?? room.createdAt} />
                         </div>
                       </div>
@@ -385,6 +419,7 @@ export function Sidebar(props: {
   roomsByProject: Record<string, Room[]>;
   projectActivityById: Record<string, ProjectActivitySummary>;
   roomActivityById: Record<string, RoomActivitySummary>;
+  roomWatcherPauseById?: Record<string, RoomWatcherPauseSummary>;
   projectUnreadCountById: Record<string, number>;
   roomUnreadCountById: Record<string, number>;
   projectRunningMembersById: Record<string, RunningMemberPreview[]>;
@@ -415,6 +450,7 @@ export function Sidebar(props: {
     roomsByProject,
     projectActivityById,
     roomActivityById,
+    roomWatcherPauseById,
     projectUnreadCountById,
     roomUnreadCountById,
     projectRunningMembersById,
@@ -509,6 +545,7 @@ export function Sidebar(props: {
                   rooms={roomsByProject[project.id] ?? []}
                   projectActivity={projectActivityById[project.id]}
                   roomActivityById={roomActivityById}
+                  roomWatcherPauseById={roomWatcherPauseById}
                   projectUnreadCount={projectUnreadCountById[project.id] ?? 0}
                   roomUnreadCountById={roomUnreadCountById}
                   projectRunningMembers={projectRunningMembersById[project.id] ?? []}

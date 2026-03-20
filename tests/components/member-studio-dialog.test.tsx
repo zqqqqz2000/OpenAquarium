@@ -297,6 +297,51 @@ describe("MemberStudioDialog", () => {
     });
   });
 
+  it("shows room-level hold and watcher-level pause as separate watcher states", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const scribe = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "scribe")!;
+    const watcherId = room.watcherIds.find((candidate) => snapshot.watchers[candidate]?.memberId === scribe.id);
+
+    if (!watcherId) {
+      throw new Error("Expected watcher id");
+    }
+
+    snapshot.rooms[room.id] = {
+      ...room,
+      watchersSuspended: true,
+    };
+    snapshot.watchers[watcherId] = {
+      ...snapshot.watchers[watcherId],
+      persistent: true,
+      pausedUntilActivity: true,
+    };
+
+    renderDialog(
+      <MemberStudioDialog
+        snapshot={snapshot}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        room={snapshot.rooms[room.id]}
+        member={scribe}
+        onClose={vi.fn()}
+        onSaveConfig={vi.fn()}
+        onSetEntryMember={vi.fn()}
+        onSaveWatcher={vi.fn()}
+        onRunWatcher={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Room watch hold")).toBeInTheDocument();
+    expect(screen.getByText("Paused until activity")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Watcher" }));
+
+    expect(screen.getByText("Runtime status")).toBeInTheDocument();
+    expect(screen.getByText(/Room watch hold comes from the sidebar button/)).toBeInTheDocument();
+    expect(screen.getByText(/Paused until activity is watcher-level state/)).toBeInTheDocument();
+  });
+
   it("caps the current task card height and scrolls long source messages", () => {
     const context = createRuntimeContext(900, "2026-03-10T08:30:00.000Z");
     let snapshot = createSeedWorkspace();
