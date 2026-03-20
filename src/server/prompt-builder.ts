@@ -26,6 +26,7 @@ import {
   getProjectInteractiveDirectoryPath,
   getProviderAssociationNotice,
   getRoomContextDirectoryPath,
+  getRoomInteractiveDirectoryPath,
   getRoomStateFilePath,
   getRoomTranscriptFilePath,
 } from "./room-context-files";
@@ -338,6 +339,11 @@ function buildRoomContextFileSections(
   const resolvedTranscriptFilePath =
     transcriptFilePath ?? getRoomTranscriptFilePath(workspaceRoot, room, project);
   const roomStateFilePath = getRoomStateFilePath(workspaceRoot, room, project);
+  const roomInteractiveDirectoryPath = getRoomInteractiveDirectoryPath(
+    workspaceRoot,
+    room,
+    project,
+  );
   const todoTreeFilePath = getDefaultRoomTodoTreeFilePath(
     workspaceRoot,
     room,
@@ -358,12 +364,13 @@ function buildRoomContextFileSections(
     "[Shared Room Context]",
     `project interactive directory: ${projectInteractiveDirectoryPath}`,
     `room context directory: ${roomContextDirectoryPath}`,
+    `room interactive directory: ${roomInteractiveDirectoryPath}`,
     `room transcript file: ${resolvedTranscriptFilePath}`,
     `room state file: ${roomStateFilePath}`,
     memberHistoryCount > 0
       ? `member history files: ${memberHistoryCount} file(s) under the room context directory${exampleMemberHistoryPath ? `, e.g. ${exampleMemberHistoryPath}` : ""}`
       : "member history files: (none)",
-    `todo tree files: *.aqtodo.xml under the room context directory, e.g. ${todoTreeFilePath}`,
+    `tree files: *.aqtree.xml under the room interactive directory, e.g. ${todoTreeFilePath}`,
     getProviderAssociationNotice(roomContextDirectoryPath),
   ];
 }
@@ -378,12 +385,17 @@ function buildTodoTreePromptSections(
     room,
     project,
   );
+  const roomInteractiveDirectoryPath = getRoomInteractiveDirectoryPath(
+    workspaceRoot,
+    room,
+    project,
+  );
 
   return [
-    "[AqTodo Tree]",
-    `Todo tree files live under ${getProjectInteractiveDirectoryPath(workspaceRoot, project)} and use the *.aqtodo.xml suffix.`,
+    "[AqTree]",
+    `Tree files live under ${roomInteractiveDirectoryPath} and use the *.aqtree.xml suffix.`,
     `Default file path: ${todoTreeFilePath}`,
-    "Use XML with a single <aqtodo> root and nested <node> elements to represent the tree.",
+    "Use XML with a single <aqtree> root and nested <node> elements to represent the tree. Legacy <aqtodo> roots may still exist and should be treated as compatible.",
     "Recommended node attributes: id, title, status (todo|in_progress|blocked|done), member, priority, tags, progress.",
     "Supported node metadata children: <note>, <details>, <code language=\"...\">...</code>, <image src=\"...\" alt=\"...\" />, and nested <node> children.",
     "Keep the tree user-facing: use it to track progress, blockers, ownership, screenshots, and code evidence. Edit the XML file directly when you need to update state.",

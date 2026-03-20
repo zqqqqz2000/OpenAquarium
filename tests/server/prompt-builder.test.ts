@@ -9,6 +9,7 @@ import { getRoomContextDirectoryPath } from "@/server/room-transcript-files";
 import {
   getDefaultRoomTodoTreeFilePath,
   getProjectInteractiveDirectoryPath,
+  getRoomInteractiveDirectoryPath,
 } from "@/server/room-context-files";
 
 describe("buildTaskPrompt", () => {
@@ -49,8 +50,8 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("(none)");
     expect(prompt).toContain("允许使用岗位员工工具");
     expect(prompt).toContain(`prompt: ${member.prompt}`);
-    expect(prompt).toContain("[AqTodo Tree]");
-    expect(prompt).toContain("*.aqtodo.xml");
+    expect(prompt).toContain("[AqTree]");
+    expect(prompt).toContain("*.aqtree.xml");
     expect(prompt).toContain("Provider bindings are intentionally not exported");
   });
 
@@ -533,6 +534,9 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain(`project working directory: ${project.path}`);
     expect(prompt).toContain(
       `project interactive directory: ${getProjectInteractiveDirectoryPath(process.cwd(), project)}`,
+    );
+    expect(prompt).toContain(
+      `room interactive directory: ${getRoomInteractiveDirectoryPath(process.cwd(), room, project)}`,
     );
     expect(prompt).toContain(
       `Default file path: ${getDefaultRoomTodoTreeFilePath(process.cwd(), room, project)}`,

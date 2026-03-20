@@ -66,7 +66,10 @@ describe("room context files", () => {
     expect(roomState.providerAssociation.note).toContain(
       "re-associate the project from the room UI",
     );
-    expect(todoTreeXml).toContain("<aqtodo");
+    expect(todoTreePath).toContain(
+      path.join(".openaquarium", "interactive", "rooms", room.id, "interactive", "main.aqtree.xml"),
+    );
+    expect(todoTreeXml).toContain("<aqtree");
     expect(todoTreeXml).toContain('title="In Progress"');
   });
 

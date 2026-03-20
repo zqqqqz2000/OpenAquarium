@@ -33,6 +33,7 @@ export interface RoomTodoTreesPayload {
   projectId: string;
   projectInteractiveDirectory: string;
   roomContextDirectory: string;
+  roomInteractiveDirectory: string;
   providerAssociationNotice: string;
   files: RoomTodoTreeFilePayload[];
 }

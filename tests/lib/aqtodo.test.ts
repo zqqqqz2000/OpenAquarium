@@ -8,7 +8,7 @@ import {
 
 const SAMPLE_TODO_XML = [
   '<?xml version="1.0" encoding="UTF-8"?>',
-  '<aqtodo version="1" roomId="room-a" roomName="Alpha" title="Alpha plan">',
+  '<aqtree version="1" roomId="room-a" roomName="Alpha" title="Alpha plan">',
   '  <node id="root" title="Alpha plan" status="in_progress" member="@lead" progress="40" tags="planning roadmap">',
   "    <note>Track delivery work.</note>",
   "    <details>Keep evidence user-facing.</details>",
@@ -16,7 +16,7 @@ const SAMPLE_TODO_XML = [
   '    <image src="./artifacts/proof.png" alt="proof" />',
   '    <node id="child" title="Implement preview" status="todo" member="@builder" priority="p1" />',
   "  </node>",
-  "</aqtodo>",
+  "</aqtree>",
 ].join("\n");
 
 describe("aqtodo helpers", () => {

@@ -1,4 +1,4 @@
-import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -17,8 +17,10 @@ const ROOMS_DIRECTORY_NAME = "rooms";
 const INTERACTIVE_DIRECTORY_NAME = "interactive";
 const OPEN_AQUARIUM_DIRECTORY_NAME = ".openaquarium";
 const ROOM_STATE_FILE_NAME = "room-state.json";
-const DEFAULT_TODO_TREE_FILE_NAME = "main.aqtodo.xml";
-const TODO_TREE_FILE_SUFFIX = ".aqtodo.xml";
+const DEFAULT_TODO_TREE_FILE_NAME = "main.aqtree.xml";
+const TODO_TREE_FILE_SUFFIX = ".aqtree.xml";
+const LEGACY_TODO_TREE_FILE_SUFFIX = ".aqtodo.xml";
+const TODO_TREE_FILE_SUFFIXES = [TODO_TREE_FILE_SUFFIX, LEGACY_TODO_TREE_FILE_SUFFIX] as const;
 
 export interface RoomTodoTreeFile {
   absolutePath: string;
@@ -96,6 +98,10 @@ function getProjectRoomsDirectoryForRoot(projectRoot: string): string {
   return path.join(getProjectInteractiveDirectoryForRoot(projectRoot), ROOMS_DIRECTORY_NAME);
 }
 
+function getLegacyRoomContextDirectoryForRoot(projectRoot: string, room: Pick<Room, "id" | "projectId">): string {
+  return path.join(getProjectRoomsDirectoryForRoot(projectRoot), room.projectId, room.id);
+}
+
 export function getProjectInteractiveDirectoryPath(
   workspaceRoot: string,
   project?: Pick<Project, "path">,
@@ -108,12 +114,15 @@ export function getRoomContextDirectoryPath(
   room: Pick<Room, "id" | "projectId">,
   project?: Pick<Project, "path">,
 ): string {
-  return path.join(
-    getProjectInteractiveDirectoryPath(workspaceRoot, project),
-    ROOMS_DIRECTORY_NAME,
-    room.projectId,
-    room.id,
-  );
+  return path.join(getProjectInteractiveDirectoryPath(workspaceRoot, project), ROOMS_DIRECTORY_NAME, room.id);
+}
+
+export function getRoomInteractiveDirectoryPath(
+  workspaceRoot: string,
+  room: Pick<Room, "id" | "projectId">,
+  project?: Pick<Project, "path">,
+): string {
+  return path.join(getRoomContextDirectoryPath(workspaceRoot, room, project), INTERACTIVE_DIRECTORY_NAME);
 }
 
 export function getRoomTranscriptFilePath(
@@ -146,7 +155,7 @@ export function getDefaultRoomTodoTreeFilePath(
   room: Pick<Room, "id" | "projectId">,
   project?: Pick<Project, "path">,
 ): string {
-  return path.join(getRoomContextDirectoryPath(workspaceRoot, room, project), DEFAULT_TODO_TREE_FILE_NAME);
+  return path.join(getRoomInteractiveDirectoryPath(workspaceRoot, room, project), DEFAULT_TODO_TREE_FILE_NAME);
 }
 
 export function getProviderAssociationNotice(roomContextDirectoryPath: string): string {
@@ -223,7 +232,7 @@ function buildDefaultTodoTreeXml(args: {
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    `<aqtodo version="1" roomId="${escapeXml(room.id)}" roomName="${escapeXml(roomTitle)}">`,
+    `<aqtree version="1" roomId="${escapeXml(room.id)}" roomName="${escapeXml(roomTitle)}">`,
     `  <node id="root" title="${escapeXml(roomTitle)}" status="in_progress"${ownerAttribute}>`,
     `    <note>${escapeXml(roomTopic)}</note>`,
     '    <node id="backlog" title="Backlog" status="todo">',
@@ -236,7 +245,7 @@ function buildDefaultTodoTreeXml(args: {
     "      <note>Move completed work here.</note>",
     "    </node>",
     "  </node>",
-    "</aqtodo>",
+    "</aqtree>",
     "",
   ].join("\n");
 }
@@ -248,22 +257,27 @@ async function ensureDefaultTodoTreeFile(args: {
   snapshot: WorkspaceSnapshot;
 }): Promise<void> {
   const filePath = getDefaultRoomTodoTreeFilePath(args.workspaceRoot, args.room, args.project);
+  const todoTreeFiles = await listRoomTodoTreeFiles({
+    workspaceRoot: args.workspaceRoot,
+    room: args.room,
+    project: args.project,
+    ensureDefault: false,
+  });
 
-  try {
-    await access(filePath);
+  if (todoTreeFiles.length > 0) {
     return;
-  } catch {
-    await mkdir(path.dirname(filePath), { recursive: true });
-    await writeFile(
-      filePath,
-      buildDefaultTodoTreeXml({
-        room: args.room,
-        project: args.project,
-        snapshot: args.snapshot,
-      }),
-      "utf8",
-    );
   }
+
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(
+    filePath,
+    buildDefaultTodoTreeXml({
+      room: args.room,
+      project: args.project,
+      snapshot: args.snapshot,
+    }),
+    "utf8",
+  );
 }
 
 function buildPersistedRoomContextSnapshot(args: {
@@ -407,17 +421,34 @@ export async function listRoomTodoTreeFiles(args: {
     });
   }
 
-  const directoryPath = getRoomContextDirectoryPath(workspaceRoot, room, project);
-  await mkdir(directoryPath, { recursive: true });
-  const entries = await readdir(directoryPath, { withFileTypes: true });
-  const todoTreeFiles = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(TODO_TREE_FILE_SUFFIX))
-    .map((entry) => entry.name)
+  const projectRoot = getProjectStorageRoot(workspaceRoot, project);
+  const directoryPaths = [
+    getRoomInteractiveDirectoryPath(workspaceRoot, room, project),
+    getLegacyRoomContextDirectoryForRoot(projectRoot, room),
+  ];
+  const uniqueDirectoryPaths = [...new Set(directoryPaths)];
+
+  await mkdir(getRoomInteractiveDirectoryPath(workspaceRoot, room, project), {
+    recursive: true,
+  });
+
+  const todoTreeFilePaths = (
+    await Promise.all(
+      uniqueDirectoryPaths.map(async (directoryPath) => {
+        const entries = await readdir(directoryPath, { withFileTypes: true }).catch(() => []);
+
+        return entries
+          .filter((entry) => entry.isFile())
+          .filter((entry) => TODO_TREE_FILE_SUFFIXES.some((suffix) => entry.name.endsWith(suffix)))
+          .map((entry) => path.join(directoryPath, entry.name));
+      }),
+    )
+  )
+    .flat()
     .sort((left, right) => left.localeCompare(right));
 
   return Promise.all(
-    todoTreeFiles.map(async (fileName) => {
-      const absolutePath = path.join(directoryPath, fileName);
+    todoTreeFilePaths.map(async (absolutePath) => {
       const [content, metadata] = await Promise.all([
         readFile(absolutePath, "utf8"),
         stat(absolutePath),
@@ -425,7 +456,7 @@ export async function listRoomTodoTreeFiles(args: {
 
       return {
         absolutePath,
-        fileName,
+        fileName: path.basename(absolutePath),
         modifiedAt: metadata.mtime.toISOString(),
         content,
       } satisfies RoomTodoTreeFile;
@@ -436,32 +467,52 @@ export async function listRoomTodoTreeFiles(args: {
 export async function loadProjectRoomContextSnapshots(projectRoot: string): Promise<PersistedRoomContextSnapshot[]> {
   const normalizedProjectRoot = path.normalize(projectRoot);
   const roomsDirectoryPath = getProjectRoomsDirectoryForRoot(normalizedProjectRoot);
-  const projectDirectories = await readdir(roomsDirectoryPath, { withFileTypes: true }).catch(() => []);
-
+  const roomEntries = await readdir(roomsDirectoryPath, { withFileTypes: true }).catch(() => []);
   const roomStateFilePaths = (
     await Promise.all(
-      projectDirectories
+      roomEntries
         .filter((entry) => entry.isDirectory())
-        .map(async (projectDirectory) => {
-          const roomDirectoryPath = path.join(roomsDirectoryPath, projectDirectory.name);
-          const roomDirectories = await readdir(roomDirectoryPath, { withFileTypes: true }).catch(() => []);
+        .map(async (roomDirectory) => {
+          const directRoomStatePath = path.join(roomsDirectoryPath, roomDirectory.name, ROOM_STATE_FILE_NAME);
+          const directRoomStateExists = await stat(directRoomStatePath)
+            .then((metadata) => metadata.isFile())
+            .catch(() => false);
 
-          return roomDirectories
+          if (directRoomStateExists) {
+            return [directRoomStatePath];
+          }
+
+          const nestedDirectories = await readdir(path.join(roomsDirectoryPath, roomDirectory.name), {
+            withFileTypes: true,
+          }).catch(() => []);
+
+          return nestedDirectories
             .filter((entry) => entry.isDirectory())
-            .map((roomDirectory) => path.join(roomDirectoryPath, roomDirectory.name, ROOM_STATE_FILE_NAME));
+            .map((entry) =>
+              path.join(roomsDirectoryPath, roomDirectory.name, entry.name, ROOM_STATE_FILE_NAME),
+            );
         }),
     )
   ).flat();
 
   const snapshots = await Promise.all(roomStateFilePaths.map((filePath) => readPersistedRoomContextSnapshot(filePath)));
 
-  return snapshots
+  const dedupedSnapshotsByRoomId = new Map<string, PersistedRoomContextSnapshot>();
+
+  snapshots
     .filter((snapshot): snapshot is PersistedRoomContextSnapshot => Boolean(snapshot))
-    .sort((left, right) => {
-      const leftUpdatedAt = left.room.updatedAt ?? left.room.createdAt;
-      const rightUpdatedAt = right.room.updatedAt ?? right.room.createdAt;
-      return rightUpdatedAt.localeCompare(leftUpdatedAt);
+    .sort((left, right) => right.exportedAt.localeCompare(left.exportedAt))
+    .forEach((snapshot) => {
+      if (!dedupedSnapshotsByRoomId.has(snapshot.room.id)) {
+        dedupedSnapshotsByRoomId.set(snapshot.room.id, snapshot);
+      }
     });
+
+  return [...dedupedSnapshotsByRoomId.values()].sort((left, right) => {
+    const leftUpdatedAt = left.room.updatedAt ?? left.room.createdAt;
+    const rightUpdatedAt = right.room.updatedAt ?? right.room.createdAt;
+    return rightUpdatedAt.localeCompare(leftUpdatedAt);
+  });
 }
 
 export async function inspectProjectRoomContext(projectRoot: string): Promise<ProjectPathInspectionResult> {

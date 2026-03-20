@@ -79,6 +79,7 @@ import {
   type ProjectPathInspectionResult,
   getProviderAssociationNotice,
   getRoomContextDirectoryPath,
+  getRoomInteractiveDirectoryPath,
   inspectProjectRoomContext,
   listRoomTodoTreeFiles,
   loadProjectRoomContextSnapshots,
@@ -720,6 +721,7 @@ export class WorkspaceRuntime {
     projectId: string;
     projectInteractiveDirectory: string;
     roomContextDirectory: string;
+    roomInteractiveDirectory: string;
     providerAssociationNotice: string;
     files: Awaited<ReturnType<typeof listRoomTodoTreeFiles>>;
   }> {
@@ -738,6 +740,11 @@ export class WorkspaceRuntime {
       room,
       project,
     );
+    const roomInteractiveDirectory = getRoomInteractiveDirectoryPath(
+      this.workspaceRoot,
+      room,
+      project,
+    );
 
     return {
       roomId: room.id,
@@ -747,6 +754,7 @@ export class WorkspaceRuntime {
         project,
       ),
       roomContextDirectory,
+      roomInteractiveDirectory,
       providerAssociationNotice: getProviderAssociationNotice(
         roomContextDirectory,
       ),

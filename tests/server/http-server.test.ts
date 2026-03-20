@@ -857,6 +857,7 @@ describe("workspace http api routing", () => {
     const payload = result?.payload as {
       files: Array<{ fileName: string }>;
       projectInteractiveDirectory: string;
+      roomInteractiveDirectory: string;
       providerAssociationNotice: string;
       roomId: string;
     };
@@ -866,7 +867,10 @@ describe("workspace http api routing", () => {
     expect(payload.projectInteractiveDirectory).toContain(
       path.join(projectRoot, ".openaquarium", "interactive"),
     );
-    expect(payload.files[0]?.fileName).toBe("main.aqtodo.xml");
+    expect(payload.roomInteractiveDirectory).toContain(
+      path.join(projectRoot, ".openaquarium", "interactive", "rooms", created.roomId, "interactive"),
+    );
+    expect(payload.files[0]?.fileName).toBe("main.aqtree.xml");
     expect(payload.providerAssociationNotice).toContain(
       "re-associate the project from the room UI",
     );

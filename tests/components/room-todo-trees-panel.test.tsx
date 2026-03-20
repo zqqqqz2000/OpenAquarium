@@ -10,7 +10,7 @@ describe("RoomTodoTreesPanel", () => {
     vi.unstubAllGlobals();
   });
 
-  it("loads and renders aqtodo trees as a room mindmap", async () => {
+  it("loads and renders aqtree files as a room mindmap", async () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
 
@@ -25,18 +25,20 @@ describe("RoomTodoTreesPanel", () => {
               projectInteractiveDirectory:
                 "/tmp/openaquarium-project/.openaquarium/interactive",
               roomContextDirectory:
-                "/tmp/openaquarium-project/.openaquarium/interactive/rooms/project-1/room-1",
+                "/tmp/openaquarium-project/.openaquarium/interactive/rooms/room-1",
+              roomInteractiveDirectory:
+                "/tmp/openaquarium-project/.openaquarium/interactive/rooms/room-1/interactive",
               providerAssociationNotice:
                 "Provider bindings are intentionally not exported into the room context directory. If this project is reopened elsewhere and a provider is missing, re-associate the project from the room UI.",
               files: [
                 {
                   absolutePath:
-                    "/tmp/openaquarium-project/.openaquarium/interactive/rooms/project-1/room-1/main.aqtodo.xml",
-                  fileName: "main.aqtodo.xml",
+                    "/tmp/openaquarium-project/.openaquarium/interactive/rooms/room-1/interactive/main.aqtree.xml",
+                  fileName: "main.aqtree.xml",
                   modifiedAt: "2026-03-20T10:00:00.000Z",
                   content: [
                     '<?xml version="1.0" encoding="UTF-8"?>',
-                    `<aqtodo version="1" roomId="${room.id}" roomName="${room.name}" title="Main plan">`,
+                    `<aqtree version="1" roomId="${room.id}" roomName="${room.name}" title="Main plan">`,
                     '  <node id="root" title="Main plan" status="in_progress" member="@lead">',
                     "    <note>Track the delivery plan.</note>",
                     '    <node id="backlog" title="Backlog" status="todo">',
@@ -46,7 +48,7 @@ describe("RoomTodoTreesPanel", () => {
                     "      <note>Completed items.</note>",
                     "    </node>",
                     "  </node>",
-                    "</aqtodo>",
+                    "</aqtree>",
                   ].join("\n"),
                 },
               ],
@@ -79,8 +81,8 @@ describe("RoomTodoTreesPanel", () => {
       </div>,
     );
 
-    expect(await screen.findByText("AqTodo Tree")).toBeInTheDocument();
-    expect((await screen.findAllByText("main.aqtodo.xml")).length).toBeGreaterThan(
+    expect(await screen.findByText("AqTree")).toBeInTheDocument();
+    expect((await screen.findAllByText("main.aqtree.xml")).length).toBeGreaterThan(
       0,
     );
     expect(await screen.findByText("Backlog")).toBeInTheDocument();

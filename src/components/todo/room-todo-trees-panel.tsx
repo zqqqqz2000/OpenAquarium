@@ -274,10 +274,10 @@ export function RoomTodoTreesPanel(props: {
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <FolderTree size={16} />
-              <p className="m-0 text-sm font-semibold">AqTodo Tree</p>
+              <p className="m-0 text-sm font-semibold">AqTree</p>
             </div>
             <p className="m-0 text-xs leading-5 text-muted-foreground">
-              LLM can edit `*.aqtodo.xml` directly under the project interactive
+              LLM can edit `*.aqtree.xml` directly under the room interactive
               directory to track ownership, progress, screenshots, and code
               evidence.
             </p>
@@ -303,7 +303,7 @@ export function RoomTodoTreesPanel(props: {
               {payload.projectInteractiveDirectory}
             </p>
             <p className="m-0 break-all font-mono text-[11px] leading-5 text-foreground/85">
-              {payload.roomContextDirectory}
+              {payload.roomInteractiveDirectory}
             </p>
           </div>
         ) : null}
@@ -356,8 +356,8 @@ export function RoomTodoTreesPanel(props: {
             <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
               <Sparkles size={18} />
               <p className="m-0 text-sm">
-                No todo tree found. Create a `*.aqtodo.xml` file under the room
-                context directory.
+                No tree file found. Create a `*.aqtree.xml` file under the room
+                interactive directory.
               </p>
             </div>
           ) : parsedDocument.error ? (

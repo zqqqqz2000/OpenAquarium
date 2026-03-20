@@ -112,12 +112,15 @@ export function parseAqTodoXml(xml: string): AqTodoDocument {
   const document = parser.parseFromString(xml, "application/xml");
   const parseError = document.querySelector("parsererror");
   if (parseError) {
-    throw new Error(parseError.textContent?.trim() || "Invalid aqtodo xml");
+    throw new Error(parseError.textContent?.trim() || "Invalid aqtree xml");
   }
 
   const rootElement = document.documentElement;
-  if (!rootElement || rootElement.tagName !== "aqtodo") {
-    throw new Error("AqTodo xml must use a single <aqtodo> root element.");
+  if (
+    !rootElement
+    || (rootElement.tagName !== "aqtodo" && rootElement.tagName !== "aqtree")
+  ) {
+    throw new Error("AqTree xml must use a single <aqtree> root element. Legacy <aqtodo> roots are also accepted.");
   }
 
   const rootNodeElement =
@@ -125,7 +128,7 @@ export function parseAqTodoXml(xml: string): AqTodoDocument {
     getDirectChildElements(rootElement, "tree")[0]?.querySelector("node") ??
     undefined;
   if (!rootNodeElement) {
-    throw new Error("AqTodo xml must contain at least one <node>.");
+    throw new Error("AqTree xml must contain at least one <node>.");
   }
 
   return {
