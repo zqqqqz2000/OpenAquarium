@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ProjectPathInspectionPayload } from "@/lib/runtime-client";
 import type { WorkspaceRemoteStoreState } from "@/store/workspace-remote-store";
 
 const { navigateMock, workspaceStoreState } = vi.hoisted(() => ({
@@ -49,7 +50,7 @@ afterEach(() => {
   workspaceStoreState.createProject.mockReset();
   workspaceStoreState.createRoom.mockReset();
   workspaceStoreState.pickProjectPath.mockReset();
-  workspaceStoreState.pickProjectPath.mockResolvedValue(undefined);
+  workspaceStoreState.pickProjectPath.mockResolvedValue({ path: undefined });
 });
 
 describe("project dialogs", () => {
@@ -62,7 +63,7 @@ describe("project dialogs", () => {
     await user.click(screen.getByRole("button", { name: "New project" }));
 
     expect(screen.getByRole("dialog", { name: "Create project" })).toHaveAccessibleDescription(
-      "Create a new project, choose its initial team template, and optionally set the default ACP working directory.",
+      "Create a new project or reopen one from an existing OpenAquarium directory, then optionally set the default ACP working directory.",
     );
   });
 
@@ -88,6 +89,70 @@ describe("project dialogs", () => {
     await act(async () => {
       deferred.resolve({ projectId: "project-test", roomId: "room-test" });
       await deferred.promise;
+    });
+  });
+
+  it("switches to import mode when the selected path already contains room context", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const inspection: ProjectPathInspectionPayload = {
+      path: "/tmp/recovered-project",
+      projectName: "Recovered Project",
+      projectInteractiveDirectory: "/tmp/recovered-project/.openaquarium/interactive",
+      hasOpenAquariumDirectory: true,
+      canImport: true,
+      roomCount: 2,
+      rooms: [
+        {
+          roomId: "room-alpha",
+          roomName: "Alpha Room",
+          teamName: "Product Pod",
+          memberCount: 4,
+          updatedAt: "2026-03-20T00:00:00.000Z",
+        },
+        {
+          roomId: "room-beta",
+          roomName: "Beta Room",
+          teamName: "Incident Pod",
+          memberCount: 3,
+          updatedAt: "2026-03-19T00:00:00.000Z",
+        },
+      ],
+    };
+
+    workspaceStoreState.pickProjectPath.mockResolvedValue({
+      path: inspection.path,
+      inspection,
+    });
+    workspaceStoreState.createProject.mockResolvedValue({
+      projectId: "project-imported",
+      roomId: "room-imported",
+    });
+
+    render(<CreateProjectDialog templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])} />);
+
+    await user.click(screen.getByRole("button", { name: "New project" }));
+    await user.click(screen.getByText("选择文件夹"));
+
+    expect(screen.getByDisplayValue("Recovered Project")).toBeInTheDocument();
+    expect(screen.queryByText("Team template")).not.toBeInTheDocument();
+    expect(screen.getByText("Reuse existing room context")).toBeInTheDocument();
+    expect(screen.getByText("Alpha Room")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import project" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Import project" }));
+
+    expect(workspaceStoreState.createProject).toHaveBeenCalledWith({
+      projectName: "Recovered Project",
+      templateId: undefined,
+      path: "/tmp/recovered-project",
+    });
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: "/projects/$projectId/rooms/$roomId",
+      params: {
+        projectId: "project-imported",
+        roomId: "room-imported",
+      },
     });
   });
 

@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -11,10 +11,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
 import { getVisibleRoomMessages } from "@/lib/chat/workspace-ui-message";
 import { createModelProfileDraft } from "@/lib/global-config-draft";
+import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import { OpenAquariumGlobalConfigManager } from "@/server/global-config";
 import { WorkspacePersistence } from "@/server/persistence";
 import { handleWorkspaceJsonApiRequest, startWorkspaceHttpServer } from "@/server/http-server";
+import { syncRoomContextFiles } from "@/server/room-context-files";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
 import type { ExecutorCallbacks, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 
@@ -826,6 +828,162 @@ describe("workspace http api routing", () => {
     expect(historyResult?.statusCode).toBe(200);
     expect(historyPayload.messages.map((message) => message.id)).toEqual(visibleMessages.slice(-3, -1).map((message) => message.id));
     expect(historyPayload.hasMore).toBe(visibleMessages.length > 3);
+  });
+
+  it("returns room todo tree files through the JSON API", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-todo-"));
+    const projectRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-http-todo-project-"),
+    );
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Todo API",
+      templateId: "template-product-pod",
+      path: projectRoot,
+    });
+
+    const result = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "GET",
+      pathname: `/api/rooms/${created.roomId}/todo-trees`,
+    });
+    const payload = result?.payload as {
+      files: Array<{ fileName: string }>;
+      projectInteractiveDirectory: string;
+      providerAssociationNotice: string;
+      roomId: string;
+    };
+
+    expect(result?.statusCode).toBe(200);
+    expect(payload.roomId).toBe(created.roomId);
+    expect(payload.projectInteractiveDirectory).toContain(
+      path.join(projectRoot, ".openaquarium", "interactive"),
+    );
+    expect(payload.files[0]?.fileName).toBe("main.aqtodo.xml");
+    expect(payload.providerAssociationNotice).toContain(
+      "re-associate the project from the room UI",
+    );
+  });
+
+  it("serves room assets through the binary asset route", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-asset-"));
+    const projectRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-http-asset-project-"),
+    );
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Asset API",
+      templateId: "template-product-pod",
+      path: projectRoot,
+    });
+    const assetRelativePath = "evidence/proof.png";
+    const assetAbsolutePath = path.join(projectRoot, assetRelativePath);
+
+    await mkdir(path.dirname(assetAbsolutePath), { recursive: true });
+    await writeFile(
+      assetAbsolutePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9oZx2kcAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    const server = await startWorkspaceHttpServer({
+      runtime,
+      host: "127.0.0.1",
+      port: await reservePort(),
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${server.port}/api/rooms/${created.roomId}/assets?path=${encodeURIComponent(assetRelativePath)}`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await response.arrayBuffer()).byteLength).toBeGreaterThan(
+        0,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("imports an existing project through the JSON API without requiring templateId", async () => {
+    const workspaceRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-http-import-"),
+    );
+    const projectRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-http-import-project-"),
+    );
+    const seedSnapshot = createSeedWorkspace();
+    const seedRoom = seedSnapshot.rooms[seedSnapshot.selection.roomId!];
+    const seedProject = {
+      ...seedSnapshot.projects[seedRoom.projectId],
+      path: projectRoot,
+    };
+
+    seedSnapshot.projects[seedProject.id] = seedProject;
+
+    await syncRoomContextFiles({
+      workspaceRoot,
+      next: seedSnapshot,
+    });
+
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(
+        path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const result = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/projects",
+      body: {
+        projectName: "HTTP Imported",
+        path: projectRoot,
+      },
+    });
+    const payload = result?.payload as {
+      projectId: string;
+      roomId: string;
+      snapshot: {
+        projects: Record<string, { name: string; path?: string }>;
+        rooms: Record<string, { name: string; memberIds: string[] }>;
+        selection: { projectId?: string; roomId?: string };
+      };
+    };
+
+    expect(result?.statusCode).toBe(200);
+    expect(payload.projectId).toBe(payload.snapshot.selection.projectId);
+    expect(payload.roomId).toBe(payload.snapshot.selection.roomId);
+    expect(payload.snapshot.projects[payload.projectId]?.name).toBe(
+      "HTTP Imported",
+    );
+    expect(payload.snapshot.projects[payload.projectId]?.path).toBe(projectRoot);
+    expect(payload.snapshot.rooms[payload.roomId]?.name).toBe(seedRoom.name);
+    expect(payload.snapshot.rooms[payload.roomId]?.memberIds).toHaveLength(
+      seedRoom.memberIds.length,
+    );
   });
 
   it("supports deleting templates, rooms, and projects through the JSON API", async () => {

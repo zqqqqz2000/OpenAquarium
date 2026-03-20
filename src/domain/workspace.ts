@@ -981,6 +981,10 @@ export function createProjectWithRoom(
   input: CreateProjectInput,
   context: MutationContext,
 ): WorkspaceSnapshot {
+  if (!input.templateId) {
+    throw new Error("Team template is required when creating a new project.");
+  }
+
   const snapshot = cloneSnapshot(current);
   const now = context.now();
   const projectId = context.createId("project");

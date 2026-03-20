@@ -265,6 +265,7 @@ function SessionRoomReplyRow(props: {
         className={cn("mt-2", !expanded && "text-muted-foreground")}
         mentionHandles={new Set(event.message.mentionedHandles)}
         quoteHandles={new Set(event.message.quotedHandles)}
+        roomId={event.message.message.roomId}
       />
       <Button
         type="button"

@@ -4,8 +4,12 @@ import { createRuntimeContext } from "@/domain/identity";
 import { completeMemberTask, postSystemMessage, postUserMessage, runWatcher } from "@/domain/workspace";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { buildTaskPrompt, buildTaskPromptPayload, MEMBER_FULL_PROMPT_REFRESH_INTERVAL } from "@/server/prompt-builder";
-import type { MemberTask, WorkspaceSnapshot } from "@/domain/model";
+import type { WorkspaceSnapshot } from "@/domain/model";
 import { getRoomContextDirectoryPath } from "@/server/room-transcript-files";
+import {
+  getDefaultRoomTodoTreeFilePath,
+  getProjectInteractiveDirectoryPath,
+} from "@/server/room-context-files";
 
 describe("buildTaskPrompt", () => {
   it("tells members to publish progress updates during longer tasks", () => {
@@ -45,6 +49,9 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain("(none)");
     expect(prompt).toContain("允许使用岗位员工工具");
     expect(prompt).toContain(`prompt: ${member.prompt}`);
+    expect(prompt).toContain("[AqTodo Tree]");
+    expect(prompt).toContain("*.aqtodo.xml");
+    expect(prompt).toContain("Provider bindings are intentionally not exported");
   });
 
   it("adds persistent watch pause rules when the member has an enabled persistent watcher", () => {
@@ -300,7 +307,6 @@ describe("buildTaskPrompt", () => {
   });
 
   it("does not fall back to older room transcript when a watcher heartbeat has no new visible messages", () => {
-    const context = createRuntimeContext(600, "2026-03-10T12:10:00.000Z");
     let snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const project = snapshot.projects[room.projectId];
@@ -384,7 +390,7 @@ describe("buildTaskPrompt", () => {
         },
       },
     };
-    const digestTask = digestSnapshot.tasks.task_heartbeat as MemberTask;
+    const digestTask = digestSnapshot.tasks.task_heartbeat;
 
     const prompt = buildTaskPrompt({
       workspaceRoot: process.cwd(),
@@ -525,6 +531,12 @@ describe("buildTaskPrompt", () => {
 
     expect(prompt).toContain(`project path: ${project.path}`);
     expect(prompt).toContain(`project working directory: ${project.path}`);
+    expect(prompt).toContain(
+      `project interactive directory: ${getProjectInteractiveDirectoryPath(process.cwd(), project)}`,
+    );
+    expect(prompt).toContain(
+      `Default file path: ${getDefaultRoomTodoTreeFilePath(process.cwd(), room, project)}`,
+    );
     expect(prompt).toContain(`${process.cwd()}/bin/oa-room-send --room ${room.id} --member ${member.id} --scope group`);
     expect(prompt).toContain("[Available Skills]");
     expect(prompt).toContain(`${process.cwd()}/skills/room-send-group/SKILL.md`);

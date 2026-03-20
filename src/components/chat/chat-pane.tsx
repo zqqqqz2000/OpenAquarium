@@ -12,6 +12,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDown,
+  AlertTriangle,
   BarChart3,
   Bot,
   Eye,
@@ -37,6 +38,7 @@ import {
   MessageBubbleMeta,
 } from "@/components/chat/message-bubble";
 import { RoomDashboard } from "@/components/chat/room-dashboard";
+import { RoomTodoTreesPanel } from "@/components/todo/room-todo-trees-panel";
 import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import { MemberAvatar } from "@/components/members/member-avatar";
 import { MemberHoverPreview } from "@/components/members/member-hover-preview";
@@ -54,6 +56,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getMemberRoleLabel } from "@/lib/member-display";
 import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
 import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
+import { isProviderAssociationRequiredBinding } from "@/lib/provider-association";
 import type { RoomTeamSummary } from "@/lib/room-team";
 import {
   getUIMessageText,
@@ -620,6 +623,13 @@ export function ChatPane(props: {
     members,
     snapshot,
   });
+  const membersNeedingProviderAssociation = useMemo(
+    () =>
+      members.filter((member) =>
+        isProviderAssociationRequiredBinding(member.provider),
+      ),
+    [members],
+  );
   const liveRoomMessages = useMemo(
     () => (room ? getVisibleRoomMessages(snapshot, room) : []),
     [room, snapshot],
@@ -1131,6 +1141,33 @@ export function ChatPane(props: {
             onToggleLeftSidebar={onToggleLeftSidebar}
             onToggleRightSidebar={onToggleRightSidebar}
           />
+          {membersNeedingProviderAssociation.length > 0 ? (
+            <Card className="border border-amber-500/30 bg-amber-500/5 shadow-none">
+              <CardContent className="flex flex-wrap items-start gap-3 p-4">
+                <AlertTriangle size={18} className="mt-0.5 text-amber-700" />
+                <div className="min-w-0 flex-1">
+                  <p className="m-0 text-sm font-medium">Provider association required</p>
+                  <p className="m-0 text-sm leading-6 text-muted-foreground">
+                    这个 project 是从 room context 恢复的。请先在 room team 或 member config 里为{" "}
+                    {membersNeedingProviderAssociation
+                      .map((member) => `@${member.handle}`)
+                      .join(", ")}{" "}
+                    关联 provider，再运行任务。
+                  </p>
+                </div>
+                {onOpenRoomTeam ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={onOpenRoomTeam}
+                  >
+                    Open room team
+                  </Button>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
           <div className="relative min-h-0 flex-1">
             {historyHasMore || historyError ? (
               <div className="mb-2 flex flex-col gap-2 px-1">
@@ -1285,6 +1322,7 @@ export function ChatPane(props: {
         {!rightSidebarCollapsed ? (
           <RoomMembersSidebar
             room={room}
+            runtimeClient={runtimeClient}
             snapshot={snapshot}
             members={members}
             visibleMemberIds={visibleMemberIds}
@@ -1447,6 +1485,7 @@ function RoomTopBar(props: {
 
 function RoomMembersSidebar(props: {
   room: Room;
+  runtimeClient: WorkspaceRuntimeClient;
   snapshot: WorkspaceSnapshot;
   members: TeamMember[];
   visibleMemberIds: string[];
@@ -1459,6 +1498,7 @@ function RoomMembersSidebar(props: {
 }) {
   const {
     room,
+    runtimeClient,
     snapshot,
     members,
     visibleMemberIds,
@@ -1470,7 +1510,7 @@ function RoomMembersSidebar(props: {
     onResizeStart,
   } = props;
   const roleGroups = useMemo(() => groupMembersByRole(members), [members]);
-  const [activeTab, setActiveTab] = useState<"members" | "dashboard">(
+  const [activeTab, setActiveTab] = useState<"members" | "dashboard" | "todo">(
     "members",
   );
   const toggleMemberVisibility = useCallback(
@@ -1494,7 +1534,7 @@ function RoomMembersSidebar(props: {
           <Tabs
             value={activeTab}
             onValueChange={(value) =>
-              setActiveTab(value as "members" | "dashboard")
+              setActiveTab(value as "members" | "dashboard" | "todo")
             }
             className="h-full min-h-0 gap-0"
           >
@@ -1512,6 +1552,13 @@ function RoomMembersSidebar(props: {
                   <Badge variant="outline" className="ml-1">
                     {members.length}
                   </Badge>
+                </TabsTrigger>
+                <TabsTrigger
+                  value="todo"
+                  className="rounded-none px-2.5 py-2"
+                >
+                  <FolderKanban size={16} />
+                  Todo
                 </TabsTrigger>
                 <TabsTrigger
                   value="dashboard"
@@ -1574,6 +1621,12 @@ function RoomMembersSidebar(props: {
                   })}
                 </div>
               </div>
+            </TabsContent>
+            <TabsContent
+              value="todo"
+              className="m-0 min-h-0 flex-1 overflow-hidden px-3 py-3"
+            >
+              <RoomTodoTreesPanel room={room} runtimeClient={runtimeClient} />
             </TabsContent>
             <TabsContent
               value="dashboard"

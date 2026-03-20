@@ -21,6 +21,40 @@ export interface WatcherRunResult {
   outcome: WatcherRunOutcome;
 }
 
+export interface RoomTodoTreeFilePayload {
+  absolutePath: string;
+  fileName: string;
+  modifiedAt: string;
+  content: string;
+}
+
+export interface RoomTodoTreesPayload {
+  roomId: string;
+  projectId: string;
+  projectInteractiveDirectory: string;
+  roomContextDirectory: string;
+  providerAssociationNotice: string;
+  files: RoomTodoTreeFilePayload[];
+}
+
+export interface ProjectPathInspectionRoomPayload {
+  roomId: string;
+  roomName: string;
+  teamName: string;
+  memberCount: number;
+  updatedAt: string;
+}
+
+export interface ProjectPathInspectionPayload {
+  path: string;
+  projectName: string;
+  projectInteractiveDirectory: string;
+  hasOpenAquariumDirectory: boolean;
+  canImport: boolean;
+  roomCount: number;
+  rooms: ProjectPathInspectionRoomPayload[];
+}
+
 export function resolveWorkspaceRuntimeBaseUrl(): string {
   const configured = import.meta.env.VITE_OA_SERVER_URL as string | undefined;
   return configured ?? "http://127.0.0.1:4301";
@@ -65,17 +99,15 @@ export class WorkspaceRuntimeClient {
     return parseJson(await fetch(`${this.baseUrl}/api/skills`));
   }
 
-  async pickProjectPath(): Promise<string | undefined> {
-    const payload = await parseJson<{ path?: string }>(
+  async pickProjectPath(): Promise<{ path?: string; inspection?: ProjectPathInspectionPayload }> {
+    return parseJson(
       await fetch(`${this.baseUrl}/api/system/project-path`, {
         method: "POST",
       }),
     );
-
-    return payload.path;
   }
 
-  async createProject(input: { projectName: string; templateId: string; path?: string }): Promise<{
+  async createProject(input: { projectName: string; templateId?: string; path?: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     projectId: string;
     roomId: string;
@@ -156,6 +188,18 @@ export class WorkspaceRuntimeClient {
     }
 
     return parseJson(await fetch(url));
+  }
+
+  async getRoomTodoTrees(roomId: string): Promise<RoomTodoTreesPayload> {
+    return parseJson(
+      await fetch(`${this.baseUrl}/api/rooms/${roomId}/todo-trees`),
+    );
+  }
+
+  resolveRoomAssetUrl(roomId: string, filePath: string): string {
+    const url = new URL(`${this.baseUrl}/api/rooms/${roomId}/assets`);
+    url.searchParams.set("path", filePath);
+    return url.toString();
   }
 
   async updatePrompt(memberId: string, prompt: string): Promise<WorkspaceSnapshot> {

@@ -176,6 +176,7 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
           className={cn(usesCompactSurface && "space-y-2.5 leading-[1.35rem]")}
           mentionHandles={highlightedHandles.mentionHandles}
           quoteHandles={highlightedHandles.quoteHandles}
+          roomId={message.roomId}
           streaming={message.status === "streaming"}
         />
         {showExpandToggle ? (

@@ -20,7 +20,15 @@ import {
   quoteShellToken,
   resolveProjectWorkingDirectory,
 } from "./project-paths";
-import { getMemberHistoryFilePath, getRoomContextDirectoryPath, getRoomTranscriptFilePath } from "./room-transcript-files";
+import {
+  getDefaultRoomTodoTreeFilePath,
+  getMemberHistoryFilePath,
+  getProjectInteractiveDirectoryPath,
+  getProviderAssociationNotice,
+  getRoomContextDirectoryPath,
+  getRoomStateFilePath,
+  getRoomTranscriptFilePath,
+} from "./room-context-files";
 import { buildPersistedUserTurnMessage, formatConversationTrace } from "./openai-compatible-conversation";
 
 const FULL_PROMPT_TRANSCRIPT_LIMIT = 30;
@@ -311,9 +319,30 @@ function findEnabledPersistentWatcher(snapshot: WorkspaceSnapshot, room: Room, m
   );
 }
 
-function buildRoomContextFileSections(workspaceRoot: string, room: Room, snapshot: WorkspaceSnapshot, transcriptFilePath?: string): string[] {
-  const roomContextDirectoryPath = getRoomContextDirectoryPath(workspaceRoot, room);
-  const resolvedTranscriptFilePath = transcriptFilePath ?? getRoomTranscriptFilePath(workspaceRoot, room);
+function buildRoomContextFileSections(
+  workspaceRoot: string,
+  project: Project,
+  room: Room,
+  snapshot: WorkspaceSnapshot,
+  transcriptFilePath?: string,
+): string[] {
+  const projectInteractiveDirectoryPath = getProjectInteractiveDirectoryPath(
+    workspaceRoot,
+    project,
+  );
+  const roomContextDirectoryPath = getRoomContextDirectoryPath(
+    workspaceRoot,
+    room,
+    project,
+  );
+  const resolvedTranscriptFilePath =
+    transcriptFilePath ?? getRoomTranscriptFilePath(workspaceRoot, room, project);
+  const roomStateFilePath = getRoomStateFilePath(workspaceRoot, room, project);
+  const todoTreeFilePath = getDefaultRoomTodoTreeFilePath(
+    workspaceRoot,
+    room,
+    project,
+  );
   const memberHistoryCount = room.memberIds
     .map((memberId) => snapshot.members[memberId])
     .filter((member): member is TeamMember => member !== undefined)
@@ -321,15 +350,43 @@ function buildRoomContextFileSections(workspaceRoot: string, room: Room, snapsho
   const exampleMember = room.memberIds
     .map((memberId) => snapshot.members[memberId])
     .find((member): member is TeamMember => member !== undefined);
-  const exampleMemberHistoryPath = exampleMember ? getMemberHistoryFilePath(workspaceRoot, room, exampleMember) : undefined;
+  const exampleMemberHistoryPath = exampleMember
+    ? getMemberHistoryFilePath(workspaceRoot, room, exampleMember, project)
+    : undefined;
 
   return [
     "[Shared Room Context]",
+    `project interactive directory: ${projectInteractiveDirectoryPath}`,
     `room context directory: ${roomContextDirectoryPath}`,
     `room transcript file: ${resolvedTranscriptFilePath}`,
+    `room state file: ${roomStateFilePath}`,
     memberHistoryCount > 0
       ? `member history files: ${memberHistoryCount} file(s) under the room context directory${exampleMemberHistoryPath ? `, e.g. ${exampleMemberHistoryPath}` : ""}`
       : "member history files: (none)",
+    `todo tree files: *.aqtodo.xml under the room context directory, e.g. ${todoTreeFilePath}`,
+    getProviderAssociationNotice(roomContextDirectoryPath),
+  ];
+}
+
+function buildTodoTreePromptSections(
+  workspaceRoot: string,
+  project: Project,
+  room: Room,
+): string[] {
+  const todoTreeFilePath = getDefaultRoomTodoTreeFilePath(
+    workspaceRoot,
+    room,
+    project,
+  );
+
+  return [
+    "[AqTodo Tree]",
+    `Todo tree files live under ${getProjectInteractiveDirectoryPath(workspaceRoot, project)} and use the *.aqtodo.xml suffix.`,
+    `Default file path: ${todoTreeFilePath}`,
+    "Use XML with a single <aqtodo> root and nested <node> elements to represent the tree.",
+    "Recommended node attributes: id, title, status (todo|in_progress|blocked|done), member, priority, tags, progress.",
+    "Supported node metadata children: <note>, <details>, <code language=\"...\">...</code>, <image src=\"...\" alt=\"...\" />, and nested <node> children.",
+    "Keep the tree user-facing: use it to track progress, blockers, ownership, screenshots, and code evidence. Edit the XML file directly when you need to update state.",
   ];
 }
 
@@ -445,7 +502,15 @@ function buildSharedSections(args: {
     `room: ${room.name}`,
     `topic: ${summarizeProjectTopic(room.topic)}`,
     "",
-    ...buildRoomContextFileSections(workspaceRoot, room, snapshot, transcriptFilePath),
+    ...buildRoomContextFileSections(
+      workspaceRoot,
+      project,
+      room,
+      snapshot,
+      transcriptFilePath,
+    ),
+    "",
+    ...buildTodoTreePromptSections(workspaceRoot, project, room),
     "",
     ...buildMemberReferenceSyntaxSections(),
     "",
@@ -541,11 +606,18 @@ function buildFullPrompt(args: {
 
 function buildCompactContextPathSections(args: {
   workspaceRoot: string;
+  project: Project;
   room: Room;
   snapshot: WorkspaceSnapshot;
   transcriptFilePath?: string;
 }): string[] {
-  return buildRoomContextFileSections(args.workspaceRoot, args.room, args.snapshot, args.transcriptFilePath);
+  return buildRoomContextFileSections(
+    args.workspaceRoot,
+    args.project,
+    args.room,
+    args.snapshot,
+    args.transcriptFilePath,
+  );
 }
 
 function buildIncrementalPrompt(args: {

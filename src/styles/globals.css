@@ -4,6 +4,7 @@
 @import "@fontsource-variable/geist";
 @import "katex/dist/katex.min.css";
 @import "streamdown/styles.css";
+@import "@xyflow/react/dist/style.css";
 
 @source "../../node_modules/streamdown/dist/*.js";
 @source "../../node_modules/@streamdown/code/dist/*.js";
@@ -233,11 +234,54 @@
 
   .oa-message-markdown [data-streamdown="blockquote"] {
     margin-block: 0.5rem;
+    border-left: 3px solid color-mix(in oklch, var(--border) 75%, transparent);
+    background: color-mix(in oklch, var(--muted) 46%, transparent);
+    border-radius: 0 1rem 1rem 0;
+    padding: 0.875rem 1rem;
   }
 
   .oa-message-markdown [data-streamdown="code-block"],
   .oa-message-markdown [data-streamdown="table-wrapper"] {
     margin-block: 0.75rem;
+  }
+
+  .oa-message-markdown [data-streamdown="code-block"] {
+    max-height: min(24rem, 60vh);
+  }
+
+  .oa-message-markdown [data-streamdown="code-block-body"] {
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .oa-message-markdown [data-streamdown="code-block-body"] pre {
+    max-height: inherit;
+    overflow: auto;
+  }
+
+  .oa-message-markdown [data-streamdown="inline-code"] {
+    border-radius: 0.55rem;
+    background: color-mix(in oklch, var(--muted) 65%, transparent);
+    padding: 0.1rem 0.4rem;
+  }
+
+  .oa-message-markdown [data-streamdown="table-wrapper"] {
+    overflow: auto;
+    border-radius: 1rem;
+    border: 1px solid color-mix(in oklch, var(--border) 85%, transparent);
+  }
+
+  .oa-message-markdown [data-streamdown="table-wrapper"] table {
+    min-width: 100%;
+    border-collapse: collapse;
+  }
+
+  .oa-message-markdown [data-streamdown="table-wrapper"] th,
+  .oa-message-markdown [data-streamdown="table-wrapper"] td {
+    border-bottom: 1px solid color-mix(in oklch, var(--border) 75%, transparent);
+    padding: 0.6rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
   }
 
   .oa-json-editor__surface,

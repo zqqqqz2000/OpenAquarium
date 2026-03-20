@@ -4,6 +4,7 @@ import { streamText } from "ai";
 import type { Project, ProviderBinding } from "../domain/model";
 import { CODEX_ACP_MODE_ENV_KEY, ensureCodexAcpSessionMode } from "../lib/acp";
 import { isJsonObject, type JsonValue } from "../lib/json";
+import { isProviderAssociationRequiredBinding } from "../lib/provider-association";
 import type {
   ExecutionMember,
   ExecutionPreparation,
@@ -39,6 +40,12 @@ class TimeoutError extends Error {
 
 function resolveSpawnCommand(member: AcpExecutionMember): { command: string; args: string[] } {
   if (member.provider.command.trim().length === 0) {
+    if (isProviderAssociationRequiredBinding(member.provider)) {
+      throw new Error(
+        `Provider association required for @${member.handle}. Open the room or member config and select a provider before running tasks.`,
+      );
+    }
+
     throw new Error(`ACP provider "${member.provider.label}" for @${member.handle} is missing a command`);
   }
 

@@ -299,7 +299,7 @@ export interface WorkspaceSnapshot {
 
 export interface CreateProjectInput {
   projectName: string;
-  templateId: TemplateId;
+  templateId?: TemplateId;
   path?: string;
 }
 

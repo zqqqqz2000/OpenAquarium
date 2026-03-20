@@ -3,10 +3,10 @@ import path from "node:path";
 
 import { z } from "zod";
 
-import type { ChatAuthor, ChatMessage, MessageId, Room, RoomMessageHistoryPage, WorkspaceSnapshot } from "@/domain/model";
+import type { ChatAuthor, ChatMessage, MessageId, Project, Room, RoomMessageHistoryPage, WorkspaceSnapshot } from "@/domain/model";
 import { isVisibleMainRoomMessage } from "@/lib/message-visibility";
 import { resolveRoomVisibleMemberIdSet } from "@/lib/room-message-preferences";
-import { getRoomContextDirectoryPath, getRoomTranscriptFilePath } from "@/server/room-transcript-files";
+import { getRoomContextDirectoryPath, getRoomTranscriptFilePath } from "@/server/room-context-files";
 
 const HISTORY_FILE_NAME = "messages.jsonl";
 const DEFAULT_HISTORY_PAGE_LIMIT = 80;
@@ -181,9 +181,14 @@ function parseTranscriptEntry(args: {
 async function readTranscriptBootstrapMessages(args: {
   workspaceRoot: string;
   room: Room;
+  project: Pick<Project, "path">;
   snapshot: WorkspaceSnapshot;
 }): Promise<ChatMessage[]> {
-  const transcriptPath = getRoomTranscriptFilePath(args.workspaceRoot, args.room);
+  const transcriptPath = getRoomTranscriptFilePath(
+    args.workspaceRoot,
+    args.room,
+    args.project,
+  );
 
   try {
     const content = await readFile(transcriptPath, "utf8");
@@ -267,8 +272,13 @@ async function ensureRoomMessageHistoryFile(args: {
   workspaceRoot: string;
   snapshot: WorkspaceSnapshot;
   room: Room;
+  project: Pick<Project, "path">;
 }): Promise<boolean> {
-  const historyPath = getRoomMessageHistoryFilePath(args.workspaceRoot, args.room);
+  const historyPath = getRoomMessageHistoryFilePath(
+    args.workspaceRoot,
+    args.room,
+    args.project,
+  );
 
   try {
     await access(historyPath);
@@ -294,8 +304,15 @@ function sanitizeHistoryLimit(limit?: number): number {
   return Math.min(MAX_HISTORY_PAGE_LIMIT, Math.max(1, Math.floor(limit)));
 }
 
-export function getRoomMessageHistoryFilePath(workspaceRoot: string, room: Room): string {
-  return path.join(getRoomContextDirectoryPath(workspaceRoot, room), HISTORY_FILE_NAME);
+export function getRoomMessageHistoryFilePath(
+  workspaceRoot: string,
+  room: Room,
+  project?: Pick<Project, "path">,
+): string {
+  return path.join(
+    getRoomContextDirectoryPath(workspaceRoot, room, project),
+    HISTORY_FILE_NAME,
+  );
 }
 
 export async function syncRoomMessageHistoryFiles(args: {
@@ -307,10 +324,15 @@ export async function syncRoomMessageHistoryFiles(args: {
 
   await Promise.all(
     Object.values(next.rooms).map(async (room) => {
+      const project = next.projects[room.projectId];
+      if (!project) {
+        return;
+      }
       const historyCreated = await ensureRoomMessageHistoryFile({
         workspaceRoot,
         snapshot: next,
         room,
+        project,
       });
       if (historyCreated) {
         return;
@@ -323,7 +345,11 @@ export async function syncRoomMessageHistoryFiles(args: {
         .join("");
 
       if (newEntries.length > 0) {
-        await appendFile(getRoomMessageHistoryFilePath(workspaceRoot, room), newEntries, "utf8");
+        await appendFile(
+          getRoomMessageHistoryFilePath(workspaceRoot, room, project),
+          newEntries,
+          "utf8",
+        );
       }
     }),
   );
@@ -338,12 +364,18 @@ export async function loadRoomMessageHistoryPage(args: {
 }): Promise<RoomMessageHistoryPage> {
   const { workspaceRoot, snapshot, room, beforeMessageId } = args;
   const limit = sanitizeHistoryLimit(args.limit);
-  const historyPath = getRoomMessageHistoryFilePath(workspaceRoot, room);
+  const project = snapshot.projects[room.projectId];
+  const historyPath = getRoomMessageHistoryFilePath(
+    workspaceRoot,
+    room,
+    project,
+  );
 
   await ensureRoomMessageHistoryFile({
     workspaceRoot,
     snapshot,
     room,
+    project: project ?? {},
   });
 
   const allMessages = await readRoomHistoryMessages(historyPath);

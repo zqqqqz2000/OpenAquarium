@@ -13,7 +13,11 @@ import type {
 } from "@/domain/model";
 import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
-import { WorkspaceRuntimeClient, type WatcherRunResult } from "@/lib/runtime-client";
+import {
+  WorkspaceRuntimeClient,
+  type ProjectPathInspectionPayload,
+  type WatcherRunResult,
+} from "@/lib/runtime-client";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
@@ -128,8 +132,8 @@ export interface WorkspaceRemoteStoreState {
   connected: boolean;
   error?: string;
   hydrate(): Promise<void>;
-  pickProjectPath(): Promise<string | undefined>;
-  createProject(input: { projectName: string; templateId: string; path?: string }): Promise<{ projectId: string; roomId: string }>;
+  pickProjectPath(): Promise<{ path?: string; inspection?: ProjectPathInspectionPayload }>;
+  createProject(input: { projectName: string; templateId?: string; path?: string }): Promise<{ projectId: string; roomId: string }>;
   createRoom(input: { projectId: string; templateId: string }): Promise<{ roomId: string }>;
   deleteProject(projectId: string): Promise<WorkspaceSnapshot>;
   deleteRoom(roomId: string): Promise<WorkspaceSnapshot>;
@@ -161,8 +165,8 @@ export interface WorkspaceRemoteStoreState {
 
 export interface WorkspaceRemoteClient {
   getState(): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig }>;
-  pickProjectPath(): Promise<string | undefined>;
-  createProject(input: { projectName: string; templateId: string; path?: string }): Promise<{
+  pickProjectPath(): Promise<{ path?: string; inspection?: ProjectPathInspectionPayload }>;
+  createProject(input: { projectName: string; templateId?: string; path?: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     projectId: string;
     roomId: string;

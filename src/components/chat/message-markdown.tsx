@@ -1,4 +1,10 @@
-import { memo, useMemo, type HTMLAttributes, type ReactNode } from "react";
+import {
+  memo,
+  useMemo,
+  type HTMLAttributes,
+  type ImgHTMLAttributes,
+  type ReactNode,
+} from "react";
 
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
@@ -7,6 +13,7 @@ import { mermaid } from "@streamdown/mermaid";
 import remarkBreaks from "remark-breaks";
 import { Streamdown, defaultRemarkPlugins, type Components, type ExtraProps } from "streamdown";
 
+import { RoomAssetImage } from "@/components/media/room-asset-image";
 import { cn } from "@/lib/utils";
 
 const MESSAGE_MENTION_TAG = "oa-mention";
@@ -16,6 +23,7 @@ interface MessageMarkdownProps {
   className?: string;
   mentionHandles?: ReadonlySet<string>;
   quoteHandles?: ReadonlySet<string>;
+  roomId?: string;
   streaming?: boolean;
 }
 
@@ -26,6 +34,8 @@ interface MessageMentionProps extends HTMLAttributes<HTMLElement>, ExtraProps {
   handle?: string;
   kind?: MessageMentionKind;
 }
+
+interface MessageMarkdownImageProps extends ImgHTMLAttributes<HTMLImageElement>, ExtraProps {}
 
 interface MarkdownNode {
   type: string;
@@ -51,9 +61,6 @@ const MESSAGE_MARKDOWN_ALLOWED_TAGS = {
   [MESSAGE_MENTION_TAG]: ["handle", "kind"],
 } satisfies Record<string, string[]>;
 
-const MESSAGE_MARKDOWN_COMPONENTS = {
-  [MESSAGE_MENTION_TAG]: MessageMention,
-} satisfies Components;
 const MESSAGE_MARKDOWN_MATH_PLUGIN = createMathPlugin({
   singleDollarTextMath: true,
 });
@@ -64,8 +71,34 @@ const MESSAGE_MARKDOWN_PLUGINS = {
   mermaid,
 } as const;
 
+function omitMessageMentionDomProps(props: MessageMentionProps): HTMLAttributes<HTMLElement> {
+  const rest = { ...props } as MessageMentionProps;
+
+  delete rest.children;
+  delete rest.className;
+  delete rest.handle;
+  delete rest.kind;
+  delete rest.node;
+
+  return rest;
+}
+
+function omitMarkdownImageExtraProps(
+  props: MessageMarkdownImageProps,
+): Omit<MessageMarkdownImageProps, "alt" | "className" | "node" | "src"> {
+  const rest = { ...props } as MessageMarkdownImageProps;
+
+  delete rest.alt;
+  delete rest.className;
+  delete rest.node;
+  delete rest.src;
+
+  return rest;
+}
+
 function MessageMention(props: MessageMentionProps) {
-  const { children, className, handle: _handle, kind, node: _node, ...rest } = props;
+  const { children, className, kind } = props;
+  const rest = omitMessageMentionDomProps(props);
   const isAssignment = kind === "assignment";
 
   return (
@@ -85,12 +118,41 @@ function MessageMention(props: MessageMentionProps) {
   );
 }
 
+function createMessageMarkdownComponents(roomId?: string): Components {
+  return {
+    [MESSAGE_MENTION_TAG]: MessageMention,
+    img: function MessageMarkdownImage(props: MessageMarkdownImageProps) {
+      const { alt, className, src } = props;
+      const imageProps = omitMarkdownImageExtraProps(props);
+
+      if (typeof src !== "string" || src.trim().length === 0) {
+        return null;
+      }
+
+      return (
+        <RoomAssetImage
+          {...imageProps}
+          roomId={roomId}
+          src={src}
+          alt={typeof alt === "string" ? alt : undefined}
+          className="oa-message-image"
+          imageClassName={cn(
+            "max-h-64 rounded-2xl border border-border/80 bg-card object-contain shadow-sm",
+            className,
+          )}
+        />
+      );
+    },
+  } satisfies Components;
+}
+
 export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkdownProps) {
   const {
     content,
     className,
     mentionHandles = EMPTY_HANDLE_SET,
     quoteHandles = EMPTY_HANDLE_SET,
+    roomId,
     streaming = false,
   } = props;
   const mentionHandleList = useMemo(() => [...mentionHandles].sort(), [mentionHandles]);
@@ -114,6 +176,10 @@ export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkd
     ],
     [mentionRemarkPlugin],
   );
+  const components = useMemo(
+    () => createMessageMarkdownComponents(roomId),
+    [roomId],
+  );
 
   return (
     <Streamdown
@@ -124,7 +190,7 @@ export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkd
       literalTagContent={[MESSAGE_MENTION_TAG]}
       plugins={MESSAGE_MARKDOWN_PLUGINS}
       remarkPlugins={remarkPlugins}
-      components={MESSAGE_MARKDOWN_COMPONENTS}
+      components={components}
     >
       {content}
     </Streamdown>

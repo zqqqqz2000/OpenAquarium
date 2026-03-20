@@ -132,12 +132,32 @@ export async function handleWorkspaceJsonApiRequest(args: {
     };
   }
 
+  const roomTodoTreeMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/todo-trees$/u);
+  if (method === "GET" && roomTodoTreeMatch) {
+    const [, roomId] = roomTodoTreeMatch;
+    if (!roomId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing room id" },
+      };
+    }
+
+    return {
+      statusCode: 200,
+      payload: await runtime.getRoomTodoTrees({
+        roomId,
+      }),
+    };
+  }
+
   if (method === "POST" && pathname === "/api/system/project-path") {
     try {
+      const selectedPath = await selectProjectDirectory();
       return {
         statusCode: 200,
         payload: {
-          path: await selectProjectDirectory(),
+          path: selectedPath,
+          inspection: await runtime.inspectProjectPath({ path: selectedPath }),
         },
       };
     } catch (error) {
@@ -161,7 +181,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "firstPrompt is no longer supported. Create the room first, then send the first message." },
       };
     }
-    const created = await runtime.createProject(body as { projectName: string; templateId: string; path?: string });
+    const created = await runtime.createProject(body as { projectName: string; templateId?: string; path?: string });
     return {
       statusCode: 200,
       payload: created,
@@ -706,9 +726,52 @@ export async function startWorkspaceHttpServer(args: {
         return;
       }
 
+      const roomTodoTreeMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/todo-trees$/u);
+      if (request.method === "GET" && roomTodoTreeMatch) {
+        const [, roomId] = roomTodoTreeMatch;
+        if (!roomId) {
+          sendJson(response, 400, { error: "Missing room id" });
+          return;
+        }
+
+        sendJson(
+          response,
+          200,
+          await args.runtime.getRoomTodoTrees({
+            roomId,
+          }),
+        );
+        return;
+      }
+
+      const roomAssetMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/assets$/u);
+      if (request.method === "GET" && roomAssetMatch) {
+        const [, roomId] = roomAssetMatch;
+        const filePath = url.searchParams.get("path");
+        if (!roomId || !filePath) {
+          sendJson(response, 400, { error: "Missing room id or asset path" });
+          return;
+        }
+
+        const asset = await args.runtime.readRoomAsset({
+          roomId,
+          filePath,
+        });
+        response.statusCode = 200;
+        response.setHeader("content-type", asset.contentType);
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("access-control-allow-origin", "*");
+        response.end(asset.body);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/system/project-path") {
         try {
-          sendJson(response, 200, { path: await selectProjectDirectory() });
+          const selectedPath = await selectProjectDirectory();
+          sendJson(response, 200, {
+            path: selectedPath,
+            inspection: await args.runtime.inspectProjectPath({ path: selectedPath }),
+          });
           return;
         } catch (error) {
           if (error instanceof DirectorySelectionCancelledError) {
@@ -721,7 +784,7 @@ export async function startWorkspaceHttpServer(args: {
       }
 
       if (request.method === "POST" && url.pathname === "/api/projects") {
-        const body = await readJson<{ projectName: string; templateId: string; path?: string }>(request);
+        const body = await readJson<{ projectName: string; templateId?: string; path?: string }>(request);
         if (containsLegacyFirstPrompt(body)) {
           sendJson(response, 400, {
             error: "firstPrompt is no longer supported. Create the room first, then send the first message.",

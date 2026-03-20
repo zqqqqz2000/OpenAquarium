@@ -1,10 +1,12 @@
 import path from "node:path";
 import { watch, type FSWatcher } from "node:fs";
+import { readFile } from "node:fs/promises";
 
 import type {
   GlobalWorkspaceConfig,
   ProviderBinding,
   ProviderConnectionTestResult,
+  Room,
   RoomMessageHistoryPage,
   TeamMember,
   TeamTemplate,
@@ -72,6 +74,17 @@ import { compactWorkspaceSnapshot } from "./workspace-snapshot-compact";
 import { getRoomTranscriptFilePath, syncRoomTranscriptFiles } from "./room-transcript-files";
 import { loadRoomMessageHistoryPage, syncRoomMessageHistoryFiles } from "./room-message-history";
 import { normalizeProjectPath, resolveProjectWorkingDirectory } from "./project-paths";
+import {
+  getProjectInteractiveDirectoryPath,
+  type ProjectPathInspectionResult,
+  getProviderAssociationNotice,
+  getRoomContextDirectoryPath,
+  inspectProjectRoomContext,
+  listRoomTodoTreeFiles,
+  loadProjectRoomContextSnapshots,
+  syncRoomContextFiles,
+} from "./room-context-files";
+import { importProjectFromRoomContexts } from "./room-context-import";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
 import { buildProviderModelProfileFromDraft, type ModelProfileDraft } from "../lib/global-config-draft";
@@ -82,6 +95,8 @@ import { OPENAQUARIUM_PROVIDER_TEST_PROMPT } from "../lib/provider-test";
 import { resolveRoomTeamSummary } from "../lib/room-team";
 import { loadSkillCatalog, type SkillCatalogEntry } from "./skills";
 import type { TemplateStudioUIMessage } from "../lib/template-studio-ui-message";
+import { inspectLocalImage } from "./image-inspector";
+import { resolveAccessiblePath, resolveExecutorDirectories } from "./member-workspace-tools";
 
 type SnapshotListener = (snapshot: WorkspaceSnapshot) => void;
 type TemplateGenerator = (brief: string, args: { workspaceRoot: string; references: TeamTemplate[] }) => Promise<TeamTemplate>;
@@ -659,6 +674,10 @@ export class WorkspaceRuntime {
       previous: createWorkspaceSnapshot(cloneTemplates(bootSnapshot), bootSnapshot.currentUserName),
       next: bootSnapshot,
     });
+    await syncRoomContextFiles({
+      workspaceRoot: args.workspaceRoot,
+      next: bootSnapshot,
+    });
     runtime.syncWatchers();
     runtime.dispatchNewTasks(
       createWorkspaceSnapshot(cloneTemplates(bootSnapshot), bootSnapshot.currentUserName),
@@ -694,6 +713,97 @@ export class WorkspaceRuntime {
     });
   }
 
+  async getRoomTodoTrees(input: {
+    roomId: string;
+  }): Promise<{
+    roomId: string;
+    projectId: string;
+    projectInteractiveDirectory: string;
+    roomContextDirectory: string;
+    providerAssociationNotice: string;
+    files: Awaited<ReturnType<typeof listRoomTodoTreeFiles>>;
+  }> {
+    const room = this.snapshot.rooms[input.roomId];
+    if (!room) {
+      throw new Error(`Unknown room "${input.roomId}"`);
+    }
+
+    const project = this.snapshot.projects[room.projectId];
+    if (!project) {
+      throw new Error(`Unknown project "${room.projectId}"`);
+    }
+
+    const roomContextDirectory = getRoomContextDirectoryPath(
+      this.workspaceRoot,
+      room,
+      project,
+    );
+
+    return {
+      roomId: room.id,
+      projectId: room.projectId,
+      projectInteractiveDirectory: getProjectInteractiveDirectoryPath(
+        this.workspaceRoot,
+        project,
+      ),
+      roomContextDirectory,
+      providerAssociationNotice: getProviderAssociationNotice(
+        roomContextDirectory,
+      ),
+      files: await listRoomTodoTreeFiles({
+        workspaceRoot: this.workspaceRoot,
+        room,
+        project,
+        snapshot: this.snapshot,
+      }),
+    };
+  }
+
+  async inspectProjectPath(input: {
+    path: string;
+  }): Promise<ProjectPathInspectionResult> {
+    const normalizedPath = normalizeProjectPath(this.workspaceRoot, input.path);
+    if (!normalizedPath) {
+      throw new Error("Project path is required");
+    }
+
+    return inspectProjectRoomContext(normalizedPath);
+  }
+
+  async readRoomAsset(input: {
+    roomId: string;
+    filePath: string;
+  }): Promise<{
+    body: Buffer;
+    contentType: string;
+  }> {
+    const room = this.snapshot.rooms[input.roomId];
+    if (!room) {
+      throw new Error(`Unknown room "${input.roomId}"`);
+    }
+
+    const project = this.snapshot.projects[room.projectId];
+    if (!project) {
+      throw new Error(`Unknown project "${room.projectId}"`);
+    }
+
+    const directories = resolveExecutorDirectories({
+      workspaceRoot: this.workspaceRoot,
+      project,
+    });
+    const resolvedPath = resolveAccessiblePath({
+      filePath: input.filePath,
+      projectWorkingDirectory: directories.projectRoot,
+      accessibleRoots: directories.accessibleRoots,
+    });
+    const metadata = await inspectLocalImage(resolvedPath);
+
+    return {
+      body: await readFile(resolvedPath),
+      contentType: metadata.mimeType ?? "application/octet-stream",
+    };
+  }
+
   subscribe(listener: SnapshotListener): () => void {
     this.listeners.add(listener);
     return () => {
@@ -703,14 +813,67 @@ export class WorkspaceRuntime {
 
   async createProject(input: CreateProjectInput): Promise<{ snapshot: WorkspaceSnapshot; projectId: string; roomId: string }> {
     const previous = this.snapshot;
-    const next = createProjectWithRoom(
-      previous,
-      {
-        ...input,
-        path: normalizeProjectPath(this.workspaceRoot, input.path),
-      },
-      this.context,
-    );
+    const normalizedProjectPath = normalizeProjectPath(this.workspaceRoot, input.path);
+    const existingProjectId = normalizedProjectPath
+      ? previous.projectOrder.find((projectId) => {
+          const project = previous.projects[projectId];
+          return project
+            ? normalizeProjectPath(this.workspaceRoot, project.path) === normalizedProjectPath
+            : false;
+        })
+      : undefined;
+    const existingProject = existingProjectId ? previous.projects[existingProjectId] : undefined;
+
+    if (existingProject) {
+      const candidateRoomIds = previous.roomOrderByProject[existingProject.id] ?? [];
+      const candidateRooms = candidateRoomIds
+        .map((roomId) => previous.rooms[roomId])
+        .filter((room): room is Room => Boolean(room));
+      const existingRoomId =
+        candidateRooms
+          .sort((left, right) => (right.updatedAt ?? right.createdAt).localeCompare(left.updatedAt ?? left.createdAt))[0]?.id
+        ?? candidateRoomIds[0];
+
+      if (existingRoomId) {
+        const existingRoom = previous.rooms[existingRoomId];
+        const next = {
+          ...previous,
+          selection: {
+            projectId: existingProject.id,
+            roomId: existingRoomId,
+            memberId: existingRoom?.entryMemberId,
+          },
+        };
+
+        this.activeRoomId = existingRoomId;
+        await this.applySnapshot(previous, next);
+        return {
+          snapshot: this.snapshot,
+          projectId: existingProject.id,
+          roomId: existingRoomId,
+        };
+      }
+    }
+
+    const importableRoomContexts = normalizedProjectPath
+      ? await loadProjectRoomContextSnapshots(normalizedProjectPath)
+      : [];
+    const next = importableRoomContexts.length > 0
+      ? importProjectFromRoomContexts({
+          current: previous,
+          roomContexts: importableRoomContexts,
+          projectName: input.projectName,
+          projectPath: normalizedProjectPath,
+          context: this.context,
+        })
+      : createProjectWithRoom(
+          previous,
+          {
+            ...input,
+            path: normalizedProjectPath,
+          },
+          this.context,
+        );
     this.activeRoomId = next.selection.roomId;
     await this.applySnapshot(previous, next);
     return {
@@ -1290,6 +1453,10 @@ export class WorkspaceRuntime {
       previous,
       next: prepared,
     });
+    await syncRoomContextFiles({
+      workspaceRoot: this.workspaceRoot,
+      next: prepared,
+    });
     this.snapshot = compactWorkspaceSnapshot(this.applyWatcherRoomSuspensions(prepared));
     await this.persistImmediately(this.snapshot);
     this.logger?.info("snapshot-applied", summarizeWorkspaceSnapshot(this.snapshot));
@@ -1515,7 +1682,11 @@ export class WorkspaceRuntime {
             member: executionMember,
             task: currentTask,
             snapshot: this.snapshot,
-            transcriptFilePath: getRoomTranscriptFilePath(this.workspaceRoot, room),
+            transcriptFilePath: getRoomTranscriptFilePath(
+              this.workspaceRoot,
+              room,
+              project,
+            ),
             retryAttempt,
             sessionContinuation: preparation?.sessionContinuation,
           });
@@ -1743,12 +1914,12 @@ export class WorkspaceRuntime {
         {
         onPromptVisible: () => {
           if (!acceptingExecutorUpdates || promptVisible) {
-            return;
+            return Promise.resolve();
           }
           touchWatchdog();
           const currentTask = this.snapshot.tasks[args.taskId];
           if (!currentTask || currentTask.status !== "running") {
-            return;
+            return Promise.resolve();
           }
           this.snapshot = compactWorkspaceSnapshot(appendTaskTrace(
             acknowledgeWatcherDigestVisibility(this.snapshot, args.taskId),
@@ -1765,6 +1936,7 @@ export class WorkspaceRuntime {
           this.scheduleProgressPersistence();
           this.emit();
           promptVisible = true;
+          return Promise.resolve();
         },
         onDraft: async (content) => {
           if (!acceptingExecutorUpdates) {

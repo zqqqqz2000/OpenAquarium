@@ -1,9 +1,14 @@
 import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { ChatMessage, Room, TeamMember, WorkspaceSnapshot } from "../domain/model";
+import type { ChatMessage, Project, Room, TeamMember, WorkspaceSnapshot } from "../domain/model";
 import { getMemberSessionEntries, type MemberSessionEntry } from "../lib/member-session-feed";
 import { isVisibleMemberRoomMessage } from "../lib/message-visibility";
+import {
+  getMemberHistoryFilePath as getRoomContextMemberHistoryFilePath,
+  getRoomContextDirectoryPath as getRoomContextDirectoryPathInternal,
+  getRoomTranscriptFilePath as getRoomContextTranscriptFilePath,
+} from "./room-context-files";
 
 function formatHandles(prefix: string, memberIds: string[], snapshot: WorkspaceSnapshot, marker = "@"): string[] {
   if (memberIds.length === 0) {
@@ -38,16 +43,29 @@ function getVisibleMainRoomMessages(snapshot: WorkspaceSnapshot, roomId: string)
     .filter((message): message is ChatMessage => Boolean(message) && isVisibleMemberRoomMessage(message));
 }
 
-export function getRoomContextDirectoryPath(workspaceRoot: string, room: Room): string {
-  return path.join(workspaceRoot, ".openaquarium", "rooms", room.projectId, room.id);
+export function getRoomContextDirectoryPath(
+  workspaceRoot: string,
+  room: Room,
+  project?: Pick<Project, "path">,
+): string {
+  return getRoomContextDirectoryPathInternal(workspaceRoot, room, project);
 }
 
-export function getRoomTranscriptFilePath(workspaceRoot: string, room: Room): string {
-  return path.join(getRoomContextDirectoryPath(workspaceRoot, room), "messages.md");
+export function getRoomTranscriptFilePath(
+  workspaceRoot: string,
+  room: Room,
+  project?: Pick<Project, "path">,
+): string {
+  return getRoomContextTranscriptFilePath(workspaceRoot, room, project);
 }
 
-export function getMemberHistoryFilePath(workspaceRoot: string, room: Room, member: TeamMember): string {
-  return path.join(getRoomContextDirectoryPath(workspaceRoot, room), `member-${member.id}.md`);
+export function getMemberHistoryFilePath(
+  workspaceRoot: string,
+  room: Room,
+  member: TeamMember,
+  project?: Pick<Project, "path">,
+): string {
+  return getRoomContextMemberHistoryFilePath(workspaceRoot, room, member, project);
 }
 
 async function ensureTranscriptFile(filePath: string, snapshot: WorkspaceSnapshot, room: Room): Promise<boolean> {
@@ -158,8 +176,20 @@ export async function syncRoomTranscriptFiles(args: {
   await Promise.all(
     Object.values(next.rooms).map(async (room) => {
       const roomPreviouslyKnown = Boolean(previous.rooms[room.id]);
-      const transcriptPath = getRoomTranscriptFilePath(workspaceRoot, room);
-      const transcriptCreated = await ensureTranscriptFile(transcriptPath, next, room);
+      const project = next.projects[room.projectId];
+      if (!project) {
+        return;
+      }
+      const transcriptPath = getRoomContextTranscriptFilePath(
+        workspaceRoot,
+        room,
+        project,
+      );
+      const transcriptCreated = await ensureTranscriptFile(
+        transcriptPath,
+        next,
+        room,
+      );
 
       if (!transcriptCreated && roomPreviouslyKnown) {
         const previousMessageIds = new Set(previous.messageOrderByRoom[room.id] ?? []);
@@ -180,7 +210,12 @@ export async function syncRoomTranscriptFiles(args: {
             return;
           }
 
-          const historyPath = getMemberHistoryFilePath(workspaceRoot, room, member);
+          const historyPath = getRoomContextMemberHistoryFilePath(
+            workspaceRoot,
+            room,
+            member,
+            project,
+          );
           const historyCreated = await ensureMemberHistoryFile(historyPath, next, room, member);
           if (historyCreated || !roomPreviouslyKnown) {
             return;
