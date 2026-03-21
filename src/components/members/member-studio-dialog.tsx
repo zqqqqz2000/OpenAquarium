@@ -49,7 +49,6 @@ import { badgeToneProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
 
 const CODEX_THINKING_DEPTHS = ["low", "mid", "high", "extra-high"] as const;
-const ROOM_WATCH_HOLD_BADGE_CLASS_NAME = "border-amber-500/45 bg-amber-500/10 text-amber-700 dark:text-amber-300";
 const WATCHER_PAUSED_BADGE_CLASS_NAME = "border-sky-500/45 bg-sky-500/10 text-sky-700 dark:text-sky-300";
 
 function FactTile(props: { label: string; value: string }) {
@@ -292,11 +291,6 @@ export function MemberStudioDialog(props: {
                   {member.isEntryMember ? <Badge variant="outline">Entry member</Badge> : null}
                   {watcher ? <Badge variant="outline">Watcher {watcher.intervalMinutes}m</Badge> : null}
                   {watcher?.persistent ? <Badge variant="outline">Persistent</Badge> : null}
-                  {room.watchersSuspended ? (
-                    <Badge variant="outline" className={ROOM_WATCH_HOLD_BADGE_CLASS_NAME}>
-                      Room watch hold
-                    </Badge>
-                  ) : null}
                   {watcher?.pausedUntilActivity ? (
                     <Badge variant="outline" className={WATCHER_PAUSED_BADGE_CLASS_NAME}>
                       Paused until activity
@@ -520,11 +514,6 @@ export function MemberStudioDialog(props: {
                           <Badge variant={watcher.persistent ? "outline" : "secondary"}>
                             {watcher.persistent ? "Persistent watch" : "Activity-only watch"}
                           </Badge>
-                          {room.watchersSuspended ? (
-                            <Badge variant="outline" className={ROOM_WATCH_HOLD_BADGE_CLASS_NAME}>
-                              Room watch hold
-                            </Badge>
-                          ) : null}
                           {watcher.pausedUntilActivity ? (
                             <Badge variant="outline" className={WATCHER_PAUSED_BADGE_CLASS_NAME}>
                               Paused until activity

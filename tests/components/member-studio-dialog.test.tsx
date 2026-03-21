@@ -332,7 +332,6 @@ describe("MemberStudioDialog", () => {
       />,
     );
 
-    expect(screen.getByText("Room watch hold")).toBeInTheDocument();
     expect(screen.getByText("Paused until activity")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Watcher" }));

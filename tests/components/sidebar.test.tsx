@@ -370,7 +370,7 @@ describe("Sidebar", () => {
     expect(roomCard).not.toHaveClass("ring-1");
   });
 
-  it("shows the room watcher hold status and toggles it from the sidebar button", async () => {
+  it("uses the room watcher button itself as the hold status indicator", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const projectId = snapshot.projectOrder[0];
@@ -422,7 +422,8 @@ describe("Sidebar", () => {
       </AppThemeProvider>,
     );
 
-    expect(screen.getByText("Watch hold")).toBeInTheDocument();
+    expect(screen.queryByText("Watch hold")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Resume watcher execution for ${room.name}` })).toHaveAttribute("data-variant", "secondary");
 
     await user.click(screen.getByRole("button", { name: `Resume watcher execution for ${room.name}` }));
 
@@ -480,7 +481,7 @@ describe("Sidebar", () => {
       </AppThemeProvider>,
     );
 
-    expect(screen.getByText("Watch waiting")).toBeInTheDocument();
+    expect(screen.getByLabelText("Watcher paused until activity")).toBeInTheDocument();
     expect(screen.queryByText("Watch hold")).not.toBeInTheDocument();
   });
 

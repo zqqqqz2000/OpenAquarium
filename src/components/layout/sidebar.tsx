@@ -1,7 +1,7 @@
 import { useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, ChevronRight, FolderKanban, LoaderCircle, Pause, Play, Settings2, Trash2, Waves, X } from "lucide-react";
+import { ChevronDown, ChevronRight, CirclePause, FolderKanban, LoaderCircle, Pause, Play, Settings2, Trash2, Waves, X } from "lucide-react";
 
 import type { Project, Room, TeamTemplate } from "@/domain/model";
 import { RunningMembersHoverCard, type RunningMemberPreview } from "@/components/members/running-members-hover-card";
@@ -147,16 +147,17 @@ function RoomWatcherPausedBadge(props: { summary?: RoomWatcherPauseSummary }) {
     enabledCount > 1
       ? `${pausedUntilActivityCount} of ${enabledCount} enabled watchers are paused until room activity. This is separate from room-level Watch hold.`
       : "This room has an enabled watcher paused until room activity. This is separate from room-level Watch hold.";
+  const ariaLabel = pausedUntilActivityCount > 1 ? "Watchers paused until activity" : "Watcher paused until activity";
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Badge
-          variant="outline"
-          className="h-5 rounded-full border-sky-500/45 bg-sky-500/10 px-1.5 text-[10px] uppercase tracking-[0.14em] text-sky-700 dark:text-sky-300"
+        <span
+          aria-label={ariaLabel}
+          className="inline-flex size-5 items-center justify-center rounded-full border border-sky-500/45 bg-sky-500/10 text-sky-700 dark:text-sky-300"
         >
-          Watch waiting
-        </Badge>
+          <CirclePause size={12} />
+        </span>
       </TooltipTrigger>
       <TooltipContent side="top">{tooltipLabel}</TooltipContent>
     </Tooltip>
@@ -340,14 +341,6 @@ function ProjectRow(props: {
                           {summarizePrompt(room.topic || "No topic yet.", 54)}
                         </p>
                         <div className="mt-1.5 flex items-center gap-2">
-                          {room.watchersSuspended ? (
-                            <Badge
-                              variant="outline"
-                              className="h-5 rounded-full border-amber-500/45 bg-amber-500/10 px-1.5 text-[10px] uppercase tracking-[0.14em] text-amber-700 dark:text-amber-300"
-                            >
-                              Watch hold
-                            </Badge>
-                          ) : null}
                           <RoomWatcherPausedBadge summary={roomWatcherPauseSummary} />
                           <ActivityTimestamp updatedAt={roomActivity?.updatedAt ?? room.updatedAt ?? room.createdAt} />
                         </div>
