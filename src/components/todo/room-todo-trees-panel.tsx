@@ -27,6 +27,7 @@ import { RoomAssetImage } from "@/components/media/room-asset-image";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const TODO_STATUS_STYLES: Record<string, string> = {
   blocked:
@@ -71,6 +72,10 @@ function buildNodeSummary(node: AqTodoNodeModel): string[] {
     node.priority ? `Priority ${node.priority}` : undefined,
     typeof node.progress === "number" ? `${Math.round(node.progress)}%` : undefined,
   ].filter((value): value is string => Boolean(value));
+}
+
+function formatGraphCount(count: number): string {
+  return `${count} graph${count === 1 ? "" : "s"}`;
 }
 
 function AqTodoFlowNodeCard(props: NodeProps<AqTodoFlowNode>) {
@@ -267,19 +272,24 @@ export function RoomTodoTreesPanel(props: {
     });
   }, [parsedDocument.document, room.id]);
 
+  const activeTabValue = selectedFile?.absolutePath ?? "__no-selection__";
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="rounded-3xl border border-border/75 bg-card/96 p-3 shadow-sm">
-        <div className="flex items-start justify-between gap-3">
-          <div className="space-y-2">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1">
             <div className="flex items-center gap-2">
               <FolderTree size={16} />
               <p className="m-0 text-sm font-semibold">AqTree</p>
+              {payload?.files.length ? (
+                <Badge variant="secondary" className="rounded-full px-2 py-0 text-[10px]">
+                  {formatGraphCount(payload.files.length)}
+                </Badge>
+              ) : null}
             </div>
-            <p className="m-0 text-xs leading-5 text-muted-foreground">
-              LLM can edit `*.aqtree.xml` directly under the room interactive
-              directory to track ownership, progress, screenshots, and code
-              evidence.
+            <p className="m-0 text-xs text-muted-foreground">
+              Visual room plan, ownership, and evidence at a glance.
             </p>
           </div>
           <Button
@@ -295,127 +305,149 @@ export function RoomTodoTreesPanel(props: {
           </Button>
         </div>
         {payload ? (
-          <div className="mt-3 space-y-2 rounded-2xl border border-border/70 bg-muted/20 p-3">
-            <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-              Project Interactive Directory
-            </p>
-            <p className="m-0 break-all font-mono text-[11px] leading-5 text-foreground/85">
-              {payload.projectInteractiveDirectory}
-            </p>
-            <p className="m-0 break-all font-mono text-[11px] leading-5 text-foreground/85">
-              {payload.roomInteractiveDirectory}
-            </p>
-          </div>
-        ) : null}
-        {payload?.providerAssociationNotice ? (
-          <div className="mt-3 rounded-2xl border border-amber-200/80 bg-amber-50/90 px-3 py-2.5 text-[11px] leading-5 text-amber-900">
-            {payload.providerAssociationNotice}
-          </div>
+          <details className="mt-2 rounded-2xl border border-border/60 bg-muted/15 px-3 py-2.5">
+            <summary className="cursor-pointer list-none text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground marker:hidden">
+              Workspace info
+            </summary>
+            <div className="mt-2 space-y-2 text-[11px] leading-5">
+              <div>
+                <p className="m-0 font-medium text-foreground/80">Project interactive directory</p>
+                <p className="m-0 break-all font-mono text-foreground/85">
+                  {payload.projectInteractiveDirectory}
+                </p>
+              </div>
+              <div>
+                <p className="m-0 font-medium text-foreground/80">Room interactive directory</p>
+                <p className="m-0 break-all font-mono text-foreground/85">
+                  {payload.roomInteractiveDirectory}
+                </p>
+              </div>
+              {payload.providerAssociationNotice ? (
+                <div className="rounded-2xl border border-amber-200/80 bg-amber-50/90 px-3 py-2 text-amber-900">
+                  {payload.providerAssociationNotice}
+                </div>
+              ) : null}
+            </div>
+          </details>
         ) : null}
       </div>
 
-      {payload?.files.length ? (
-        <div className="flex flex-wrap gap-2">
-          {payload.files.map((file) => {
-            const active = file.absolutePath === selectedFile?.absolutePath;
-
-            return (
-              <button
-                key={file.absolutePath}
-                type="button"
-                className={cn(
-                  "rounded-full border px-3 py-1.5 text-left text-xs transition-colors",
-                  active
-                    ? "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)] text-[color:var(--tone-blueprint-foreground)]"
-                    : "border-border/80 bg-background/85 text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-                )}
-                onClick={() => setSelectedFilePath(file.absolutePath)}
-              >
-                <span className="block font-medium">{file.fileName}</span>
-                <span className="block text-[10px] opacity-80">
-                  {formatTodoTimestamp(file.modifiedAt)}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-
-      <Card className="min-h-0 flex-1 overflow-hidden border border-border shadow-sm">
-        <CardContent className="flex h-full min-h-0 flex-col p-0">
-          {loading ? (
-            <div className="flex h-full min-h-[18rem] items-center justify-center px-6 text-sm text-muted-foreground">
-              Loading todo trees…
-            </div>
-          ) : error ? (
-            <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-3 px-6 text-center">
-              <AlertTriangle size={18} className="text-destructive" />
-              <p className="m-0 text-sm text-destructive">{error}</p>
-            </div>
-          ) : !selectedFile ? (
-            <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
-              <Sparkles size={18} />
-              <p className="m-0 text-sm">
-                No tree file found. Create a `*.aqtree.xml` file under the room
-                interactive directory.
+      <Tabs
+        value={activeTabValue}
+        onValueChange={setSelectedFilePath}
+        className="min-h-0 flex-1 gap-2"
+      >
+        {payload?.files.length ? (
+          <div className="rounded-2xl border border-border/70 bg-background/70 p-2">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
+              <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                Graph views
               </p>
-            </div>
-          ) : parsedDocument.error ? (
-            <div className="flex h-full min-h-[18rem] flex-col gap-3 p-4">
-              <div className="rounded-2xl border border-destructive/25 bg-destructive/5 px-4 py-3">
-                <p className="m-0 text-sm font-medium text-destructive">
-                  Failed to parse {selectedFile.fileName}
+              {selectedFile ? (
+                <p className="m-0 text-[11px] text-muted-foreground">
+                  Updated {formatTodoTimestamp(selectedFile.modifiedAt)}
                 </p>
-                <p className="mt-1 m-0 text-xs leading-5 text-destructive/90">
-                  {parsedDocument.error}
+              ) : null}
+            </div>
+            <div className="overflow-x-auto pb-1">
+              <TabsList
+                variant="line"
+                className="h-auto min-w-full justify-start gap-1 rounded-none p-0"
+              >
+                {payload.files.map((file) => (
+                  <TabsTrigger
+                    key={file.absolutePath}
+                    value={file.absolutePath}
+                    className="min-w-0 flex-none rounded-xl border border-border/70 bg-background/85 px-3 py-2 text-left text-xs data-active:border-[color:var(--tone-blueprint-border)] data-active:bg-[color:var(--tone-blueprint-surface)] data-active:text-[color:var(--tone-blueprint-foreground)] data-active:after:hidden"
+                  >
+                    <span className="block truncate font-medium">{file.fileName}</span>
+                    <span className="block text-[10px] opacity-80">
+                      {formatTodoTimestamp(file.modifiedAt)}
+                    </span>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </div>
+          </div>
+        ) : null}
+
+        <Card className="min-h-0 flex-1 overflow-hidden border border-border shadow-sm">
+          <CardContent className="flex h-full min-h-0 flex-col p-0">
+            {loading ? (
+              <div className="flex h-full min-h-[18rem] items-center justify-center px-6 text-sm text-muted-foreground">
+                Loading todo trees…
+              </div>
+            ) : error ? (
+              <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-3 px-6 text-center">
+                <AlertTriangle size={18} className="text-destructive" />
+                <p className="m-0 text-sm text-destructive">{error}</p>
+              </div>
+            ) : !selectedFile ? (
+              <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
+                <Sparkles size={18} />
+                <p className="m-0 text-sm">
+                  No tree file found. Create a `*.aqtree.xml` file under the room
+                  interactive directory.
                 </p>
               </div>
-              <pre className="m-0 min-h-0 flex-1 overflow-auto rounded-2xl bg-slate-950 p-4 text-[11px] leading-5 text-slate-100">
-                <code>{selectedFile.content}</code>
-              </pre>
-            </div>
-          ) : flowGraph ? (
-            <>
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
-                <div className="min-w-0">
-                  <p className="m-0 truncate text-sm font-semibold">
-                    {parsedDocument.document?.title ||
-                      parsedDocument.document?.roomName ||
-                      selectedFile.fileName}
-                  </p>
-                  <p className="mt-1 m-0 text-xs text-muted-foreground">
-                    {flowGraph.nodes.length} nodes · {flowGraph.edges.length}{" "}
-                    links
-                  </p>
+            ) : parsedDocument.error ? (
+              <TabsContent value={selectedFile.absolutePath} className="m-0 flex min-h-0 flex-1 flex-col">
+                <div className="flex h-full min-h-[18rem] flex-col gap-3 p-4">
+                  <div className="rounded-2xl border border-destructive/25 bg-destructive/5 px-4 py-3">
+                    <p className="m-0 text-sm font-medium text-destructive">
+                      Failed to parse {selectedFile.fileName}
+                    </p>
+                    <p className="mt-1 m-0 text-xs leading-5 text-destructive/90">
+                      {parsedDocument.error}
+                    </p>
+                  </div>
+                  <pre className="m-0 min-h-0 flex-1 overflow-auto rounded-2xl bg-slate-950 p-4 text-[11px] leading-5 text-slate-100">
+                    <code>{selectedFile.content}</code>
+                  </pre>
                 </div>
-                <Badge variant="outline" className="shrink-0">
-                  {selectedFile.fileName}
-                </Badge>
-              </div>
-              <div className="min-h-0 flex-1 bg-[radial-gradient(circle_at_top_left,rgba(110,135,255,0.12),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,248,252,0.96))] dark:bg-[radial-gradient(circle_at_top_left,rgba(110,135,255,0.16),transparent_32%),linear-gradient(180deg,rgba(25,29,40,0.96),rgba(18,22,31,0.98))]">
-                <ReactFlow
-                  key={selectedFile.absolutePath}
-                  nodes={flowGraph.nodes}
-                  edges={flowGraph.edges}
-                  nodeTypes={TODO_NODE_TYPES}
-                  fitView
-                  fitViewOptions={{ padding: 0.16 }}
-                  minZoom={0.25}
-                  maxZoom={1.5}
-                  nodesDraggable={false}
-                  nodesConnectable={false}
-                  elementsSelectable={false}
-                  zoomOnDoubleClick={false}
-                  proOptions={{ hideAttribution: true }}
-                >
-                  <Background gap={20} size={1} color="rgba(120, 130, 160, 0.18)" />
-                  <Controls showInteractive={false} position="top-left" />
-                </ReactFlow>
-              </div>
-            </>
-          ) : null}
-        </CardContent>
-      </Card>
+              </TabsContent>
+            ) : flowGraph ? (
+              <TabsContent value={selectedFile.absolutePath} className="m-0 flex min-h-0 flex-1 flex-col">
+                <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="m-0 truncate text-sm font-semibold">
+                      {parsedDocument.document?.title ||
+                        parsedDocument.document?.roomName ||
+                        selectedFile.fileName}
+                    </p>
+                    <p className="mt-1 m-0 text-xs text-muted-foreground">
+                      {flowGraph.nodes.length} nodes · {flowGraph.edges.length} links
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="shrink-0">
+                    {selectedFile.fileName}
+                  </Badge>
+                </div>
+                <div className="min-h-0 flex-1 bg-[radial-gradient(circle_at_top_left,rgba(110,135,255,0.12),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,248,252,0.96))] dark:bg-[radial-gradient(circle_at_top_left,rgba(110,135,255,0.16),transparent_32%),linear-gradient(180deg,rgba(25,29,40,0.96),rgba(18,22,31,0.98))]">
+                  <ReactFlow
+                    key={selectedFile.absolutePath}
+                    nodes={flowGraph.nodes}
+                    edges={flowGraph.edges}
+                    nodeTypes={TODO_NODE_TYPES}
+                    fitView
+                    fitViewOptions={{ padding: 0.16 }}
+                    minZoom={0.25}
+                    maxZoom={1.5}
+                    nodesDraggable={false}
+                    nodesConnectable={false}
+                    elementsSelectable={false}
+                    zoomOnDoubleClick={false}
+                    proOptions={{ hideAttribution: true }}
+                  >
+                    <Background gap={20} size={1} color="rgba(120, 130, 160, 0.18)" />
+                    <Controls showInteractive={false} position="top-left" />
+                  </ReactFlow>
+                </div>
+              </TabsContent>
+            ) : null}
+          </CardContent>
+        </Card>
+      </Tabs>
     </div>
   );
 }

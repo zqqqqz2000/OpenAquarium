@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RoomTodoTreesPanel } from "@/components/todo/room-todo-trees-panel";
@@ -13,6 +14,7 @@ describe("RoomTodoTreesPanel", () => {
   it("loads and renders aqtree files as a room mindmap", async () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
+    const user = userEvent.setup();
 
     vi.stubGlobal(
       "fetch",
@@ -51,6 +53,22 @@ describe("RoomTodoTreesPanel", () => {
                     "</aqtree>",
                   ].join("\n"),
                 },
+                {
+                  absolutePath:
+                    "/tmp/openaquarium-project/.openaquarium/interactive/rooms/room-1/interactive/secondary.aqtree.xml",
+                  fileName: "secondary.aqtree.xml",
+                  modifiedAt: "2026-03-20T11:00:00.000Z",
+                  content: [
+                    '<?xml version="1.0" encoding="UTF-8"?>',
+                    `<aqtree version="1" roomId="${room.id}" roomName="${room.name}" title="Secondary plan">`,
+                    '  <node id="secondary-root" title="Secondary plan" status="todo">',
+                    '    <node id="qa" title="QA sweep" status="in_progress">',
+                    "      <note>Verify the refreshed UI.</note>",
+                    "    </node>",
+                    "  </node>",
+                    "</aqtree>",
+                  ].join("\n"),
+                },
               ],
             }),
             {
@@ -82,13 +100,26 @@ describe("RoomTodoTreesPanel", () => {
     );
 
     expect(await screen.findByText("AqTree")).toBeInTheDocument();
-    expect((await screen.findAllByText("main.aqtree.xml")).length).toBeGreaterThan(
-      0,
-    );
+    expect(await screen.findByText("2 graphs")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /main\.aqtree\.xml/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("tab", { name: /secondary\.aqtree\.xml/i }),
+    ).toBeInTheDocument();
     expect(await screen.findByText("Backlog")).toBeInTheDocument();
     expect(await screen.findByText("Done")).toBeInTheDocument();
+
+    expect(
+      screen.getByText(/Provider bindings are intentionally not exported/i),
+    ).not.toBeVisible();
+
+    await user.click(screen.getByText("Workspace info"));
+
     expect(
       await screen.findByText(/Provider bindings are intentionally not exported/i),
     ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /secondary\.aqtree\.xml/i }));
+
+    expect(await screen.findByText("QA sweep")).toBeInTheDocument();
   });
 });
