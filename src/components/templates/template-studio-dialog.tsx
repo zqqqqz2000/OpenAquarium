@@ -210,16 +210,12 @@ function isToastInteractionTarget(target: EventTarget | null): boolean {
     && Boolean(target.closest("[data-sonner-toaster], [data-sonner-toast], [data-close-button]"));
 }
 
-function isTemplateDraftDirty(template: TeamTemplate, draft: TemplateConfigDraft): boolean {
-  return JSON.stringify(buildTemplateConfigInput(template, draft)) !== JSON.stringify(buildTemplateConfigInput(template, createTemplateConfigDraft(template)));
+function serializeTemplateConfig(template: TeamTemplate, draft: TemplateConfigDraft): string {
+  return JSON.stringify(buildTemplateConfigInput(template, draft));
 }
 
 function isGlobalConfigDraftDirty(globalConfig: GlobalWorkspaceConfig, draft: GlobalConfigDraft): boolean {
   return JSON.stringify(buildGlobalConfigInput(globalConfig, draft)) !== JSON.stringify(buildGlobalConfigInput(globalConfig, createGlobalConfigDraft(globalConfig)));
-}
-
-function buildTemplateSyncKey(template: TeamTemplate): string {
-  return JSON.stringify(buildTemplateConfigInput(template, createTemplateConfigDraft(template)));
 }
 
 function InlineHint(props: { content: string }) {
@@ -1493,6 +1489,19 @@ export function TemplateStudioDialog(props: {
   } = props;
   const globalConfig = incomingGlobalConfig ?? createDefaultGlobalWorkspaceConfig();
   const templatesById = useMemo(() => Object.fromEntries(templates.map((template) => [template.id, template])), [templates]);
+  const initialTemplateDraftsById = useMemo(
+    () => Object.fromEntries(templates.map((template) => [template.id, createTemplateConfigDraft(template)])),
+    [templates],
+  );
+  const templateSyncKeysById = useMemo(
+    () => Object.fromEntries(
+      templates.map((template) => {
+        const initialDraft = initialTemplateDraftsById[template.id];
+        return [template.id, serializeTemplateConfig(template, initialDraft)];
+      }),
+    ),
+    [initialTemplateDraftsById, templates],
+  );
   const [activeTab, setActiveTab] = useState("templates");
   const [activeTemplateId, setActiveTemplateId] = useState<string | undefined>(selectedTemplateId ?? templates[0]?.id);
   const [templateDrafts, setTemplateDrafts] = useState<Record<string, TemplateConfigDraft>>({});
@@ -1549,27 +1558,23 @@ export function TemplateStudioDialog(props: {
   }, [activeTemplateId, open, selectedTemplateId, templates, templatesById]);
 
   useEffect(() => {
-    const nextTemplateSyncKeyById = Object.fromEntries(
-      templates.map((template) => [template.id, buildTemplateSyncKey(template)]),
-    );
-
     setTemplateDrafts((current) =>
       Object.fromEntries(
         templates.map((template) => {
           const existingDraft = current[template.id];
           const previousTemplateSyncKey = previousTemplateSyncKeyByIdRef.current[template.id];
-          const nextTemplateSyncKey = nextTemplateSyncKeyById[template.id];
+          const nextTemplateSyncKey = templateSyncKeysById[template.id];
 
           if (existingDraft && previousTemplateSyncKey === nextTemplateSyncKey) {
             return [template.id, existingDraft];
           }
 
-          return [template.id, createTemplateConfigDraft(template)];
+          return [template.id, initialTemplateDraftsById[template.id]];
         }),
       ),
     );
-    previousTemplateSyncKeyByIdRef.current = nextTemplateSyncKeyById;
-  }, [templates]);
+    previousTemplateSyncKeyByIdRef.current = templateSyncKeysById;
+  }, [initialTemplateDraftsById, templateSyncKeysById, templates]);
 
   useEffect(() => {
     setGlobalConfigDraft(createGlobalConfigDraft(globalConfig));
@@ -1588,7 +1593,7 @@ export function TemplateStudioDialog(props: {
   }, [activeTemplateId, chatModelProfileIdByTemplate, globalConfig.modelProfiles, globalConfig.templateChatModelProfileId]);
 
   const selectedTemplate = activeTemplateId ? templatesById[activeTemplateId] : undefined;
-  const selectedTemplateDraft = selectedTemplate ? templateDrafts[selectedTemplate.id] ?? createTemplateConfigDraft(selectedTemplate) : undefined;
+  const selectedTemplateDraft = selectedTemplate ? templateDrafts[selectedTemplate.id] ?? initialTemplateDraftsById[selectedTemplate.id] : undefined;
   const activeMemberId = selectedTemplate ? activeMemberIds[selectedTemplate.id] ?? selectedTemplateDraft?.members[0]?.id : undefined;
   const activeMember =
     selectedTemplateDraft?.members.find((member) => member.id === activeMemberId) ?? selectedTemplateDraft?.members[0];
@@ -1599,10 +1604,16 @@ export function TemplateStudioDialog(props: {
     : undefined;
   const activeChatModelId = selectedTemplate ? chatModelIdByTemplate[selectedTemplate.id] : undefined;
   const activeModelProfile = globalConfigDraft.modelProfiles.find((profile) => profile.id === activeModelProfileId) ?? globalConfigDraft.modelProfiles[0];
-  const selectedTemplateDirty = selectedTemplate && selectedTemplateDraft
-    ? isTemplateDraftDirty(selectedTemplate, selectedTemplateDraft)
-    : false;
-  const globalConfigDirty = isGlobalConfigDraftDirty(globalConfig, globalConfigDraft);
+  const selectedTemplateDirty = useMemo(
+    () => (selectedTemplate && selectedTemplateDraft
+      ? serializeTemplateConfig(selectedTemplate, selectedTemplateDraft) !== templateSyncKeysById[selectedTemplate.id]
+      : false),
+    [selectedTemplate, selectedTemplateDraft, templateSyncKeysById],
+  );
+  const globalConfigDirty = useMemo(
+    () => isGlobalConfigDraftDirty(globalConfig, globalConfigDraft),
+    [globalConfig, globalConfigDraft],
+  );
 
   if (!open) {
     return null;
@@ -1615,7 +1626,7 @@ export function TemplateStudioDialog(props: {
     }
 
     setTemplateDrafts((current) => {
-      const base = current[templateId] ?? createTemplateConfigDraft(template);
+      const base = current[templateId] ?? initialTemplateDraftsById[templateId];
       return {
         ...current,
         [templateId]: {
@@ -1633,7 +1644,7 @@ export function TemplateStudioDialog(props: {
     }
 
     setTemplateDrafts((current) => {
-      const base = current[templateId] ?? createTemplateConfigDraft(template);
+      const base = current[templateId] ?? initialTemplateDraftsById[templateId];
       return {
         ...current,
         [templateId]: {
@@ -1651,7 +1662,7 @@ export function TemplateStudioDialog(props: {
     }
 
     setTemplateDrafts((current) => {
-      const base = current[templateId] ?? createTemplateConfigDraft(template);
+      const base = current[templateId] ?? initialTemplateDraftsById[templateId];
       return {
         ...current,
         [templateId]: {
@@ -1671,7 +1682,7 @@ export function TemplateStudioDialog(props: {
       return;
     }
 
-    const base = templateDrafts[templateId] ?? createTemplateConfigDraft(template);
+    const base = templateDrafts[templateId] ?? initialTemplateDraftsById[templateId];
     const member = base.members.find((candidate) => candidate.id === memberId);
     if (!member) {
       return;
@@ -1690,7 +1701,7 @@ export function TemplateStudioDialog(props: {
       return;
     }
 
-    const baseDraft = templateDrafts[templateId] ?? createTemplateConfigDraft(template);
+    const baseDraft = templateDrafts[templateId] ?? initialTemplateDraftsById[templateId];
     const baseMemberId = activeMemberIds[templateId] ?? baseDraft.members[0]?.id;
     const baseMember = baseDraft.members.find((member) => member.id === baseMemberId) ?? baseDraft.members[0];
     const nextMembers = addEmptyTemplateMemberDraft(baseDraft.members, {
@@ -1722,7 +1733,7 @@ export function TemplateStudioDialog(props: {
       return;
     }
 
-    const baseDraft = templateDrafts[templateId] ?? createTemplateConfigDraft(template);
+    const baseDraft = templateDrafts[templateId] ?? initialTemplateDraftsById[templateId];
     const nextMembers = removeTemplateMemberDraft(baseDraft.members, memberId);
     const nextActiveMember = nextMembers.find((member) => member.id === activeMemberIds[templateId]) ?? nextMembers[0];
 

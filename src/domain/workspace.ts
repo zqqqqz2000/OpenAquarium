@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   AccentTone,
   ChatAuthor,
   ChatMessage,
@@ -6,6 +7,7 @@ import type {
   ProjectId,
   CreateRoomInput,
   CreateProjectInput,
+  HumanParticipantId,
   MemberId,
   MemberTask,
   MessageId,
@@ -25,12 +27,14 @@ import type {
   TeamMember,
   TeamMemberBlueprint,
   TeamTemplate,
+  RoomHumanParticipant,
   UpsertWatcherInput,
   UpdateMemberConfigInput,
   UpdateRoomSettingsInput,
   UpdateRoomTeamInput,
   UpdateTemplateInput,
   WatchSubscription,
+  WorkspaceAccount,
   WorkspaceSnapshot,
 } from "./model";
 import type { MutationContext } from "./identity";
@@ -44,6 +48,9 @@ import {
   resolveTemplateVisibleMemberBlueprintIds,
 } from "../lib/room-message-preferences";
 
+const DEFAULT_ACCOUNT_ID = "account_default";
+const DEFAULT_ACCOUNT_HANDLE = "default";
+
 function cloneSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
   return {
     ...snapshot,
@@ -56,6 +63,12 @@ function cloneSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
     templates: { ...snapshot.templates },
     templateOrder: [...snapshot.templateOrder],
     members: { ...snapshot.members },
+    humans: snapshot.humans ? { ...snapshot.humans } : undefined,
+    humanOrderByRoom: snapshot.humanOrderByRoom
+      ? Object.fromEntries(
+        Object.entries(snapshot.humanOrderByRoom).map(([roomId, humanIds]) => [roomId, [...humanIds]]),
+      )
+      : undefined,
     messages: { ...snapshot.messages },
     messageOrderByRoom: Object.fromEntries(
       Object.entries(snapshot.messageOrderByRoom).map(([roomId, messageIds]) => [roomId, [...messageIds]]),
@@ -70,17 +83,27 @@ function cloneSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
   };
 }
 
-function buildUserAuthor(userName: string): ChatAuthor {
+function buildUserAuthor(userName: string, human?: {
+  humanId?: HumanParticipantId;
+  handle?: string;
+  label?: string;
+  accountId?: AccountId;
+}): ChatAuthor {
   return {
     kind: "user",
-    id: "user",
-    label: userName,
+    actorKind: "human",
+    id: human?.humanId ?? "user",
+    label: human?.label ?? userName,
+    handle: human?.handle,
+    humanId: human?.humanId,
+    accountId: human?.accountId,
   };
 }
 
 function buildSystemAuthor(label: string): ChatAuthor {
   return {
     kind: "system",
+    actorKind: "system",
     id: "system",
     label,
   };
@@ -90,8 +113,35 @@ function buildMemberAuthor(member: TeamMember): ChatAuthor {
   return {
     kind: "member",
     id: member.id,
+    actorKind: "bot",
     label: member.name,
+    handle: member.handle,
+    memberId: member.id,
   };
+}
+
+function resolveAuthorActorKind(author: ChatAuthor): "human" | "bot" | "system" {
+  if (author.actorKind) {
+    return author.actorKind;
+  }
+
+  if (author.kind === "user" || author.kind === "human") {
+    return "human";
+  }
+
+  if (author.kind === "member" || author.kind === "bot") {
+    return "bot";
+  }
+
+  return "system";
+}
+
+function isHumanAuthoredMessage(message: Pick<ChatMessage, "author">): boolean {
+  return resolveAuthorActorKind(message.author) === "human";
+}
+
+function isBotAuthoredMessage(message: Pick<ChatMessage, "author">): boolean {
+  return resolveAuthorActorKind(message.author) === "bot";
 }
 
 function touchRoomActivity(snapshot: WorkspaceSnapshot, roomId: RoomId, timestamp: string): void {
@@ -167,8 +217,10 @@ function insertSystemRoomMessage(snapshot: WorkspaceSnapshot, args: {
     status: args.status ?? "sent",
     visibility: args.visibility,
     mentionedMemberIds: [],
+    mentionedHumanIds: [],
     quotedMemberIds: [],
     recipientMemberIds: [],
+    recipientHumanIds: [],
   });
   touchRoomActivity(snapshot, args.roomId, args.createdAt);
 }
@@ -243,6 +295,162 @@ function getActiveRoomMembers(snapshot: WorkspaceSnapshot, roomId: RoomId): Team
 function resolveMemberByHandle(snapshot: WorkspaceSnapshot, roomId: RoomId, handle: string): TeamMember | undefined {
   const normalizedHandle = normalizeHandleToken(handle);
   return getActiveRoomMembers(snapshot, roomId).find((member) => member.handle.toLowerCase() === normalizedHandle);
+}
+
+function getActiveRoomHumans(snapshot: WorkspaceSnapshot, roomId: RoomId): RoomHumanParticipant[] {
+  const indexedHumanIds = snapshot.humanOrderByRoom?.[roomId];
+
+  if (indexedHumanIds) {
+    return indexedHumanIds
+      .map((humanId) => snapshot.humans?.[humanId])
+      .filter((human): human is RoomHumanParticipant => {
+        if (!human) {
+          return false;
+        }
+
+        return human.roomId === roomId && !human.archivedAt;
+      });
+  }
+
+  return Object.values(snapshot.humans ?? {})
+    .filter((human): human is RoomHumanParticipant => human.roomId === roomId && !human.archivedAt);
+}
+
+function resolveRoomHuman(snapshot: WorkspaceSnapshot, roomId: RoomId, humanId?: HumanParticipantId): RoomHumanParticipant | undefined {
+  if (!humanId) {
+    return undefined;
+  }
+
+  const human = snapshot.humans?.[humanId];
+  if (!human || human.roomId !== roomId || human.archivedAt) {
+    return undefined;
+  }
+
+  return human;
+}
+
+function ensureDefaultAccount(snapshot: WorkspaceSnapshot): WorkspaceAccount {
+  snapshot.accounts ??= {};
+  snapshot.accountOrder ??= [];
+
+  const existing = snapshot.accounts[DEFAULT_ACCOUNT_ID];
+  const nextDefault: WorkspaceAccount = existing ?? {
+    id: DEFAULT_ACCOUNT_ID,
+    displayName: snapshot.currentUserName,
+    handle: DEFAULT_ACCOUNT_HANDLE,
+  };
+
+  snapshot.accounts[DEFAULT_ACCOUNT_ID] = nextDefault;
+  if (!snapshot.accountOrder.includes(DEFAULT_ACCOUNT_ID)) {
+    snapshot.accountOrder = [DEFAULT_ACCOUNT_ID, ...snapshot.accountOrder];
+  }
+
+  return nextDefault;
+}
+
+function resolveWorkspaceAccount(snapshot: WorkspaceSnapshot, accountId?: AccountId): WorkspaceAccount | undefined {
+  if (!accountId) {
+    return undefined;
+  }
+
+  return snapshot.accounts?.[accountId];
+}
+
+function resolveRoomOrdinal(snapshot: WorkspaceSnapshot, roomId: RoomId): number | undefined {
+  let ordinal = 0;
+
+  for (const projectId of snapshot.projectOrder) {
+    for (const candidateRoomId of snapshot.roomOrderByProject[projectId] ?? []) {
+      ordinal += 1;
+      if (candidateRoomId === roomId) {
+        return ordinal;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function createRoomHumanId(snapshot: WorkspaceSnapshot, roomId: RoomId, accountId: AccountId): HumanParticipantId {
+  const roomOrdinal = resolveRoomOrdinal(snapshot, roomId);
+  const roomKey = roomOrdinal ? `room_${roomOrdinal}` : roomId;
+  return `human_${roomKey}_${accountId}`;
+}
+
+function resolveAccountHandle(account: WorkspaceAccount): string {
+  const preferredHandle = typeof account.handle === "string" ? normalizeHandleToken(account.handle) : "";
+  if (preferredHandle) {
+    return preferredHandle;
+  }
+
+  const displayNameHandle = normalizeHandleToken(account.displayName);
+  if (displayNameHandle) {
+    return displayNameHandle;
+  }
+
+  return account.id === DEFAULT_ACCOUNT_ID ? DEFAULT_ACCOUNT_HANDLE : normalizeHandleToken(account.id);
+}
+
+function ensureRoomHumanForAccount(
+  snapshot: WorkspaceSnapshot,
+  roomId: RoomId,
+  account: WorkspaceAccount,
+): RoomHumanParticipant {
+  snapshot.humans ??= {};
+  snapshot.humanOrderByRoom ??= {};
+  snapshot.humanOrderByRoom[roomId] = snapshot.humanOrderByRoom[roomId] ?? [];
+
+  const humanId = getActiveRoomHumans(snapshot, roomId).find((human) => human.accountId === account.id)?.id
+    ?? createRoomHumanId(snapshot, roomId, account.id);
+  const existingHuman = snapshot.humans[humanId];
+  const nextHuman: RoomHumanParticipant = {
+    id: humanId,
+    roomId,
+    displayName: account.displayName,
+    handle: resolveAccountHandle(account),
+    kind: "human",
+    accountId: account.id,
+  };
+
+  snapshot.humans[humanId] = existingHuman
+    ? {
+        ...existingHuman,
+        ...nextHuman,
+        archivedAt: undefined,
+      }
+    : nextHuman;
+
+  if (!snapshot.humanOrderByRoom[roomId].includes(humanId)) {
+    snapshot.humanOrderByRoom[roomId] = [...snapshot.humanOrderByRoom[roomId], humanId];
+  }
+
+  return snapshot.humans[humanId];
+}
+
+function ensureRoomHumanForActiveAccount(snapshot: WorkspaceSnapshot, roomId: RoomId): RoomHumanParticipant {
+  const defaultAccount = ensureDefaultAccount(snapshot);
+  const activeAccount = resolveWorkspaceAccount(snapshot, snapshot.currentAccountId) ?? defaultAccount;
+
+  ensureRoomHumanForAccount(snapshot, roomId, defaultAccount);
+  return ensureRoomHumanForAccount(snapshot, roomId, activeAccount);
+}
+
+function normalizeRoomHumanIds(
+  snapshot: WorkspaceSnapshot,
+  roomId: RoomId,
+  humanIds?: HumanParticipantId[],
+): HumanParticipantId[] {
+  const candidates = [...new Set((humanIds ?? []).filter(Boolean))];
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  if (!snapshot.humans && !snapshot.humanOrderByRoom) {
+    return candidates;
+  }
+
+  const activeHumanIds = new Set(getActiveRoomHumans(snapshot, roomId).map((human) => human.id));
+  return candidates.filter((humanId) => activeHumanIds.has(humanId));
 }
 
 function resolveMembersByRole(snapshot: WorkspaceSnapshot, roomId: RoomId, role: string): TeamMember[] {
@@ -736,7 +944,7 @@ function buildTaskTitle(message: ChatMessage): string {
     return "Respond to direct message";
   }
 
-  if (message.author.kind === "user") {
+  if (isHumanAuthoredMessage(message)) {
     return "Respond to user";
   }
 
@@ -852,7 +1060,7 @@ function resolveRecipients(snapshot: WorkspaceSnapshot, message: ChatMessage, ro
 
   const resolvedRouting = routing ?? resolveRoleRouting(snapshot, message.roomId, message.content);
   const addressedMemberIds = resolvedRouting.memberIds;
-  if (message.author.kind === "user") {
+  if (isHumanAuthoredMessage(message)) {
     return addressedMemberIds.length > 0 || resolvedRouting.hasAssignments ? addressedMemberIds : [room.entryMemberId];
   }
 
@@ -965,6 +1173,8 @@ export function createWorkspaceSnapshot(templates: TeamTemplate[], currentUserNa
     templates: Object.fromEntries(templates.map((template) => [template.id, template])),
     templateOrder: templates.map((template) => template.id),
     members: {},
+    humans: {},
+    humanOrderByRoom: {},
     messages: {},
     messageOrderByRoom: {},
     tasks: {},
@@ -1055,6 +1265,8 @@ export function createRoomInProject(
     lastReadMemberMessageAt: now,
     unreadMemberMessageCount: 0,
   };
+  snapshot.humanOrderByRoom ??= {};
+  snapshot.humanOrderByRoom[roomId] = snapshot.humanOrderByRoom[roomId] ?? [];
   snapshot.messageOrderByRoom[roomId] = [];
   roomMembers.forEach((member) => {
     snapshot.members[member.id] = member;
@@ -1126,6 +1338,14 @@ function removeRoomArtifacts(snapshot: WorkspaceSnapshot, roomId: RoomId): void 
     .forEach((member) => {
       delete snapshot.members[member.id];
     });
+  (snapshot.humanOrderByRoom?.[roomId] ?? []).forEach((humanId) => {
+    if (snapshot.humans) {
+      delete snapshot.humans[humanId];
+    }
+  });
+  if (snapshot.humanOrderByRoom) {
+    delete snapshot.humanOrderByRoom[roomId];
+  }
   delete snapshot.rooms[roomId];
 }
 
@@ -1202,24 +1422,35 @@ export function postUserMessage(
     };
   }
 
+  const authorHuman = input.authorHumanId
+    ? resolveRoomHuman(snapshot, input.roomId, input.authorHumanId)
+    : ensureRoomHumanForActiveAccount(snapshot, input.roomId);
+
   const message: ChatMessage = {
     id: context.createId("message"),
     roomId: input.roomId,
-    author: buildUserAuthor(snapshot.currentUserName),
+    author: buildUserAuthor(snapshot.currentUserName, {
+      humanId: authorHuman?.id,
+      handle: authorHuman?.handle,
+      label: authorHuman?.displayName,
+      accountId: authorHuman?.accountId,
+    }),
     content: trimmedContent,
     createdAt: now,
-    transport: input.directMemberId ? "direct" : "group",
+    transport: input.directMemberId || input.directHumanId ? "direct" : "group",
     status: "sent",
     visibility: "public",
     mentionedMemberIds: input.mentionedMemberIds ?? extractMentionMemberIds(snapshot, input.roomId, trimmedContent),
+    mentionedHumanIds: input.mentionedHumanIds ?? extractMentionHumanIds(snapshot, input.roomId, trimmedContent),
     quotedMemberIds: input.quotedMemberIds ?? extractQuotedMemberIds(snapshot, input.roomId, trimmedContent),
     recipientMemberIds: input.directMemberId ? [input.directMemberId] : [],
+    recipientHumanIds: input.directHumanId ? normalizeRoomHumanIds(snapshot, input.roomId, [input.directHumanId]) : [],
   };
 
   insertMessage(snapshot, message);
   setRoomReadState(snapshot, room.id, now);
   touchRoomActivity(snapshot, room.id, now);
-  const roleCommand = !input.directMemberId
+  const roleCommand = !input.directMemberId && !input.directHumanId
     ? resolveRoleCommand(snapshot, input.roomId, trimmedContent)
     : { handled: false };
   if (roleCommand.handled) {
@@ -1256,9 +1487,10 @@ export function postMemberMessage(
   }
 
   const now = context.now();
-  const isDirectMessage = Boolean(input.directMemberId || input.directToUser);
+  const isDirectMessage = Boolean(input.directMemberId || input.directHumanId || input.directToUser);
   const content = input.content.trim();
   const recipientMemberIds = input.directMemberId ? [input.directMemberId] : [];
+  const recipientHumanIds = input.directHumanId ? normalizeRoomHumanIds(snapshot, input.roomId, [input.directHumanId]) : [];
 
   const message: ChatMessage = {
     id: context.createId("message"),
@@ -1270,8 +1502,10 @@ export function postMemberMessage(
     status: "completed",
     visibility: "public",
     mentionedMemberIds: isDirectMessage ? [] : input.mentionedMemberIds ?? extractMentionMemberIds(snapshot, input.roomId, content),
+    mentionedHumanIds: isDirectMessage ? [] : input.mentionedHumanIds ?? extractMentionHumanIds(snapshot, input.roomId, content),
     quotedMemberIds: isDirectMessage ? [] : input.quotedMemberIds ?? extractQuotedMemberIds(snapshot, input.roomId, content),
     recipientMemberIds,
+    recipientHumanIds,
     recipientUser: input.directToUser ? true : undefined,
     taskId: input.taskId,
   };
@@ -1399,8 +1633,10 @@ export function completeMemberTask(
       status: "completed",
       visibility: "public",
       mentionedMemberIds: extractMentionMemberIds(snapshot, task.roomId, input.finalContent),
+      mentionedHumanIds: extractMentionHumanIds(snapshot, task.roomId, input.finalContent),
       quotedMemberIds: extractQuotedMemberIds(snapshot, task.roomId, input.finalContent),
       recipientMemberIds: [],
+      recipientHumanIds: [],
       taskId: task.id,
     };
     insertMessage(snapshot, completedMessage);
@@ -1745,7 +1981,7 @@ export function syncUnreadStateForMessage(
   const snapshot = cloneSnapshot(current);
   const message = snapshot.messages[messageId];
 
-  if (!message || message.author.kind !== "member") {
+  if (!message || !isBotAuthoredMessage(message)) {
     return snapshot;
   }
 
@@ -1977,6 +2213,31 @@ export function setEntryMember(current: WorkspaceSnapshot, memberId: MemberId): 
     ...room,
     entryMemberId: memberId,
   };
+
+  return snapshot;
+}
+
+export function setActiveAccount(current: WorkspaceSnapshot, accountId: AccountId): WorkspaceSnapshot {
+  const snapshot = cloneSnapshot(current);
+  const defaultAccount = ensureDefaultAccount(snapshot);
+  const nextAccount = resolveWorkspaceAccount(snapshot, accountId);
+
+  if (!nextAccount) {
+    throw new Error(`Unknown account "${accountId}"`);
+  }
+
+  if (!snapshot.accountOrder?.includes(accountId)) {
+    snapshot.accountOrder = [...(snapshot.accountOrder ?? []), accountId];
+  }
+
+  snapshot.currentAccountId = accountId;
+  snapshot.currentUserName = nextAccount.displayName;
+
+  const roomId = snapshot.selection.roomId;
+  if (roomId && snapshot.rooms[roomId]) {
+    ensureRoomHumanForAccount(snapshot, roomId, defaultAccount);
+    ensureRoomHumanForAccount(snapshot, roomId, nextAccount);
+  }
 
   return snapshot;
 }
@@ -2508,6 +2769,37 @@ export function acknowledgeWatcherDigestVisibility(current: WorkspaceSnapshot, t
 
 export function extractMentionMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {
   return extractTaggedHandles(snapshot, roomId, content, "@>");
+}
+
+export function extractMentionHumanIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): HumanParticipantId[] {
+  const humans = getActiveRoomHumans(snapshot, roomId);
+  if (humans.length === 0) {
+    return [];
+  }
+
+  const sanitizedContent = stripMarkdownCodeSegments(content);
+  const seenHandles = new Set<string>();
+  const humanIdByHandle = new Map(
+    humans.map((human) => [human.handle.toLowerCase(), human.id] as const),
+  );
+  const humanIds: HumanParticipantId[] = [];
+
+  for (const match of sanitizedContent.matchAll(REFERENCE_TOKEN_PATTERN)) {
+    const handle = match[1]?.toLowerCase();
+    if (!handle || seenHandles.has(handle)) {
+      continue;
+    }
+
+    const humanId = humanIdByHandle.get(handle);
+    if (!humanId) {
+      continue;
+    }
+
+    seenHandles.add(handle);
+    humanIds.push(humanId);
+  }
+
+  return humanIds;
 }
 
 export function extractQuotedMemberIds(snapshot: WorkspaceSnapshot, roomId: string, content: string): MemberId[] {

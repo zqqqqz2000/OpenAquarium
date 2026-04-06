@@ -12,6 +12,7 @@ import {
   postUserMessage,
 } from "@/domain/workspace";
 import { defaultTemplates } from "@/lib/sample-data/templates";
+import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { OpenAquariumGlobalConfigManager } from "@/server/global-config";
 import type {
   ExecutorCallbacks,
@@ -44,6 +45,24 @@ class FakeExecutor implements MemberExecutor {
   ): Promise<void> {
     await callbacks.onPromptVisible?.();
     await this.handler(request, callbacks);
+  }
+
+  cancel(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  dispose(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+class EchoExecutor implements MemberExecutor {
+  async execute(
+    _request: ExecutionRequest,
+    callbacks: ExecutorCallbacks,
+  ): Promise<void> {
+    await callbacks.onPromptVisible?.();
+    await callbacks.onComplete("echo complete", "end_turn");
   }
 
   cancel(): Promise<void> {
@@ -258,6 +277,63 @@ describe("WorkspaceRuntime", () => {
     expect(leadTraceKinds).toContain("task-started");
     expect(leadTraceKinds).toContain("task-prompt");
     expect(leadTraceKinds).toContain("completed");
+  });
+
+  it("preserves authorHumanId and directHumanId through sendUserMessage", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-runtime-human-chain-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createSeedWorkspace(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const snapshot = runtime.getSnapshot();
+    const roomId = snapshot.selection.roomId!;
+    snapshot.humans = {
+      ...(snapshot.humans ?? {}),
+      human_alice: {
+        id: "human_alice",
+        roomId,
+        displayName: "Alice",
+        handle: "alice",
+        kind: "human",
+      },
+      human_bob: {
+        id: "human_bob",
+        roomId,
+        displayName: "Bob",
+        handle: "bob",
+        kind: "human",
+      },
+    };
+    snapshot.humanOrderByRoom = {
+      ...(snapshot.humanOrderByRoom ?? {}),
+      [roomId]: [...(snapshot.humanOrderByRoom?.[roomId] ?? []), "human_alice", "human_bob"],
+    };
+
+    await runtime.sendUserMessage({
+      roomId,
+      content: "只发给 Bob",
+      authorHumanId: "human_alice",
+      directHumanId: "human_bob",
+    });
+
+    const next = runtime.getSnapshot();
+    const messageId = next.messageOrderByRoom[roomId]?.at(-1);
+
+    expect(messageId).toBeTruthy();
+    expect(next.messages[messageId!]).toMatchObject({
+      content: "只发给 Bob",
+      transport: "direct",
+      author: expect.objectContaining({
+        humanId: "human_alice",
+        handle: "alice",
+        label: "Alice",
+      }),
+      recipientHumanIds: ["human_bob"],
+    });
   });
 
   it("persists the latest snapshot to disk", async () => {
@@ -2675,5 +2751,120 @@ describe("WorkspaceRuntime", () => {
         (watcherId) => snapshot.watchers[watcherId]?.memberId === builder.id,
       ),
     ).toBe(true);
+  });
+
+  it("persists saved default templates across restart and makes them available in new workspaces", async () => {
+    const workspaceRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-runtime-default-template-persist-"),
+    );
+    const stateFilePath = path.join(
+      workspaceRoot,
+      ".openaquarium",
+      "state.json",
+    );
+    const configDirPath = path.join(workspaceRoot, ".config");
+    const executorFactory: MemberExecutorFactory = ({ member }) =>
+      new FakeExecutor(async (_request, callbacks) => {
+        await callbacks.onComplete(`${member.handle} done`, "end_turn");
+      });
+
+    const firstRuntime = await WorkspaceRuntime.create({
+      workspaceRoot,
+      stateFilePath,
+      configDirPath,
+      executorFactory,
+    });
+    runtimes.push(firstRuntime);
+
+    const templateId = "template-product-pod";
+    const originalTemplate = firstRuntime.getSnapshot().templates[templateId];
+    if (!originalTemplate) {
+      throw new Error("Expected product pod template");
+    }
+
+    const updatedTemplateName = "Product Pod Default Persisted";
+    const updatedTemplateDescription = "Persists across restart and seeds new rooms.";
+    const updatedBuilderSummary = "Builds the shipped implementation after restart.";
+
+    await firstRuntime.updateTemplate({
+      templateId,
+      name: updatedTemplateName,
+      description: updatedTemplateDescription,
+      accentTone: originalTemplate.accentTone,
+      defaultVisibleMemberBlueprintIds:
+        originalTemplate.defaultVisibleMemberBlueprintIds ?? originalTemplate.members.map((member) => member.id),
+      members: originalTemplate.members.map((member) =>
+        member.handle === "builder"
+          ? {
+              ...member,
+              summary: updatedBuilderSummary,
+            }
+          : member),
+    });
+
+    const persistedTemplates = JSON.parse(
+      await readFile(path.join(configDirPath, "templates.json"), "utf8"),
+    ) as Array<{ id: string; name: string; description: string; members: Array<{ handle: string; summary: string }> }>;
+    expect(
+      persistedTemplates.find((template) => template.id === templateId)?.name,
+    ).toBe(updatedTemplateName);
+
+    await firstRuntime.dispose();
+    runtimes.pop();
+
+    const secondRuntime = await WorkspaceRuntime.create({
+      workspaceRoot,
+      stateFilePath,
+      configDirPath,
+      executorFactory,
+    });
+    runtimes.push(secondRuntime);
+
+    expect(secondRuntime.getSnapshot().templates[templateId]?.name).toBe(
+      updatedTemplateName,
+    );
+
+    const created = await secondRuntime.createProject({
+      projectName: "Persisted Template Project",
+      templateId,
+    });
+    const snapshot = secondRuntime.getSnapshot();
+    const room = snapshot.rooms[created.roomId];
+    const builder = room.memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.handle === "builder");
+
+    expect(room.teamName).toBe(updatedTemplateName);
+    expect(room.teamDescription).toBe(updatedTemplateDescription);
+    expect(builder?.summary).toBe(updatedBuilderSummary);
+
+    const newWorkspaceRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-runtime-default-template-new-workspace-"),
+    );
+    const thirdRuntime = await WorkspaceRuntime.create({
+      workspaceRoot: newWorkspaceRoot,
+      stateFilePath: path.join(newWorkspaceRoot, ".openaquarium", "state.json"),
+      configDirPath,
+      executorFactory,
+    });
+    runtimes.push(thirdRuntime);
+
+    expect(thirdRuntime.getSnapshot().templates[templateId]?.name).toBe(
+      updatedTemplateName,
+    );
+
+    const thirdCreated = await thirdRuntime.createProject({
+      projectName: "Fresh Workspace Project",
+      templateId,
+    });
+    const thirdSnapshot = thirdRuntime.getSnapshot();
+    const thirdRoom = thirdSnapshot.rooms[thirdCreated.roomId];
+    const thirdBuilder = thirdRoom.memberIds
+      .map((memberId) => thirdSnapshot.members[memberId])
+      .find((member) => member.handle === "builder");
+
+    expect(thirdRoom.teamName).toBe(updatedTemplateName);
+    expect(thirdRoom.teamDescription).toBe(updatedTemplateDescription);
+    expect(thirdBuilder?.summary).toBe(updatedBuilderSummary);
   });
 });

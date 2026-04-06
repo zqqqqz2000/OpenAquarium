@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { LoaderCircle, Plus, Save, Settings2, Star, Trash2, Users } from "lucide-react";
 
-import type { GlobalWorkspaceConfig, Room, UpdateRoomTeamInput, WorkspaceSnapshot } from "@/domain/model";
+import type { GlobalWorkspaceConfig, Room, UpdateRoomTeamInput, UpdateTemplateInput, WorkspaceSnapshot } from "@/domain/model";
 import { AllowedSkillSelector } from "@/components/skills/allowed-skill-selector";
 import {
   addEmptyRoomTeamMemberDraft,
@@ -12,6 +12,7 @@ import {
   type RoomTeamDraft,
   type RoomTeamMemberDraft,
 } from "@/lib/room-team-draft";
+import { buildDefaultTemplateInput } from "@/lib/room-team-default-template";
 import { resolveRoomTeamSummary } from "@/lib/room-team";
 import { badgeToneProps } from "@/lib/ui-tone";
 import { cn } from "@/lib/utils";
@@ -123,11 +124,13 @@ export function RoomTeamDialog(props: {
   globalConfig: GlobalWorkspaceConfig;
   onClose: () => void;
   onSave: (input: UpdateRoomTeamInput) => void | Promise<void>;
+  onSaveDefaultTemplate: (input: UpdateTemplateInput) => void | Promise<void>;
 }) {
-  const { open, snapshot, room, globalConfig, onClose, onSave } = props;
+  const { open, snapshot, room, globalConfig, onClose, onSave, onSaveDefaultTemplate } = props;
   const [draft, setDraft] = useState<RoomTeamDraft | undefined>(undefined);
   const [activeMemberId, setActiveMemberId] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
+  const [savingDefaultTemplate, setSavingDefaultTemplate] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const seededRoomIdRef = useRef<string | undefined>(undefined);
   const seededRoomSignatureRef = useRef<string | undefined>(undefined);
@@ -311,6 +314,26 @@ export function RoomTeamDialog(props: {
     }
   };
 
+  const saveDefaultTemplate = async (): Promise<void> => {
+    if (!room || !draft) {
+      return;
+    }
+
+    try {
+      setSavingDefaultTemplate(true);
+      setError(undefined);
+      await onSaveDefaultTemplate(buildDefaultTemplateInput({
+        room,
+        draft,
+        sourceTemplate: snapshot.templates[room.templateId],
+      }));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setSavingDefaultTemplate(false);
+    }
+  };
+
   const memberCountBadge = useMemo(
     () => draft?.members.length ?? room?.memberIds.length ?? 0,
     [draft?.members.length, room?.memberIds.length],
@@ -327,14 +350,22 @@ export function RoomTeamDialog(props: {
                 Room Team
               </DialogTitle>
               <DialogDescription className="max-w-3xl text-sm leading-6">
-                这里改的是当前 room 里的团队结构和成员实例配置，不会同步回 team template。
+                这里改的是当前 room 里的团队结构和成员实例配置；只有显式保存为默认 template，才会同步回软件默认模板源。
               </DialogDescription>
             </div>
             <div className="flex items-center gap-2">
               <Badge variant={teamBadge.variant} className={teamBadge.className}>
                 {memberCountBadge} members
               </Badge>
-              <Button onClick={() => void saveRoomTeam()} disabled={!room || !draft || saving}>
+              <Button
+                variant="secondary"
+                onClick={() => void saveDefaultTemplate()}
+                disabled={!room || !draft || saving || savingDefaultTemplate}
+              >
+                {savingDefaultTemplate ? <LoaderCircle size={16} className="animate-spin" /> : <Star size={16} />}
+                Save as default template
+              </Button>
+              <Button onClick={() => void saveRoomTeam()} disabled={!room || !draft || saving || savingDefaultTemplate}>
                 {saving ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
                 Save room team
               </Button>
@@ -679,10 +710,20 @@ export function RoomTeamDialog(props: {
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
                   {error ? <p className="m-0 text-sm text-destructive">{error}</p> : <div />}
-                  <Button onClick={() => void saveRoomTeam()} disabled={saving}>
-                    {saving ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
-                    Save room team
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => void saveDefaultTemplate()}
+                      disabled={saving || savingDefaultTemplate}
+                    >
+                      {savingDefaultTemplate ? <LoaderCircle size={16} className="animate-spin" /> : <Star size={16} />}
+                      Save as default template
+                    </Button>
+                    <Button onClick={() => void saveRoomTeam()} disabled={saving || savingDefaultTemplate}>
+                      {saving ? <LoaderCircle size={16} className="animate-spin" /> : <Save size={16} />}
+                      Save room team
+                    </Button>
+                  </div>
                 </div>
               </div>
             </ScrollArea>

@@ -571,7 +571,7 @@ export class WorkspaceRuntime {
             content: string;
           }) => {
             const target = resolveDirectTarget(this.snapshot, input.roomId, input.targetHandle);
-            if (!target.directMemberId && !target.directToUser) {
+            if (!target.directMemberId && !target.directHumanId && !target.directToUser) {
               throw new Error(`Unknown direct target "${input.targetHandle}" in room "${input.roomId}"`);
             }
 
@@ -1012,7 +1012,13 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
-  async sendUserMessage(args: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot> {
+  async sendUserMessage(args: {
+    roomId: string;
+    content: string;
+    authorHumanId?: string;
+    directMemberId?: string;
+    directHumanId?: string;
+  }): Promise<WorkspaceSnapshot> {
     const previous = this.snapshot;
     this.activeRoomId = args.roomId;
     const next = postUserMessage(
@@ -1020,7 +1026,9 @@ export class WorkspaceRuntime {
       {
         roomId: args.roomId,
         content: args.content,
+        authorHumanId: args.authorHumanId,
         directMemberId: args.directMemberId,
+        directHumanId: args.directHumanId,
         mentionedMemberIds: extractMentionMemberIds(previous, args.roomId, args.content),
       },
       this.context,
@@ -1030,7 +1038,13 @@ export class WorkspaceRuntime {
   }
 
   async streamUserMessage(
-    args: { roomId: string; content: string; directMemberId?: string },
+    args: {
+      roomId: string;
+      content: string;
+      authorHumanId?: string;
+      directMemberId?: string;
+      directHumanId?: string;
+    },
     callbacks: TaskStreamCallbacks,
   ): Promise<void> {
     const previous = this.snapshot;
@@ -1039,7 +1053,9 @@ export class WorkspaceRuntime {
       {
         roomId: args.roomId,
         content: args.content,
+        authorHumanId: args.authorHumanId,
         directMemberId: args.directMemberId,
+        directHumanId: args.directHumanId,
         mentionedMemberIds: extractMentionMemberIds(previous, args.roomId, args.content),
       },
       this.context,

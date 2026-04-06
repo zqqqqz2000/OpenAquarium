@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import type { ChatTransport, UIMessageChunk } from "ai";
 import { simulateReadableStream } from "ai";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
@@ -279,8 +279,9 @@ describe("TemplateStudioDialog", () => {
     expect(screen.getByText("Saved to file")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Save$/i })).toBeDisabled();
 
-    await user.clear(screen.getByRole("textbox", { name: /Template name/i }));
-    await user.type(screen.getByRole("textbox", { name: /Template name/i }), "Product Pod v2");
+    fireEvent.change(screen.getByRole("textbox", { name: /Template name/i }), {
+      target: { value: "Product Pod v2" },
+    });
     expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
     expect(screen.getByText("Unsaved changes are local until you save.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Save$/i })).toBeEnabled();
@@ -289,8 +290,9 @@ describe("TemplateStudioDialog", () => {
       throw new Error("Expected Forge Crab trigger");
     }
     await user.click(forgeCrabTrigger);
-    await user.clear(screen.getByRole("textbox", { name: /^Summary$/i }));
-    await user.type(screen.getByRole("textbox", { name: /^Summary$/i }), "新的全局 builder summary");
+    fireEvent.change(screen.getByRole("textbox", { name: /^Summary$/i }), {
+      target: { value: "新的全局 builder summary" },
+    });
     await user.click(screen.getByRole("button", { name: /^Save$/i }));
 
     expect(onSaveConfig).toHaveBeenCalledTimes(1);

@@ -4,6 +4,7 @@ import { createRuntimeContext } from "@/domain/identity";
 import type {
   CreateProjectInput,
   MemberId,
+  PostUserMessageInput,
   RoomId,
   TaskId,
   WorkspaceSnapshot,
@@ -42,12 +43,22 @@ function primeNewTasks(previous: WorkspaceSnapshot, next: WorkspaceSnapshot, see
   return next;
 }
 
+type SendUserMessageTarget = Pick<PostUserMessageInput, "authorHumanId" | "directMemberId" | "directHumanId">;
+
+function normalizeSendUserMessageTarget(target?: MemberId | SendUserMessageTarget): SendUserMessageTarget {
+  if (typeof target === "string") {
+    return { directMemberId: target };
+  }
+
+  return target ?? {};
+}
+
 export interface WorkspaceStoreState {
   snapshot: WorkspaceSnapshot;
   createProject: (input: CreateProjectInput) => { projectId: string; roomId: string };
   selectRoom: (projectId: string, roomId: RoomId) => void;
   selectMember: (memberId?: MemberId) => void;
-  sendUserMessage: (content: string, directMemberId?: MemberId) => void;
+  sendUserMessage: (content: string, target?: MemberId | SendUserMessageTarget) => void;
   advanceMember: (memberId: MemberId) => void;
   toggleWatcherSchedule: (watcherId: string) => void;
   runWatcher: (watcherId: string) => void;
@@ -92,7 +103,7 @@ export function createWorkspaceStore(initialSnapshot = createDefaultWorkspaceSna
         },
       }));
     },
-    sendUserMessage(content, directMemberId) {
+    sendUserMessage(content, target) {
       const previous = get().snapshot;
       const roomId = previous.selection.roomId;
 
@@ -100,6 +111,7 @@ export function createWorkspaceStore(initialSnapshot = createDefaultWorkspaceSna
         return;
       }
 
+      const resolvedTarget = normalizeSendUserMessageTarget(target);
       const mentionedMemberIds = extractMentionMemberIds(previous, roomId, content);
       let next = postUserMessage(
         previous,
@@ -107,7 +119,9 @@ export function createWorkspaceStore(initialSnapshot = createDefaultWorkspaceSna
           roomId,
           content,
           mentionedMemberIds,
-          directMemberId,
+          authorHumanId: resolvedTarget.authorHumanId,
+          directMemberId: resolvedTarget.directMemberId,
+          directHumanId: resolvedTarget.directHumanId,
         },
         context,
       );

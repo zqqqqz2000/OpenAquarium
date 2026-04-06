@@ -780,6 +780,73 @@ describe("workspace http api routing", () => {
     });
   });
 
+  it("inspects a manually entered project path through the JSON API", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-inspect-"));
+    const projectRoot = path.join(workspaceRoot, "manual-project");
+    await mkdir(projectRoot, { recursive: true });
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const result = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/system/project-path/inspect",
+      body: {
+        path: projectRoot,
+      },
+    });
+
+    expect(result).toEqual({
+      statusCode: 200,
+      payload: expect.objectContaining({
+        path: projectRoot,
+        projectName: "manual-project",
+        canImport: false,
+        roomCount: 0,
+      }),
+    });
+  });
+
+  it("treats /api/system/project-path with a body path as manual inspect instead of opening the picker", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-project-path-"));
+    const projectRoot = path.join(workspaceRoot, "manual-project");
+    await mkdir(projectRoot, { recursive: true });
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const result = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/system/project-path",
+      body: {
+        path: projectRoot,
+      },
+    });
+
+    expect(result).toEqual({
+      statusCode: 200,
+      payload: {
+        path: projectRoot,
+        inspection: expect.objectContaining({
+          path: projectRoot,
+          projectName: "manual-project",
+          canImport: false,
+          roomCount: 0,
+        }),
+      },
+    });
+  });
+
   it("returns cursor-paged room history through the JSON API", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-history-"));
     const runtime = new WorkspaceRuntime({
@@ -1046,6 +1113,139 @@ describe("workspace http api routing", () => {
     expect(payload.snapshot.rooms[payload.roomId]?.memberIds).toHaveLength(
       seedRoom.memberIds.length,
     );
+  });
+
+  it("accepts room human handles for internal direct member messages", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-human-direct-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createSeedWorkspace(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const snapshot = runtime.getSnapshot();
+    const roomId = snapshot.selection.roomId!;
+    const room = snapshot.rooms[roomId];
+    const memberId = room.entryMemberId;
+
+    snapshot.humans = {
+      ...(snapshot.humans ?? {}),
+      human_alice: {
+        id: "human_alice",
+        roomId,
+        displayName: "Alice",
+        handle: "alice",
+        kind: "human",
+      },
+    };
+    snapshot.humanOrderByRoom = {
+      ...(snapshot.humanOrderByRoom ?? {}),
+      [roomId]: [...(snapshot.humanOrderByRoom?.[roomId] ?? []), "human_alice"],
+    };
+
+    const result = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/internal/member-message",
+      body: {
+        roomId,
+        memberId,
+        content: "请确认 path",
+        targetHandle: "alice",
+      },
+    });
+
+    expect(result?.statusCode).toBe(200);
+
+    const payload = result?.payload as {
+      snapshot: {
+        messageOrderByRoom: Record<string, string[]>;
+        messages: Record<string, { transport: string; recipientHumanIds?: string[]; content: string }>;
+      };
+    };
+    const messageId = payload.snapshot.messageOrderByRoom[roomId]?.at(-1);
+
+    expect(messageId).toBeTruthy();
+    expect(payload.snapshot.messages[messageId!]).toMatchObject({
+      content: "请确认 path",
+      transport: "direct",
+      recipientHumanIds: ["human_alice"],
+    });
+  });
+
+  it("accepts authorHumanId and directHumanId for room user messages", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-user-human-chain-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createSeedWorkspace(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const snapshot = runtime.getSnapshot();
+    const roomId = snapshot.selection.roomId!;
+    snapshot.humans = {
+      ...(snapshot.humans ?? {}),
+      human_alice: {
+        id: "human_alice",
+        roomId,
+        displayName: "Alice",
+        handle: "alice",
+        kind: "human",
+      },
+      human_bob: {
+        id: "human_bob",
+        roomId,
+        displayName: "Bob",
+        handle: "bob",
+        kind: "human",
+      },
+    };
+    snapshot.humanOrderByRoom = {
+      ...(snapshot.humanOrderByRoom ?? {}),
+      [roomId]: [...(snapshot.humanOrderByRoom?.[roomId] ?? []), "human_alice", "human_bob"],
+    };
+
+    const result = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: `/api/rooms/${roomId}/messages`,
+      body: {
+        content: "只发给 Bob",
+        authorHumanId: "human_alice",
+        directHumanId: "human_bob",
+      },
+    });
+
+    expect(result?.statusCode).toBe(200);
+
+    const payload = result?.payload as {
+      snapshot: {
+        messageOrderByRoom: Record<string, string[]>;
+        messages: Record<string, {
+          content: string;
+          transport: string;
+          author: { humanId?: string; handle?: string; label?: string };
+          recipientHumanIds?: string[];
+        }>;
+      };
+    };
+    const messageId = payload.snapshot.messageOrderByRoom[roomId]?.at(-1);
+
+    expect(messageId).toBeTruthy();
+    expect(payload.snapshot.messages[messageId!]).toMatchObject({
+      content: "只发给 Bob",
+      transport: "direct",
+      author: {
+        humanId: "human_alice",
+        handle: "alice",
+        label: "Alice",
+      },
+      recipientHumanIds: ["human_bob"],
+    });
   });
 
   it("supports deleting templates, rooms, and projects through the JSON API", async () => {

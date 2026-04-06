@@ -18,6 +18,7 @@ import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { buildTransportSnapshot } from "./transport-snapshot";
 
 type JsonPayload = object | string | number | boolean | null;
+type ProjectPathRequestPayload = { source?: "picker"; path?: string };
 
 function containsLegacyFirstPrompt(payload: JsonPayload | undefined): boolean {
   return typeof payload === "object" && payload !== null && Object.prototype.hasOwnProperty.call(payload, "firstPrompt");
@@ -64,6 +65,37 @@ function sendJson(response: ServerResponse, statusCode: number, payload: JsonPay
   response.setHeader("access-control-allow-headers", "content-type");
   response.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
   response.end(JSON.stringify(payload));
+}
+
+async function resolveProjectPathRequest(runtime: WorkspaceRuntime, payload: ProjectPathRequestPayload | undefined): Promise<{
+  path?: string;
+  inspection?: Awaited<ReturnType<WorkspaceRuntime["inspectProjectPath"]>>;
+}> {
+  const requestedPath = payload?.path?.trim();
+  if (requestedPath) {
+    return {
+      path: requestedPath,
+      inspection: await runtime.inspectProjectPath({ path: requestedPath }),
+    };
+  }
+
+  if (payload?.source === "picker") {
+    try {
+      const selectedPath = await selectProjectDirectory();
+      return {
+        path: selectedPath,
+        inspection: await runtime.inspectProjectPath({ path: selectedPath }),
+      };
+    } catch (error) {
+      if (error instanceof DirectorySelectionCancelledError) {
+        return { path: undefined };
+      }
+
+      throw error;
+    }
+  }
+
+  return { path: undefined };
 }
 
 export async function handleWorkspaceJsonApiRequest(args: {
@@ -160,27 +192,17 @@ export async function handleWorkspaceJsonApiRequest(args: {
   }
 
   if (method === "POST" && pathname === "/api/system/project-path") {
-    try {
-      const selectedPath = await selectProjectDirectory();
-      return {
-        statusCode: 200,
-        payload: {
-          path: selectedPath,
-          inspection: await runtime.inspectProjectPath({ path: selectedPath }),
-        },
-      };
-    } catch (error) {
-      if (error instanceof DirectorySelectionCancelledError) {
-        return {
-          statusCode: 200,
-          payload: {
-            path: undefined,
-          },
-        };
-      }
+    return {
+      statusCode: 200,
+      payload: await resolveProjectPathRequest(runtime, (body as ProjectPathRequestPayload | undefined) ?? undefined),
+    };
+  }
 
-      throw error;
-    }
+  if (method === "POST" && pathname === "/api/system/project-path/inspect") {
+    return {
+      statusCode: 200,
+      payload: await runtime.inspectProjectPath(body as { path: string }),
+    };
   }
 
   if (method === "POST" && pathname === "/api/projects") {
@@ -331,7 +353,9 @@ export async function handleWorkspaceJsonApiRequest(args: {
     const snapshot = await runtime.sendUserMessage({
       roomId,
       content: (body as { content: string }).content,
+      authorHumanId: (body as { authorHumanId?: string }).authorHumanId,
       directMemberId: (body as { directMemberId?: string }).directMemberId,
+      directHumanId: (body as { directHumanId?: string }).directHumanId,
     });
     return {
       statusCode: 200,
@@ -478,18 +502,20 @@ export async function handleWorkspaceJsonApiRequest(args: {
       memberId: string;
       content: string;
       directMemberId?: string;
+      directHumanId?: string;
       directToUser?: boolean;
       targetHandle?: string;
       taskId?: string;
     };
     const target =
-      parsedBody.directMemberId || parsedBody.directToUser
+      parsedBody.directMemberId || parsedBody.directHumanId || parsedBody.directToUser
         ? {
             directMemberId: parsedBody.directMemberId,
+            directHumanId: parsedBody.directHumanId,
             directToUser: parsedBody.directToUser,
           }
         : resolveDirectTarget(runtime.getSnapshot(), parsedBody.roomId, parsedBody.targetHandle);
-    if (parsedBody.targetHandle && !target.directMemberId && !target.directToUser) {
+    if (parsedBody.targetHandle && !target.directMemberId && !target.directHumanId && !target.directToUser) {
       throw new Error(`Unknown direct target "${parsedBody.targetHandle}" in room "${parsedBody.roomId}"`);
     }
     const snapshot = await runtime.sendMemberMessage({
@@ -805,21 +831,15 @@ export async function startWorkspaceHttpServer(args: {
       }
 
       if (request.method === "POST" && url.pathname === "/api/system/project-path") {
-        try {
-          const selectedPath = await selectProjectDirectory();
-          sendJson(response, 200, {
-            path: selectedPath,
-            inspection: await args.runtime.inspectProjectPath({ path: selectedPath }),
-          });
-          return;
-        } catch (error) {
-          if (error instanceof DirectorySelectionCancelledError) {
-            sendJson(response, 200, { path: undefined });
-            return;
-          }
+        const body = await readJson<ProjectPathRequestPayload>(request);
+        sendJson(response, 200, await resolveProjectPathRequest(args.runtime, body));
+        return;
+      }
 
-          throw error;
-        }
+      if (request.method === "POST" && url.pathname === "/api/system/project-path/inspect") {
+        const body = await readJson<{ path: string }>(request);
+        sendJson(response, 200, await args.runtime.inspectProjectPath(body));
+        return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/projects") {
@@ -1024,7 +1044,9 @@ export async function startWorkspaceHttpServer(args: {
         const body = await readJson<{
           messages: WorkspaceUIMessage[];
           roomId: string;
+          authorHumanId?: string;
           directMemberId?: string;
+          directHumanId?: string;
         }>(request);
 
         if (!body.roomId) {
@@ -1047,7 +1069,9 @@ export async function startWorkspaceHttpServer(args: {
               {
                 roomId: body.roomId,
                 content,
+                authorHumanId: body.authorHumanId,
                 directMemberId: body.directMemberId,
+                directHumanId: body.directHumanId,
               },
               {
                 onTaskAccepted(route) {
@@ -1118,11 +1142,18 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing room id" });
           return;
         }
-        const body = await readJson<{ content: string; directMemberId?: string }>(request);
+        const body = await readJson<{
+          content: string;
+          authorHumanId?: string;
+          directMemberId?: string;
+          directHumanId?: string;
+        }>(request);
         const snapshot = await args.runtime.sendUserMessage({
           roomId,
           content: body.content,
+          authorHumanId: body.authorHumanId,
           directMemberId: body.directMemberId,
+          directHumanId: body.directHumanId,
         });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
@@ -1243,18 +1274,20 @@ export async function startWorkspaceHttpServer(args: {
           memberId: string;
           content: string;
           directMemberId?: string;
+          directHumanId?: string;
           directToUser?: boolean;
           targetHandle?: string;
           taskId?: string;
         }>(request);
         const target =
-          body.directMemberId || body.directToUser
+          body.directMemberId || body.directHumanId || body.directToUser
             ? {
                 directMemberId: body.directMemberId,
+                directHumanId: body.directHumanId,
                 directToUser: body.directToUser,
               }
             : resolveDirectTarget(args.runtime.getSnapshot(), body.roomId, body.targetHandle);
-        if (body.targetHandle && !target.directMemberId && !target.directToUser) {
+        if (body.targetHandle && !target.directMemberId && !target.directHumanId && !target.directToUser) {
           throw new Error(`Unknown direct target "${body.targetHandle}" in room "${body.roomId}"`);
         }
         const snapshot = await args.runtime.sendMemberMessage({

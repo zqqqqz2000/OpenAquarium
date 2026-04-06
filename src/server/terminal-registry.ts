@@ -44,6 +44,22 @@ export class TerminalRegistry {
   private readonly entries = new Map<string, TerminalEntry>();
   private readonly terminalIdsBySession = new Map<string, string[]>();
 
+  unreadOutput(params: TerminalOutputRequest): Promise<TerminalOutputResponse> {
+    const entry = this.require(params.terminalId);
+    const exitStatus = entry.process.exitCode === null && entry.process.signalCode === null
+      ? undefined
+      : {
+          exitCode: entry.process.exitCode ?? undefined,
+          signal: entry.process.signalCode ?? undefined,
+        };
+
+    return Promise.resolve({
+      output: entry.unreadOutput,
+      truncated: entry.unreadTruncated,
+      exitStatus,
+    });
+  }
+
   create(params: CreateTerminalRequest): Promise<CreateTerminalResponse> {
     const terminalId = randomUUID();
     const cwd = params.cwd ?? process.cwd();

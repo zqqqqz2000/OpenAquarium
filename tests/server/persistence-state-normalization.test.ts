@@ -324,6 +324,89 @@ describe("workspace persistence state normalization", () => {
     expect(loaded?.members.member_a.allowedSkillIds).toEqual([]);
   });
 
+  it("backfills account order and room human order for legacy snapshots", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-persistence-accounts-normalize-"));
+    const filePath = path.join(directory, "state.json");
+
+    const snapshot = {
+      projects: {},
+      projectOrder: [],
+      rooms: {
+        room_a: {
+          id: "room_a",
+          projectId: "project_a",
+          name: "A",
+          topic: "topic a",
+          templateId: "template_a",
+          memberIds: [],
+          watcherIds: [],
+          entryMemberId: "member_a",
+          createdAt: "2026-03-10T10:00:00.000Z",
+        },
+      },
+      roomOrderByProject: {},
+      templates: {},
+      templateOrder: [],
+      members: {},
+      accounts: {
+        account_default: {
+          id: "account_default",
+          displayName: "You",
+          handle: "default",
+        },
+        account_alice: {
+          id: "account_alice",
+          displayName: "Alice",
+          handle: "alice",
+        },
+      },
+      accountOrder: [],
+      currentAccountId: "account_alice",
+      humans: {
+        human_room_1_account_default: {
+          id: "human_room_1_account_default",
+          roomId: "room_a",
+          displayName: "You",
+          handle: "default",
+          kind: "human",
+          accountId: "account_default",
+        },
+        human_room_1_account_alice: {
+          id: "human_room_1_account_alice",
+          roomId: "room_a",
+          displayName: "Alice",
+          handle: "alice",
+          kind: "human",
+          accountId: "account_alice",
+        },
+      },
+      messages: {},
+      messageOrderByRoom: {
+        room_a: [],
+      },
+      tasks: {},
+      taskTraces: {},
+      taskTraceOrderByTask: {},
+      watchers: {},
+      selection: {
+        roomId: "room_a",
+      },
+      currentUserName: "You",
+    } satisfies WorkspaceSnapshot;
+
+    await writeFile(filePath, JSON.stringify({ savedAt: "2026-03-10T10:00:04.000Z", snapshot }, null, 2), "utf8");
+
+    const persistence = new WorkspacePersistence(filePath);
+    const loaded = await persistence.load();
+
+    expect(loaded?.accountOrder).toEqual(["account_default", "account_alice"]);
+    expect(loaded?.currentAccountId).toBe("account_alice");
+    expect(loaded?.humanOrderByRoom?.room_a).toEqual([
+      "human_room_1_account_default",
+      "human_room_1_account_alice",
+    ]);
+  });
+
   it("hides legacy public watcher digests on load", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "oa-persistence-watch-visibility-"));
     const filePath = path.join(directory, "state.json");

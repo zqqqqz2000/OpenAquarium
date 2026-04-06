@@ -546,6 +546,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
         globalConfig={globalConfig}
         onClose={closeRoomTeam}
         onSave={handleSaveRoomTeam}
+        onSaveDefaultTemplate={(input) => void updateTemplate(input)}
       />
     </>
   );

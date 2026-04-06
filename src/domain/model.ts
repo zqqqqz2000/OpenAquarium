@@ -6,11 +6,13 @@ export type ProjectId = string;
 export type RoomId = string;
 export type TemplateId = string;
 export type MemberId = string;
+export type HumanParticipantId = string;
 export type MessageId = string;
 export type TaskId = string;
 export type WatcherId = string;
 export type TraceId = string;
 export type ProviderModelProfileId = string;
+export type AccountId = string;
 
 export type ProviderKind = "codex-acp" | "generic-acp";
 export type ProviderProfileType = "acp" | "openai-compatible";
@@ -24,6 +26,8 @@ export type MessageVisibility = "public" | "internal";
 export type AccentTone = "paper" | "postit" | "blueprint" | "correction";
 export type TaskTraceKind = "task-started" | "task-prompt" | "draft" | "status" | "completed" | "error" | "interrupted";
 export type CodexThinkingDepth = "low" | "mid" | "high" | "extra-high";
+export type RoomActorKind = "human" | "bot" | "system";
+export type ChatAuthorKind = RoomActorKind | "user" | "member";
 
 export interface TemplateStudioChatMessage {
   role: "user" | "assistant";
@@ -220,10 +224,77 @@ export interface WatchSubscription {
   pendingConsumedStateAt?: string;
 }
 
-export interface ChatAuthor {
-  kind: "user" | "member" | "system";
+export interface RoomHumanParticipant {
+  id: HumanParticipantId;
+  roomId: RoomId;
+  displayName: string;
+  handle: string;
+  kind: "human";
+  accountId?: AccountId;
+  archivedAt?: string;
+}
+
+export interface RoomBotActor {
+  id: MemberId;
+  roomId: RoomId;
+  displayName: string;
+  handle: string;
+  kind: "bot";
+  memberId: MemberId;
+  archivedAt?: string;
+}
+
+export interface RoomSystemActor {
+  id: string;
+  roomId: RoomId;
+  displayName: string;
+  kind: "system";
+  archivedAt?: string;
+}
+
+export type RoomActor = RoomHumanParticipant | RoomBotActor | RoomSystemActor;
+
+interface BaseChatAuthor {
+  kind: ChatAuthorKind;
   id: string;
   label: string;
+  handle?: string;
+}
+
+export interface ChatAuthor extends BaseChatAuthor {
+  actorKind?: RoomActorKind;
+  humanId?: HumanParticipantId;
+  memberId?: MemberId;
+  accountId?: AccountId;
+}
+
+export interface HumanChatAuthor extends ChatAuthor {
+  kind: "human";
+  actorKind?: "human";
+  humanId: HumanParticipantId;
+}
+
+export interface LegacyUserChatAuthor extends ChatAuthor {
+  kind: "user";
+  actorKind?: "human";
+  humanId?: HumanParticipantId;
+}
+
+export interface BotChatAuthor extends ChatAuthor {
+  kind: "bot";
+  actorKind?: "bot";
+  memberId: MemberId;
+}
+
+export interface LegacyMemberChatAuthor extends ChatAuthor {
+  kind: "member";
+  actorKind?: "bot";
+  memberId?: MemberId;
+}
+
+export interface SystemChatAuthor extends ChatAuthor {
+  kind: "system";
+  actorKind?: "system";
 }
 
 export interface ChatMessage {
@@ -236,8 +307,10 @@ export interface ChatMessage {
   status: MessageStatus;
   visibility?: MessageVisibility;
   mentionedMemberIds: MemberId[];
+  mentionedHumanIds?: HumanParticipantId[];
   quotedMemberIds?: MemberId[];
   recipientMemberIds: MemberId[];
+  recipientHumanIds?: HumanParticipantId[];
   recipientUser?: boolean;
   taskId?: TaskId;
 }
@@ -279,6 +352,13 @@ export interface WorkspaceSelection {
   memberId?: MemberId;
 }
 
+export interface WorkspaceAccount {
+  id: AccountId;
+  displayName: string;
+  handle?: string;
+  archivedAt?: string;
+}
+
 export interface WorkspaceSnapshot {
   projects: Record<ProjectId, Project>;
   projectOrder: ProjectId[];
@@ -287,14 +367,19 @@ export interface WorkspaceSnapshot {
   templates: Record<TemplateId, TeamTemplate>;
   templateOrder: TemplateId[];
   members: Record<MemberId, TeamMember>;
+  humans?: Record<HumanParticipantId, RoomHumanParticipant>;
+  humanOrderByRoom?: Record<RoomId, HumanParticipantId[]>;
   messages: Record<MessageId, ChatMessage>;
   messageOrderByRoom: Record<RoomId, MessageId[]>;
   tasks: Record<TaskId, MemberTask>;
   taskTraces: Record<TraceId, TaskTraceEntry>;
   taskTraceOrderByTask: Record<TaskId, TraceId[]>;
   watchers: Record<WatcherId, WatchSubscription>;
+  accounts?: Record<AccountId, WorkspaceAccount>;
+  accountOrder?: AccountId[];
   selection: WorkspaceSelection;
   currentUserName: string;
+  currentAccountId?: AccountId;
 }
 
 export interface CreateProjectInput {
@@ -311,9 +396,12 @@ export interface CreateRoomInput {
 export interface PostUserMessageInput {
   roomId: RoomId;
   content: string;
+  authorHumanId?: HumanParticipantId;
   mentionedMemberIds?: MemberId[];
+  mentionedHumanIds?: HumanParticipantId[];
   quotedMemberIds?: MemberId[];
   directMemberId?: MemberId;
+  directHumanId?: HumanParticipantId;
 }
 
 export interface PostMemberMessageInput {
@@ -321,8 +409,10 @@ export interface PostMemberMessageInput {
   memberId: MemberId;
   content: string;
   mentionedMemberIds?: MemberId[];
+  mentionedHumanIds?: HumanParticipantId[];
   quotedMemberIds?: MemberId[];
   directMemberId?: MemberId;
+  directHumanId?: HumanParticipantId;
   directToUser?: boolean;
   taskId?: TaskId;
 }

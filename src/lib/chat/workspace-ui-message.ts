@@ -1,6 +1,7 @@
 import type { UIMessage } from "ai";
 
 import type { ChatMessage, Room, WorkspaceSnapshot } from "@/domain/model";
+import { resolveChatAuthorActorKind, resolveChatAuthorMemberId } from "@/lib/chat-author";
 import type { JsonValue } from "@/lib/json";
 import { isVisibleMainRoomMessage } from "@/lib/message-visibility";
 import { resolveRoomVisibleMemberIdSet } from "@/lib/room-message-preferences";
@@ -53,11 +54,13 @@ export interface WorkspaceMessageDataParts extends Record<string, JsonValue | ob
 export type WorkspaceUIMessage = UIMessage<WorkspaceMessageMetadata, WorkspaceMessageDataParts>;
 
 function mapDomainMessageRole(message: ChatMessage): WorkspaceUIMessage["role"] {
-  if (message.author.kind === "user") {
+  const actorKind = resolveChatAuthorActorKind(message.author);
+
+  if (actorKind === "human") {
     return "user";
   }
 
-  if (message.author.kind === "system") {
+  if (actorKind === "system") {
     return "system";
   }
 
@@ -66,7 +69,7 @@ function mapDomainMessageRole(message: ChatMessage): WorkspaceUIMessage["role"] 
 
 export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: Room, message: ChatMessage): WorkspaceUIMessage {
   const handlerSummaries =
-    message.author.kind === "user" || message.transport === "watch-digest"
+    resolveChatAuthorActorKind(message.author) === "human" || message.transport === "watch-digest"
       ? getMessageHandlers(snapshot, message)
       : [];
 
@@ -79,7 +82,7 @@ export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: R
       authorKind: message.author.kind,
       authorId: message.author.id,
       authorLabel: message.author.label,
-      memberId: message.author.kind === "member" ? message.author.id : undefined,
+      memberId: resolveChatAuthorMemberId(message.author),
       createdAt: message.createdAt,
       transport: message.transport,
       status: message.status,

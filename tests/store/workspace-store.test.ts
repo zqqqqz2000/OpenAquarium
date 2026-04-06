@@ -20,6 +20,54 @@ describe("workspace store", () => {
     expect(lastMessage.author.kind).toBe("user");
   });
 
+  it("preserves authorHumanId and directHumanId through the store sendUserMessage facade", () => {
+    const snapshot = createSeedWorkspace();
+    const roomId = snapshot.selection.roomId!;
+    snapshot.humans = {
+      ...(snapshot.humans ?? {}),
+      human_alice: {
+        id: "human_alice",
+        roomId,
+        displayName: "Alice",
+        handle: "alice",
+        kind: "human",
+      },
+      human_bob: {
+        id: "human_bob",
+        roomId,
+        displayName: "Bob",
+        handle: "bob",
+        kind: "human",
+      },
+    };
+    snapshot.humanOrderByRoom = {
+      ...(snapshot.humanOrderByRoom ?? {}),
+      [roomId]: [...(snapshot.humanOrderByRoom?.[roomId] ?? []), "human_alice", "human_bob"],
+    };
+
+    const store = createWorkspaceStore(snapshot);
+
+    store.getState().sendUserMessage("只发给 Bob", {
+      authorHumanId: "human_alice",
+      directHumanId: "human_bob",
+    });
+
+    const next = store.getState().snapshot;
+    const messageId = next.messageOrderByRoom[roomId]?.at(-1);
+
+    expect(messageId).toBeTruthy();
+    expect(next.messages[messageId!]).toMatchObject({
+      content: "只发给 Bob",
+      transport: "direct",
+      author: expect.objectContaining({
+        humanId: "human_alice",
+        handle: "alice",
+        label: "Alice",
+      }),
+      recipientHumanIds: ["human_bob"],
+    });
+  });
+
   it("advances a running member by publishing a public reply and completing the task", () => {
     const store = createWorkspaceStore(createSeedWorkspace());
     store.getState().createProject({

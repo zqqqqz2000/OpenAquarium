@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -38,6 +37,7 @@ import {
   MessageBubbleMeta,
 } from "@/components/chat/message-bubble";
 import { RoomDashboard } from "@/components/chat/room-dashboard";
+import { WorkspaceFlexLayout } from "@/components/chat/workspace-flex-layout";
 import { RoomTodoTreesPanel } from "@/components/todo/room-todo-trees-panel";
 import { PanelToggleButton } from "@/components/layout/panel-toggle-button";
 import { MemberAvatar } from "@/components/members/member-avatar";
@@ -52,7 +52,6 @@ import { getMemberActivitySummary } from "@/components/members/member-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getMemberRoleLabel } from "@/lib/member-display";
 import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
 import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
@@ -307,11 +306,18 @@ function SidebarMemberCard(props: {
 
   return (
     <MemberHoverPreview member={member} latestPreview={rest.latestPreview}>
-      <button
+      <div
         aria-label={`Open ${roleLabel} session panel`}
-        className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        className="w-full cursor-pointer text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         onClick={() => onOpenMember(member.id)}
-        type="button"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onOpenMember(member.id);
+          }
+        }}
+        role="button"
+        tabIndex={0}
       >
         <SidebarMemberCardSurface
           member={member}
@@ -321,7 +327,7 @@ function SidebarMemberCard(props: {
           selected={member.id === selectedMemberId}
           className="hover:bg-muted/60"
         />
-      </button>
+      </div>
     </MemberHoverPreview>
   );
 }
@@ -355,9 +361,7 @@ function SidebarMemberCardSurface(props: {
     140,
   );
   const badges = buildMemberCardBadges(member, room, snapshot);
-  const eyeLabel = visible
-    ? `Hide @${member.handle} messages`
-    : `Show @${member.handle} messages`;
+  const eyeLabel = `Toggle @${member.handle} visibility`;
   const showSidebarSummary = previewMode === "sidebar" && summary.length > 0;
   const showLatestPreview = previewMode === "hover";
   const resolvedLatestPreview = latestPreview ?? "No recent visible update.";
@@ -512,14 +516,21 @@ function RoleGroupHoverPreview(props: {
             );
 
             return (
-              <button
+              <div
                 key={member.id}
                 aria-label={`Open @${member.handle} session panel`}
                 className={cn(
-                  "w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  "w-full cursor-pointer text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                 )}
                 onClick={() => onOpenMember(member.id)}
-                type="button"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onOpenMember(member.id);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
               >
                 <SidebarMemberCardSurface
                   member={member}
@@ -532,7 +543,7 @@ function RoleGroupHoverPreview(props: {
                   onToggleVisible={onToggleVisible}
                   className="hover:bg-muted/60"
                 />
-              </button>
+              </div>
             );
           })}
         </div>
@@ -669,11 +680,25 @@ export function ChatPane(props: {
   );
   const latestLiveMessageId = liveRoomMessages.at(-1)?.id;
   const layoutKey = `${roomId ?? "no-room"}:${leftSidebarCollapsed ? "left-closed" : "left-open"}:${rightSidebarCollapsed ? "right-closed" : "right-open"}`;
+  const activeRouteSummaryByMemberId = useMemo(
+    () =>
+      Object.fromEntries(
+        roomChat.activeRoutes
+          .filter((route) => route.summary?.trim())
+          .map((route) => [
+            route.memberId,
+            summarizePrompt(route.summary?.trim() ?? "", 120),
+          ]),
+      ),
+    [roomChat.activeRoutes],
+  );
   const runningMembers = buildRunningRoomMemberPreviews({
     members,
     snapshot,
     activeRoutes: roomChat.activeRoutes,
   });
+  const disableTranscriptVirtualization = typeof navigator !== "undefined"
+    && /jsdom/i.test(navigator.userAgent);
   const messageVirtualizer = useVirtualizer({
     count: transcriptMessages.length,
     getScrollElement: () => transcriptRef.current,
@@ -728,11 +753,21 @@ export function ChatPane(props: {
         return;
       }
 
-      if (transcriptMessages.length > 0) {
+      if (!disableTranscriptVirtualization && transcriptMessages.length > 0) {
         messageVirtualizer.scrollToIndex(transcriptMessages.length - 1, {
           align: "end",
           behavior,
         });
+      }
+
+      if (disableTranscriptVirtualization) {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior,
+        });
+        setShowScrollToLatest(false);
+        updateScrollState();
+        return;
       }
 
       window.requestAnimationFrame(() => {
@@ -1106,6 +1141,162 @@ export function ChatPane(props: {
     );
   }
 
+  const chatPanelContent = (
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="relative min-h-0 flex-1">
+        {historyHasMore || historyError ? (
+          <div className="mb-2 flex flex-col gap-2 px-1">
+            {historyHasMore ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full"
+                disabled={historyLoading}
+                onClick={loadEarlierMessages}
+              >
+                {historyLoading
+                  ? "Loading earlier messages..."
+                  : "Load earlier messages"}
+              </Button>
+            ) : null}
+            {historyError ? (
+              <p className="m-0 text-xs text-destructive">{historyError}</p>
+            ) : null}
+          </div>
+        ) : null}
+        {transcriptScrollTop > 8 && stickyBubble ? (
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
+            <div className="pointer-events-auto bg-background/95 backdrop-blur-sm">
+              <MessageBubbleMeta
+                message={stickyBubble.message}
+                authorMember={
+                  stickyAuthorMemberId
+                    ? roomChat.activeMembersById[stickyAuthorMemberId]
+                    : undefined
+                }
+                mentionedHandles={stickyBubble.mentionedHandles}
+                quotedHandles={stickyBubble.quotedHandles}
+                recipientHandles={stickyBubble.recipientHandles}
+                handlerSummaries={stickyBubble.handlerSummaries}
+                onAuthorClick={
+                  stickyAuthorMemberId
+                    ? () => onOpenMember(stickyAuthorMemberId)
+                    : undefined
+                }
+              />
+            </div>
+          </div>
+        ) : null}
+        <div
+          ref={transcriptRef}
+          className="h-full min-h-0 overflow-y-auto pb-6"
+          onScroll={updateScrollState}
+        >
+          {historyLoading && transcriptMessages.length === 0 ? (
+            <Card className="border border-border shadow-none">
+              <CardContent className="flex items-center gap-4 p-5">
+                <Bot size={28} />
+                <p className="m-0 text-sm text-muted-foreground">
+                  正在加载完整消息历史…
+                </p>
+              </CardContent>
+            </Card>
+          ) : transcriptMessages.length === 0 ? (
+            <Card className="border border-border shadow-none">
+              <CardContent className="flex items-center gap-4 p-5">
+                <Bot size={28} />
+                <p className="m-0 text-sm text-muted-foreground">
+                  还没有消息。发送第一句话开始。
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div
+              className="relative w-full"
+              style={{
+                height: `${messageVirtualizer.getTotalSize()}px`,
+              }}
+            >
+              {virtualRows.map((virtualRow) => {
+                const message = transcriptMessages[virtualRow.index];
+                if (!message) {
+                  return null;
+                }
+
+                const bubble = toBubbleModel(
+                  message,
+                  snapshot,
+                  room,
+                  snapshot.currentUserName,
+                );
+                const authorMember = bubble.authorMemberId
+                  ? roomChat.activeMembersById[bubble.authorMemberId]
+                  : undefined;
+
+                return (
+                  <div
+                    key={virtualRow.key}
+                    ref={messageVirtualizer.measureElement}
+                    data-index={virtualRow.index}
+                    className={cn(
+                      "absolute top-0 left-0 w-full rounded-2xl py-1 transition-all duration-500",
+                      focusedMessageId === bubble.message.id &&
+                        "bg-[color:var(--tone-blueprint-surface)]/75 ring-1 ring-[color:var(--tone-blueprint-border)]",
+                    )}
+                    style={{
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    <MessageBubble
+                      key={bubble.message.id}
+                      message={bubble.message}
+                      authorMember={authorMember}
+                      mentionedHandles={bubble.mentionedHandles}
+                      quotedHandles={bubble.quotedHandles}
+                      recipientHandles={bubble.recipientHandles}
+                      handlerSummaries={bubble.handlerSummaries}
+                      onAuthorClick={
+                        authorMember
+                          ? () => onOpenMember(authorMember.id)
+                          : undefined
+                      }
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        {showScrollToLatest ? (
+          <Button
+            className="absolute right-2 bottom-2 z-30 shadow-lg"
+            size="sm"
+            type="button"
+            onClick={() => scrollTranscriptToLatest()}
+          >
+            <ArrowDown size={16} />
+            Jump to latest
+          </Button>
+        ) : null}
+      </div>
+
+      <ChatComposer
+        className="shrink-0 py-0"
+        contentClassName="gap-2 p-0"
+        roomId={room.id}
+        textareaClassName="min-h-16"
+        connected={connected}
+        error={error}
+        members={members}
+        onSend={roomChat.sendMessage}
+        onUploadFiles={uploadRoomAssets}
+        sending={roomChat.hasActiveStreams}
+        draftKey={`room:${room.id}`}
+      />
+    </div>
+  );
+
   return (
     <main className="flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden bg-background/70 px-2 py-2 md:px-3">
       {!connected || error ? (
@@ -1124,245 +1315,108 @@ export function ChatPane(props: {
           </CardContent>
         </Card>
       ) : null}
-      <div
-        className={cn(
-          "relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden",
-          !rightSidebarCollapsed &&
-            "xl:grid-cols-[minmax(0,1fr)_var(--oa-right-panel)] xl:gap-3",
-        )}
-        style={
-          !rightSidebarCollapsed
-            ? ({
-                "--oa-right-panel": `${rightSidebarWidth}px`,
-              } as CSSProperties)
-            : undefined
-        }
-      >
-        {!rightSidebarCollapsed ? (
-          <button
-            aria-label="Close members sidebar"
-            className="absolute inset-y-0 left-0 z-10 bg-background/48 backdrop-blur-sm xl:hidden right-[min(23rem,84vw)]"
-            type="button"
-            onClick={onToggleRightSidebar}
-          />
-        ) : null}
-        <section className="flex h-full min-h-0 min-w-0 flex-col gap-2">
-          <RoomTopBar
-            leftSidebarCollapsed={leftSidebarCollapsed}
-            rightSidebarCollapsed={rightSidebarCollapsed}
-            room={room}
-            roomTeam={roomTeam}
-            members={members}
-            runningMembers={runningMembers}
-            activeStreamSummary={roomChat.activeStreamSummary}
-            onOpenRoomTeam={onOpenRoomTeam}
-            onOpenMember={(memberId) => onOpenMember(memberId)}
-            onToggleLeftSidebar={onToggleLeftSidebar}
-            onToggleRightSidebar={onToggleRightSidebar}
-          />
-          {membersNeedingProviderAssociation.length > 0 ? (
-            <Card className="border border-amber-500/30 bg-amber-500/5 shadow-none">
-              <CardContent className="flex flex-wrap items-start gap-3 p-4">
-                <AlertTriangle size={18} className="mt-0.5 text-amber-700" />
-                <div className="min-w-0 flex-1">
-                  <p className="m-0 text-sm font-medium">Provider association required</p>
-                  <p className="m-0 text-sm leading-6 text-muted-foreground">
-                    这个 project 是从 room context 恢复的。请先在 room team 或 member config 里为{" "}
-                    {membersNeedingProviderAssociation
-                      .map((member) => `@${member.handle}`)
-                      .join(", ")}{" "}
-                    关联 provider，再运行任务。
-                  </p>
-                </div>
-                {onOpenRoomTeam ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={onOpenRoomTeam}
-                  >
-                    Open room team
-                  </Button>
-                ) : null}
-              </CardContent>
-            </Card>
-          ) : null}
-          <div className="relative min-h-0 flex-1">
-            {historyHasMore || historyError ? (
-              <div className="mb-2 flex flex-col gap-2 px-1">
-                {historyHasMore ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    disabled={historyLoading}
-                    onClick={loadEarlierMessages}
-                  >
-                    {historyLoading
-                      ? "Loading earlier messages..."
-                      : "Load earlier messages"}
-                  </Button>
-                ) : null}
-                {historyError ? (
-                  <p className="m-0 text-xs text-destructive">{historyError}</p>
-                ) : null}
+      <section className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+        <RoomTopBar
+          leftSidebarCollapsed={leftSidebarCollapsed}
+          rightSidebarCollapsed={rightSidebarCollapsed}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          runningMembers={runningMembers}
+          activeStreamSummary={roomChat.activeStreamSummary}
+          onOpenRoomTeam={onOpenRoomTeam}
+          onOpenMember={(memberId) => onOpenMember(memberId)}
+          onToggleLeftSidebar={onToggleLeftSidebar}
+          onToggleRightSidebar={onToggleRightSidebar}
+        />
+        {membersNeedingProviderAssociation.length > 0 ? (
+          <Card className="border border-amber-500/30 bg-amber-500/5 shadow-none">
+            <CardContent className="flex flex-wrap items-start gap-3 p-4">
+              <AlertTriangle size={18} className="mt-0.5 text-amber-700" />
+              <div className="min-w-0 flex-1">
+                <p className="m-0 text-sm font-medium">Provider association required</p>
+                <p className="m-0 text-sm leading-6 text-muted-foreground">
+                  这个 project 是从 room context 恢复的。请先在 room team 或 member config 里为{" "}
+                  {membersNeedingProviderAssociation
+                    .map((member) => `@${member.handle}`)
+                    .join(", ")}{" "}
+                  关联 provider，再运行任务。
+                </p>
               </div>
-            ) : null}
-            {transcriptScrollTop > 8 && stickyBubble ? (
-              <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
-                <div className="pointer-events-auto bg-background/95 backdrop-blur-sm">
-                  <MessageBubbleMeta
-                    message={stickyBubble.message}
-                    authorMember={
-                      stickyAuthorMemberId
-                        ? roomChat.activeMembersById[stickyAuthorMemberId]
-                        : undefined
-                    }
-                    mentionedHandles={stickyBubble.mentionedHandles}
-                    quotedHandles={stickyBubble.quotedHandles}
-                    recipientHandles={stickyBubble.recipientHandles}
-                    handlerSummaries={stickyBubble.handlerSummaries}
-                    onAuthorClick={
-                      stickyAuthorMemberId
-                        ? () => onOpenMember(stickyAuthorMemberId)
-                        : undefined
-                    }
-                  />
-                </div>
-              </div>
-            ) : null}
-            <div
-              ref={transcriptRef}
-              className="h-full min-h-0 overflow-y-auto pb-6"
-              onScroll={updateScrollState}
-            >
-              {historyLoading && transcriptMessages.length === 0 ? (
-                <Card className="border border-border shadow-none">
-                  <CardContent className="flex items-center gap-4 p-5">
-                    <Bot size={28} />
-                    <p className="m-0 text-sm text-muted-foreground">
-                      正在加载完整消息历史…
-                    </p>
-                  </CardContent>
-                </Card>
-              ) : transcriptMessages.length === 0 ? (
-                <Card className="border border-border shadow-none">
-                  <CardContent className="flex items-center gap-4 p-5">
-                    <Bot size={28} />
-                    <p className="m-0 text-sm text-muted-foreground">
-                      还没有消息。发送第一句话开始。
-                    </p>
-                  </CardContent>
-                </Card>
-              ) : (
-                <div
-                  className="relative w-full"
-                  style={{
-                    height: `${messageVirtualizer.getTotalSize()}px`,
-                  }}
+              {onOpenRoomTeam ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onOpenRoomTeam}
                 >
-                  {virtualRows.map((virtualRow) => {
-                    const message = transcriptMessages[virtualRow.index];
-                    if (!message) {
-                      return null;
-                    }
-
-                    const bubble = toBubbleModel(
-                      message,
-                      snapshot,
-                      room,
-                      snapshot.currentUserName,
-                    );
-                    const authorMember = bubble.authorMemberId
-                      ? roomChat.activeMembersById[bubble.authorMemberId]
-                      : undefined;
-
-                    return (
-                      <div
-                        key={virtualRow.key}
-                        ref={messageVirtualizer.measureElement}
-                        data-index={virtualRow.index}
-                        className={cn(
-                          "absolute top-0 left-0 w-full rounded-2xl py-1 transition-all duration-500",
-                          focusedMessageId === bubble.message.id &&
-                            "bg-[color:var(--tone-blueprint-surface)]/75 ring-1 ring-[color:var(--tone-blueprint-border)]",
-                        )}
-                        style={{
-                          transform: `translateY(${virtualRow.start}px)`,
-                        }}
-                      >
-                        <MessageBubble
-                          key={bubble.message.id}
-                          message={bubble.message}
-                          authorMember={authorMember}
-                          mentionedHandles={bubble.mentionedHandles}
-                          quotedHandles={bubble.quotedHandles}
-                          recipientHandles={bubble.recipientHandles}
-                          handlerSummaries={bubble.handlerSummaries}
-                          onAuthorClick={
-                            authorMember
-                              ? () => onOpenMember(authorMember.id)
-                              : undefined
-                          }
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            {showScrollToLatest ? (
-              <Button
-                className="absolute right-2 bottom-2 z-30 shadow-lg"
-                size="sm"
-                type="button"
-                onClick={() => scrollTranscriptToLatest()}
-              >
-                <ArrowDown size={16} />
-                Jump to latest
-              </Button>
-            ) : null}
-          </div>
-
-          <ChatComposer
-            className="shrink-0 py-0"
-            contentClassName="gap-2 p-0"
-            roomId={room?.id}
-            textareaClassName="min-h-16"
-            connected={connected}
-            error={error}
-            members={members}
-            onSend={roomChat.sendMessage}
-            onUploadFiles={room ? uploadRoomAssets : undefined}
-            sending={roomChat.hasActiveStreams}
-            draftKey={room ? `room:${room.id}` : undefined}
-          />
-        </section>
-
-        {!rightSidebarCollapsed ? (
-          <RoomMembersSidebar
-            room={room}
-            runtimeClient={runtimeClient}
-            snapshot={snapshot}
-            members={members}
-            visibleMemberIds={visibleMemberIds}
-            selectedMemberId={selectedMemberId}
-            activeRouteSummaryByMemberId={Object.fromEntries(
-              roomChat.activeRoutes
-                .filter((route) => route.summary?.trim())
-                .map((route) => [
-                  route.memberId,
-                  summarizePrompt(route.summary?.trim() ?? "", 120),
-                ]),
-            )}
-            onOpenMember={onOpenMember}
-            onUpdateRoomSettings={onUpdateRoomSettings}
-            onFocusMessage={focusMessage}
-            onResizeStart={onRightSidebarResizeStart}
-          />
+                  Open room team
+                </Button>
+              ) : null}
+            </CardContent>
+          </Card>
         ) : null}
-      </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <WorkspaceFlexLayout
+            collapsed={rightSidebarCollapsed}
+            layoutKey={layoutKey}
+            onResizeStart={onRightSidebarResizeStart}
+            panelWidth={rightSidebarWidth}
+            panels={{
+              chat: {
+                id: "chat",
+                title: "Chat",
+                icon: TerminalSquare,
+                content: chatPanelContent,
+              },
+              members: {
+                id: "members",
+                title: "Members",
+                icon: Users,
+                badge: <Badge variant="outline">{members.length}</Badge>,
+                content: (
+                  <RoomMembersPanelContent
+                    room={room}
+                    snapshot={snapshot}
+                    members={members}
+                    visibleMemberIds={visibleMemberIds}
+                    selectedMemberId={selectedMemberId}
+                    activeRouteSummaryByMemberId={activeRouteSummaryByMemberId}
+                    onOpenMember={onOpenMember}
+                    onUpdateRoomSettings={onUpdateRoomSettings}
+                  />
+                ),
+              },
+              todo: {
+                id: "todo",
+                title: "Todo",
+                icon: FolderKanban,
+                content: (
+                  <div className="h-full min-h-0 overflow-hidden">
+                    <RoomTodoTreesPanel room={room} runtimeClient={runtimeClient} />
+                  </div>
+                ),
+              },
+              dashboard: {
+                id: "dashboard",
+                title: "Dashboard",
+                icon: BarChart3,
+                content: (
+                  <div className="h-full min-h-0 overflow-y-auto">
+                    <RoomDashboard
+                      snapshot={snapshot}
+                      room={room}
+                      members={members}
+                      onOpenMember={onOpenMember}
+                      onFocusMessage={focusMessage}
+                    />
+                  </div>
+                ),
+              },
+            }}
+          />
+        </div>
+      </section>
     </main>
   );
 }
@@ -1504,9 +1558,8 @@ function RoomTopBar(props: {
   );
 }
 
-function RoomMembersSidebar(props: {
+function RoomMembersPanelContent(props: {
   room: Room;
-  runtimeClient: WorkspaceRuntimeClient;
   snapshot: WorkspaceSnapshot;
   members: TeamMember[];
   visibleMemberIds: string[];
@@ -1514,12 +1567,9 @@ function RoomMembersSidebar(props: {
   activeRouteSummaryByMemberId: Record<string, string>;
   onOpenMember: (memberId: string) => void;
   onUpdateRoomSettings?: (input: UpdateRoomSettingsInput) => void;
-  onFocusMessage: (messageId: string) => void;
-  onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
   const {
     room,
-    runtimeClient,
     snapshot,
     members,
     visibleMemberIds,
@@ -1527,13 +1577,8 @@ function RoomMembersSidebar(props: {
     activeRouteSummaryByMemberId,
     onOpenMember,
     onUpdateRoomSettings,
-    onFocusMessage,
-    onResizeStart,
   } = props;
   const roleGroups = useMemo(() => groupMembersByRole(members), [members]);
-  const [activeTab, setActiveTab] = useState<"members" | "dashboard" | "todo">(
-    "members",
-  );
   const toggleMemberVisibility = useCallback(
     (memberId: string): void => {
       const visibleMemberIdSet = new Set(visibleMemberIds);
@@ -1549,129 +1594,52 @@ function RoomMembersSidebar(props: {
   );
 
   return (
-    <aside className="absolute inset-y-0 right-0 z-20 w-[min(23rem,84vw)] min-h-0 border-l border-border/70 bg-background/96 backdrop-blur xl:static xl:w-auto xl:border-l-0 xl:bg-transparent xl:backdrop-blur-none">
-      <Card className="relative flex h-full min-h-0 flex-col border border-border shadow-sm">
-        <CardContent className="flex h-full min-h-0 flex-col gap-0 p-0">
-          <Tabs
-            value={activeTab}
-            onValueChange={(value) =>
-              setActiveTab(value as "members" | "dashboard" | "todo")
-            }
-            className="h-full min-h-0 gap-0"
-          >
-            <div className="shrink-0 border-b border-border px-4 py-3">
-              <TabsList
-                variant="line"
-                className="h-auto w-full justify-start rounded-none bg-transparent p-0"
-              >
-                <TabsTrigger
-                  value="members"
-                  className="rounded-none px-2.5 py-2"
-                >
-                  <Users size={16} />
-                  Members
-                  <Badge variant="outline" className="ml-1">
-                    {members.length}
-                  </Badge>
-                </TabsTrigger>
-                <TabsTrigger
-                  value="todo"
-                  className="rounded-none px-2.5 py-2"
-                >
-                  <FolderKanban size={16} />
-                  Todo
-                </TabsTrigger>
-                <TabsTrigger
-                  value="dashboard"
-                  className="rounded-none px-2.5 py-2"
-                >
-                  <BarChart3 size={16} />
-                  Dashboard
-                </TabsTrigger>
-              </TabsList>
-            </div>
-            <TabsContent
-              value="members"
-              className="m-0 min-h-0 flex-1 overflow-y-auto px-3 py-3"
-            >
-              <div className="min-h-full">
-                <div className="flex flex-col gap-2.5">
-                  {roleGroups.map((group: RoomRoleGroup) => {
-                    if (group.members.length === 0) {
-                      return null;
-                    }
+    <div className="h-full min-h-0 overflow-y-auto">
+      <div className="flex min-h-full flex-col gap-2.5">
+        {roleGroups.map((group: RoomRoleGroup) => {
+          if (group.members.length === 0) {
+            return null;
+          }
 
-                    if (group.members.length === 1) {
-                      const member = group.members[0];
-                      const latestPreview = resolveMemberLatestPreview(
-                        member,
-                        snapshot,
-                        activeRouteSummaryByMemberId,
-                      );
+          if (group.members.length === 1) {
+            const member = group.members[0];
+            const latestPreview = resolveMemberLatestPreview(
+              member,
+              snapshot,
+              activeRouteSummaryByMemberId,
+            );
 
-                      return (
-                        <SidebarMemberCard
-                          key={group.roleId}
-                          member={member}
-                          room={room}
-                          snapshot={snapshot}
-                          visible={visibleMemberIds.includes(member.id)}
-                          selectedMemberId={selectedMemberId}
-                          latestPreview={latestPreview}
-                          onOpenMember={onOpenMember}
-                          onToggleVisible={toggleMemberVisibility}
-                        />
-                      );
-                    }
-
-                    return (
-                      <RoleGroupHoverPreview
-                        key={group.roleId}
-                        group={group}
-                        room={room}
-                        snapshot={snapshot}
-                        selectedMemberId={selectedMemberId}
-                        visibleMemberIds={visibleMemberIds}
-                        activeRouteSummaryByMemberId={
-                          activeRouteSummaryByMemberId
-                        }
-                        onOpenMember={onOpenMember}
-                        onToggleVisible={toggleMemberVisibility}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-            </TabsContent>
-            <TabsContent
-              value="todo"
-              className="m-0 min-h-0 flex-1 overflow-hidden px-3 py-3"
-            >
-              <RoomTodoTreesPanel room={room} runtimeClient={runtimeClient} />
-            </TabsContent>
-            <TabsContent
-              value="dashboard"
-              className="m-0 min-h-0 flex-1 overflow-y-auto px-3 py-3"
-            >
-              <RoomDashboard
-                snapshot={snapshot}
+            return (
+              <SidebarMemberCard
+                key={group.roleId}
+                member={member}
                 room={room}
-                members={members}
+                snapshot={snapshot}
+                visible={visibleMemberIds.includes(member.id)}
+                selectedMemberId={selectedMemberId}
+                latestPreview={latestPreview}
                 onOpenMember={onOpenMember}
-                onFocusMessage={onFocusMessage}
+                onToggleVisible={toggleMemberVisibility}
               />
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-        <div
-          aria-hidden
-          className="absolute inset-y-0 -left-2 hidden w-4 cursor-col-resize xl:block"
-          onPointerDown={onResizeStart}
-        >
-          <div className="absolute inset-y-4 left-1/2 w-px -translate-x-1/2 rounded-full bg-border/80" />
-        </div>
-      </Card>
-    </aside>
+            );
+          }
+
+          return (
+            <RoleGroupHoverPreview
+              key={group.roleId}
+              group={group}
+              room={room}
+              snapshot={snapshot}
+              selectedMemberId={selectedMemberId}
+              visibleMemberIds={visibleMemberIds}
+              activeRouteSummaryByMemberId={activeRouteSummaryByMemberId}
+              onOpenMember={onOpenMember}
+              onToggleVisible={toggleMemberVisibility}
+            />
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

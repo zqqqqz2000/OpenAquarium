@@ -24,8 +24,13 @@ vi.mock("@/components/theme/theme-toggle", () => ({
   ThemeToggle: () => <div data-testid="theme-toggle" />,
 }));
 
+vi.mock("@/components/theme/locale-toggle", () => ({
+  LocaleToggle: () => <div data-testid="locale-toggle" />,
+}));
+
 import { Sidebar } from "@/components/layout/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { I18nProvider } from "@/lib/i18n";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { buildProjectActivitySummaries } from "@/lib/workspace-activity";
 import { AppThemeProvider } from "@/theme/theme-provider";
@@ -83,37 +88,43 @@ function buildSidebarViewState(snapshot: ReturnType<typeof createSeedWorkspace>)
   };
 }
 
+function renderSidebar(node: ReactNode) {
+  return render(
+    <I18nProvider>
+      <AppThemeProvider>
+        <TooltipProvider>{node}</TooltipProvider>
+      </AppThemeProvider>
+    </I18nProvider>,
+  );
+}
+
 describe("Sidebar", () => {
   it("keeps templates collapsed by default and scrolls the expanded list", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
     const sidebarData = buildSidebarViewState(snapshot);
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
-            collapsed={false}
-            projects={sidebarData.projects}
-            roomsByProject={sidebarData.roomsByProject}
-            projectActivityById={sidebarData.projectActivityById}
-            roomActivityById={sidebarData.roomActivityById}
-            projectUnreadCountById={sidebarData.projectUnreadCountById}
-            roomUnreadCountById={sidebarData.roomUnreadCountById}
-            projectRunningMembersById={sidebarData.projectRunningMembersById}
-            roomRunningMembersById={sidebarData.roomRunningMembersById}
-            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
-            connected
-            loading={false}
-            onDeleteProject={vi.fn()}
-            onDeleteRoom={vi.fn()}
-            onDeleteTemplate={vi.fn()}
-            onResizeStart={vi.fn()}
-            onOpenTemplate={vi.fn()}
-            onOpenTemplateStudio={vi.fn()}
-          />
-        </TooltipProvider>
-      </AppThemeProvider>,
+    renderSidebar(
+      <Sidebar
+        collapsed={false}
+        projects={sidebarData.projects}
+        roomsByProject={sidebarData.roomsByProject}
+        projectActivityById={sidebarData.projectActivityById}
+        roomActivityById={sidebarData.roomActivityById}
+        projectUnreadCountById={sidebarData.projectUnreadCountById}
+        roomUnreadCountById={sidebarData.roomUnreadCountById}
+        projectRunningMembersById={sidebarData.projectRunningMembersById}
+        roomRunningMembersById={sidebarData.roomRunningMembersById}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected
+        loading={false}
+        onDeleteProject={vi.fn()}
+        onDeleteRoom={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
     );
 
     expect(screen.queryByTestId("sidebar-templates-scroll")).not.toBeInTheDocument();
@@ -142,31 +153,27 @@ describe("Sidebar", () => {
     const onDeleteTemplate = vi.fn();
     const sidebarData = buildSidebarViewState(snapshot);
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
-            collapsed={false}
-            projects={project ? sidebarData.projects.filter((candidate) => candidate.id === project.id) : []}
-            roomsByProject={project ? { [project.id]: sidebarData.roomsByProject[project.id] ?? [] } : {}}
-            projectActivityById={project ? { [project.id]: sidebarData.projectActivityById[project.id] } : {}}
-            roomActivityById={room ? { [room.id]: sidebarData.roomActivityById[room.id] } : {}}
-            projectUnreadCountById={project ? { [project.id]: 0 } : {}}
-            roomUnreadCountById={room ? { [room.id]: 0 } : {}}
-            projectRunningMembersById={project ? { [project.id]: [] } : {}}
-            roomRunningMembersById={room ? { [room.id]: [] } : {}}
-            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
-            connected
-            loading={false}
-            onDeleteProject={onDeleteProject}
-            onDeleteRoom={onDeleteRoom}
-            onDeleteTemplate={onDeleteTemplate}
-            onResizeStart={vi.fn()}
-            onOpenTemplate={vi.fn()}
-            onOpenTemplateStudio={vi.fn()}
-          />
-        </TooltipProvider>
-      </AppThemeProvider>,
+    renderSidebar(
+      <Sidebar
+        collapsed={false}
+        projects={project ? sidebarData.projects.filter((candidate) => candidate.id === project.id) : []}
+        roomsByProject={project ? { [project.id]: sidebarData.roomsByProject[project.id] ?? [] } : {}}
+        projectActivityById={project ? { [project.id]: sidebarData.projectActivityById[project.id] } : {}}
+        roomActivityById={room ? { [room.id]: sidebarData.roomActivityById[room.id] } : {}}
+        projectUnreadCountById={project ? { [project.id]: 0 } : {}}
+        roomUnreadCountById={room ? { [room.id]: 0 } : {}}
+        projectRunningMembersById={project ? { [project.id]: [] } : {}}
+        roomRunningMembersById={room ? { [room.id]: [] } : {}}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected
+        loading={false}
+        onDeleteProject={onDeleteProject}
+        onDeleteRoom={onDeleteRoom}
+        onDeleteTemplate={onDeleteTemplate}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
     );
 
     if (!project || !room) {
@@ -209,31 +216,27 @@ describe("Sidebar", () => {
     snapshot.rooms[room.id] = longRoom;
     const sidebarData = buildSidebarViewState(snapshot);
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
-            collapsed={false}
-            projects={sidebarData.projects}
-            roomsByProject={sidebarData.roomsByProject}
-            projectActivityById={sidebarData.projectActivityById}
-            roomActivityById={sidebarData.roomActivityById}
-            projectUnreadCountById={sidebarData.projectUnreadCountById}
-            roomUnreadCountById={sidebarData.roomUnreadCountById}
-            projectRunningMembersById={sidebarData.projectRunningMembersById}
-            roomRunningMembersById={sidebarData.roomRunningMembersById}
-            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
-            connected
-            loading={false}
-            onDeleteProject={vi.fn()}
-            onDeleteRoom={vi.fn()}
-            onDeleteTemplate={vi.fn()}
-            onResizeStart={vi.fn()}
-            onOpenTemplate={vi.fn()}
-            onOpenTemplateStudio={vi.fn()}
-          />
-        </TooltipProvider>
-      </AppThemeProvider>,
+    renderSidebar(
+      <Sidebar
+        collapsed={false}
+        projects={sidebarData.projects}
+        roomsByProject={sidebarData.roomsByProject}
+        projectActivityById={sidebarData.projectActivityById}
+        roomActivityById={sidebarData.roomActivityById}
+        projectUnreadCountById={sidebarData.projectUnreadCountById}
+        roomUnreadCountById={sidebarData.roomUnreadCountById}
+        projectRunningMembersById={sidebarData.projectRunningMembersById}
+        roomRunningMembersById={sidebarData.roomRunningMembersById}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected
+        loading={false}
+        onDeleteProject={vi.fn()}
+        onDeleteRoom={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
     );
 
     const roomLink = screen.getByText(longRoom.name).closest("a");
@@ -287,31 +290,27 @@ describe("Sidebar", () => {
     };
     const sidebarData = buildSidebarViewState(snapshot);
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
-            collapsed={false}
-            projects={sidebarData.projects}
-            roomsByProject={sidebarData.roomsByProject}
-            projectActivityById={sidebarData.projectActivityById}
-            roomActivityById={sidebarData.roomActivityById}
-            projectUnreadCountById={sidebarData.projectUnreadCountById}
-            roomUnreadCountById={sidebarData.roomUnreadCountById}
-            projectRunningMembersById={sidebarData.projectRunningMembersById}
-            roomRunningMembersById={sidebarData.roomRunningMembersById}
-            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
-            connected
-            loading={false}
-            onDeleteProject={vi.fn()}
-            onDeleteRoom={vi.fn()}
-            onDeleteTemplate={vi.fn()}
-            onResizeStart={vi.fn()}
-            onOpenTemplate={vi.fn()}
-            onOpenTemplateStudio={vi.fn()}
-          />
-        </TooltipProvider>
-      </AppThemeProvider>,
+    renderSidebar(
+      <Sidebar
+        collapsed={false}
+        projects={sidebarData.projects}
+        roomsByProject={sidebarData.roomsByProject}
+        projectActivityById={sidebarData.projectActivityById}
+        roomActivityById={sidebarData.roomActivityById}
+        projectUnreadCountById={sidebarData.projectUnreadCountById}
+        roomUnreadCountById={sidebarData.roomUnreadCountById}
+        projectRunningMembersById={sidebarData.projectRunningMembersById}
+        roomRunningMembersById={sidebarData.roomRunningMembersById}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected
+        loading={false}
+        onDeleteProject={vi.fn()}
+        onDeleteRoom={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
     );
 
     expect(screen.queryByText("/tmp/openaquarium/demo-path")).not.toBeInTheDocument();
@@ -335,33 +334,29 @@ describe("Sidebar", () => {
 
     const sidebarData = buildSidebarViewState(snapshot);
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
-            collapsed={false}
-            projects={sidebarData.projects}
-            roomsByProject={sidebarData.roomsByProject}
-            projectActivityById={sidebarData.projectActivityById}
-            roomActivityById={sidebarData.roomActivityById}
-            projectUnreadCountById={sidebarData.projectUnreadCountById}
-            roomUnreadCountById={sidebarData.roomUnreadCountById}
-            projectRunningMembersById={sidebarData.projectRunningMembersById}
-            roomRunningMembersById={sidebarData.roomRunningMembersById}
-            activeProjectId={project.id}
-            activeRoomId={room.id}
-            templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
-            connected
-            loading={false}
-            onDeleteProject={vi.fn()}
-            onDeleteRoom={vi.fn()}
-            onDeleteTemplate={vi.fn()}
-            onResizeStart={vi.fn()}
-            onOpenTemplate={vi.fn()}
-            onOpenTemplateStudio={vi.fn()}
-          />
-        </TooltipProvider>
-      </AppThemeProvider>,
+    renderSidebar(
+      <Sidebar
+        collapsed={false}
+        projects={sidebarData.projects}
+        roomsByProject={sidebarData.roomsByProject}
+        projectActivityById={sidebarData.projectActivityById}
+        roomActivityById={sidebarData.roomActivityById}
+        projectUnreadCountById={sidebarData.projectUnreadCountById}
+        roomUnreadCountById={sidebarData.roomUnreadCountById}
+        projectRunningMembersById={sidebarData.projectRunningMembersById}
+        roomRunningMembersById={sidebarData.roomRunningMembersById}
+        activeProjectId={project.id}
+        activeRoomId={room.id}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected
+        loading={false}
+        onDeleteProject={vi.fn()}
+        onDeleteRoom={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
     );
 
     const roomCard = screen.getByText(room.name).closest("div.rounded-xl");
@@ -392,10 +387,8 @@ describe("Sidebar", () => {
     const sidebarData = buildSidebarViewState(snapshot);
     const onToggleRoomWatcherSuspension = vi.fn();
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
+    renderSidebar(
+      <Sidebar
             collapsed={false}
             projects={sidebarData.projects}
             roomsByProject={sidebarData.roomsByProject}
@@ -418,8 +411,6 @@ describe("Sidebar", () => {
             onOpenTemplate={vi.fn()}
             onOpenTemplateStudio={vi.fn()}
           />
-        </TooltipProvider>
-      </AppThemeProvider>,
     );
 
     expect(screen.queryByText("Watch hold")).not.toBeInTheDocument();
@@ -446,10 +437,8 @@ describe("Sidebar", () => {
 
     const sidebarData = buildSidebarViewState(snapshot);
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
+    renderSidebar(
+      <Sidebar
             collapsed={false}
             projects={sidebarData.projects}
             roomsByProject={sidebarData.roomsByProject}
@@ -477,8 +466,6 @@ describe("Sidebar", () => {
             onOpenTemplate={vi.fn()}
             onOpenTemplateStudio={vi.fn()}
           />
-        </TooltipProvider>
-      </AppThemeProvider>,
     );
 
     expect(screen.getByLabelText("Watcher paused until activity")).toBeInTheDocument();
@@ -510,10 +497,8 @@ describe("Sidebar", () => {
 
     const sidebarData = buildSidebarViewState(snapshot);
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
+    renderSidebar(
+      <Sidebar
             collapsed={false}
             projects={sidebarData.projects}
             roomsByProject={sidebarData.roomsByProject}
@@ -535,8 +520,6 @@ describe("Sidebar", () => {
             onOpenTemplate={vi.fn()}
             onOpenTemplateStudio={vi.fn()}
           />
-        </TooltipProvider>
-      </AppThemeProvider>,
     );
 
     const roomCard = screen.getByText(room.name).closest("div.rounded-xl");
@@ -571,10 +554,8 @@ describe("Sidebar", () => {
 
     const sidebarData = buildSidebarViewState(snapshot);
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
+    renderSidebar(
+      <Sidebar
             collapsed={false}
             projects={sidebarData.projects}
             roomsByProject={sidebarData.roomsByProject}
@@ -596,8 +577,6 @@ describe("Sidebar", () => {
             onOpenTemplate={vi.fn()}
             onOpenTemplateStudio={vi.fn()}
           />
-        </TooltipProvider>
-      </AppThemeProvider>,
     );
 
     screen.getAllByText(/running|ready/i)
@@ -632,10 +611,8 @@ describe("Sidebar", () => {
     const sidebarData = buildSidebarViewState(snapshot);
     const onOpenMember = vi.fn();
 
-    render(
-      <AppThemeProvider>
-        <TooltipProvider>
-          <Sidebar
+    renderSidebar(
+      <Sidebar
             collapsed={false}
             projects={sidebarData.projects}
             roomsByProject={sidebarData.roomsByProject}
@@ -668,8 +645,6 @@ describe("Sidebar", () => {
             onOpenTemplate={vi.fn()}
             onOpenTemplateStudio={vi.fn()}
           />
-        </TooltipProvider>
-      </AppThemeProvider>,
     );
 
     const roomCard = screen.getByText(room.name).closest("div.rounded-xl");

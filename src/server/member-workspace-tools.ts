@@ -26,6 +26,8 @@ export interface MemberToolHost {
 const DEFAULT_TERMINAL_YIELD_TIME_MS = 1_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 2_000;
 const MAX_OUTPUT_TOKENS = 16_000;
+const READ_THREAD_TERMINAL_WAIT_MS = 300;
+const READ_THREAD_TERMINAL_POLL_MS = 25;
 
 function approximateOutputByteLimit(maxOutputTokens: number): number {
   return Math.min(Math.max(maxOutputTokens * 8, 4_096), 256_000);
@@ -112,12 +114,17 @@ async function readThreadTerminalResult(args: {
     return initial;
   }
 
-  await waitForTerminalYield({
-    terminalRegistry: args.terminalRegistry,
-    sessionId: args.sessionId,
-    terminalId: args.terminalId,
-    yieldTimeMs: 120,
-  });
+  const deadline = Date.now() + READ_THREAD_TERMINAL_WAIT_MS;
+  while (Date.now() < deadline) {
+    await sleep(READ_THREAD_TERMINAL_POLL_MS);
+    const unread = await args.terminalRegistry.unreadOutput({
+      sessionId: args.sessionId,
+      terminalId: args.terminalId,
+    });
+    if (unread.output.length > 0 || unread.exitStatus) {
+      break;
+    }
+  }
 
   return readTerminalResult({
     terminalRegistry: args.terminalRegistry,

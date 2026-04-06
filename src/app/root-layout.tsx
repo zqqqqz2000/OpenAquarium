@@ -3,6 +3,7 @@ import { useMatchRoute } from "@tanstack/react-router";
 import { WorkspaceScreen } from "@/components/layout/workspace-screen";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { I18nProvider } from "@/lib/i18n";
 import { WorkspaceStoreProvider } from "@/store/workspace-store-provider";
 import { AppThemeProvider } from "@/theme/theme-provider";
 
@@ -40,12 +41,14 @@ function WorkspaceRouteView() {
 export function RootLayout() {
   return (
     <WorkspaceStoreProvider>
-      <AppThemeProvider>
-        <TooltipProvider delayDuration={120}>
-          <WorkspaceRouteView />
-          <Toaster position="top-right" richColors closeButton />
-        </TooltipProvider>
-      </AppThemeProvider>
+      <I18nProvider>
+        <AppThemeProvider>
+          <TooltipProvider delayDuration={120}>
+            <WorkspaceRouteView />
+            <Toaster position="top-right" richColors closeButton />
+          </TooltipProvider>
+        </AppThemeProvider>
+      </I18nProvider>
     </WorkspaceStoreProvider>
   );
 }

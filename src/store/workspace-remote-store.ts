@@ -2,6 +2,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 
 import type {
   GlobalWorkspaceConfig,
+  PostUserMessageInput,
   TeamTemplate,
   TemplateStudioChatMessage,
   UpdateGlobalConfigInput,
@@ -15,6 +16,7 @@ import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import {
   WorkspaceRuntimeClient,
+  type InspectProjectPathInput,
   type ProjectPathInspectionPayload,
   type WatcherRunResult,
 } from "@/lib/runtime-client";
@@ -125,6 +127,16 @@ function getErrorMessage(error: RemoteStoreError): string {
   return JSON.stringify(error);
 }
 
+type SendUserMessageTarget = Pick<PostUserMessageInput, "authorHumanId" | "directMemberId" | "directHumanId">;
+
+function normalizeSendUserMessageTarget(target?: string | SendUserMessageTarget): SendUserMessageTarget {
+  if (typeof target === "string") {
+    return { directMemberId: target };
+  }
+
+  return target ?? {};
+}
+
 export interface WorkspaceRemoteStoreState {
   snapshot: WorkspaceSnapshot;
   globalConfig: GlobalWorkspaceConfig;
@@ -133,6 +145,7 @@ export interface WorkspaceRemoteStoreState {
   error?: string;
   hydrate(): Promise<void>;
   pickProjectPath(): Promise<{ path?: string; inspection?: ProjectPathInspectionPayload }>;
+  inspectProjectPath(input: InspectProjectPathInput): Promise<ProjectPathInspectionPayload>;
   createProject(input: { projectName: string; templateId?: string; path?: string }): Promise<{ projectId: string; roomId: string }>;
   createRoom(input: { projectId: string; templateId: string }): Promise<{ roomId: string }>;
   deleteProject(projectId: string): Promise<WorkspaceSnapshot>;
@@ -140,7 +153,7 @@ export interface WorkspaceRemoteStoreState {
   selectRoom(projectId: string, roomId: string): void;
   selectMember(memberId?: string): void;
   updateRoomSettings(input: UpdateRoomSettingsInput): Promise<void>;
-  sendUserMessage(content: string, directMemberId?: string): Promise<void>;
+  sendUserMessage(content: string, target?: string | SendUserMessageTarget): Promise<void>;
   toggleWatcherSchedule(watcherId: string): Promise<void>;
   toggleRoomWatcherSuspension(roomId: string): Promise<void>;
   runWatcher(watcherId: string): Promise<WatcherRunResult>;
@@ -166,6 +179,7 @@ export interface WorkspaceRemoteStoreState {
 export interface WorkspaceRemoteClient {
   getState(): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig }>;
   pickProjectPath(): Promise<{ path?: string; inspection?: ProjectPathInspectionPayload }>;
+  inspectProjectPath(input: InspectProjectPathInput): Promise<ProjectPathInspectionPayload>;
   createProject(input: { projectName: string; templateId?: string; path?: string }): Promise<{
     snapshot: WorkspaceSnapshot;
     projectId: string;
@@ -178,7 +192,13 @@ export interface WorkspaceRemoteClient {
   deleteProject(projectId: string): Promise<WorkspaceSnapshot>;
   deleteRoom(roomId: string): Promise<WorkspaceSnapshot>;
   acknowledgeRoom(roomId: string): Promise<WorkspaceSnapshot>;
-  sendUserMessage(input: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot>;
+  sendUserMessage(input: {
+    roomId: string;
+    content: string;
+    authorHumanId?: string;
+    directMemberId?: string;
+    directHumanId?: string;
+  }): Promise<WorkspaceSnapshot>;
   updatePrompt(memberId: string, prompt: string): Promise<WorkspaceSnapshot>;
   updateMemberConfig(input: UpdateMemberConfigInput): Promise<WorkspaceSnapshot>;
   updateRoomSettings(input: UpdateRoomSettingsInput): Promise<WorkspaceSnapshot>;
@@ -246,6 +266,9 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
     async pickProjectPath() {
       return runMutation(set, () => client.pickProjectPath());
     },
+    async inspectProjectPath(input) {
+      return runMutation(set, () => client.inspectProjectPath(input));
+    },
     async createProject(input) {
       const result = await runMutation(set, () => client.createProject(input));
       set((state) => ({
@@ -309,16 +332,19 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
         },
       }));
     },
-    async sendUserMessage(content, directMemberId) {
+    async sendUserMessage(content, target) {
       const roomId = get().snapshot.selection.roomId;
       if (!roomId || content.trim().length === 0) {
         return;
       }
+      const resolvedTarget = normalizeSendUserMessageTarget(target);
       const snapshot = await runMutation(set, () =>
         client.sendUserMessage({
           roomId,
           content,
-          directMemberId,
+          authorHumanId: resolvedTarget.authorHumanId,
+          directMemberId: resolvedTarget.directMemberId,
+          directHumanId: resolvedTarget.directHumanId,
         }),
       );
       set((state) => ({

@@ -33,4 +33,41 @@ describe("WorkspaceRuntimeClient", () => {
       }),
     ).rejects.toThrow("You've hit your usage limit. Try again later.");
   });
+
+  it("posts manual project path inspection requests to the web endpoint", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({
+          path: "/tmp/manual-project",
+          projectName: "Manual Project",
+          projectInteractiveDirectory: "/tmp/manual-project/.openaquarium/interactive",
+          hasOpenAquariumDirectory: false,
+          canImport: false,
+          roomCount: 0,
+          rooms: [],
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new WorkspaceRuntimeClient();
+
+    await expect(client.inspectProjectPath({ path: "/tmp/manual-project" })).resolves.toMatchObject({
+      path: "/tmp/manual-project",
+      projectName: "Manual Project",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${client.baseUrl}/api/system/project-path/inspect`,
+      expect.objectContaining({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/tmp/manual-project" }),
+      }),
+    );
+  });
 });

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { AppTheme } from "@/theme/theme";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -32,6 +33,7 @@ function ThemeButton(props: {
 export function ThemeToggle(props: { className?: string }) {
   const { className } = props;
   const { theme, setTheme } = useAppTheme();
+  const { t } = useI18n();
 
   const applyTheme = (nextTheme: AppTheme) => {
     if (theme !== nextTheme) {
@@ -41,8 +43,8 @@ export function ThemeToggle(props: { className?: string }) {
 
   return (
     <div className={cn("grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/70 p-0.5", className)}>
-      <ThemeButton active={theme === "light"} icon={<Sun size={14} />} label="Light" onClick={() => applyTheme("light")} />
-      <ThemeButton active={theme === "dark"} icon={<Moon size={14} />} label="Dark" onClick={() => applyTheme("dark")} />
+      <ThemeButton active={theme === "light"} icon={<Sun size={14} />} label={t("theme.light")} onClick={() => applyTheme("light")} />
+      <ThemeButton active={theme === "dark"} icon={<Moon size={14} />} label={t("theme.dark")} onClick={() => applyTheme("dark")} />
     </div>
   );
 }

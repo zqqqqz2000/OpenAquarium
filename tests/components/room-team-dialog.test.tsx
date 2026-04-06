@@ -21,13 +21,14 @@ describe("RoomTeamDialog", () => {
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         onClose={vi.fn()}
         onSave={onSave}
+        onSaveDefaultTemplate={vi.fn()}
       />,
     );
 
     expect(screen.getByRole("dialog")).toHaveClass("w-[min(96vw,88rem)]");
     expect(screen.getByRole("dialog")).toHaveClass("sm:max-w-[88rem]");
 
-    expect(screen.getByText("这里改的是当前 room 里的团队结构和成员实例配置，不会同步回 team template。")).toBeInTheDocument();
+    expect(screen.getByText("这里改的是当前 room 里的团队结构和成员实例配置；只有显式保存为默认 template，才会同步回软件默认模板源。")).toBeInTheDocument();
 
     await user.clear(screen.getByRole("textbox", { name: "Team name" }));
     await user.type(screen.getByRole("textbox", { name: "Team name" }), "Room Tiger Team");
@@ -44,6 +45,36 @@ describe("RoomTeamDialog", () => {
     expect(payload.members.some((member: { handle: string }) => member.handle === "qa")).toBe(true);
   });
 
+  it("saves the current room team back into the default template source", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const onSaveDefaultTemplate = vi.fn();
+
+    render(
+      <RoomTeamDialog
+        open
+        snapshot={snapshot}
+        room={room}
+        globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        onSaveDefaultTemplate={onSaveDefaultTemplate}
+      />,
+    );
+
+    await user.clear(screen.getByRole("textbox", { name: "Team name" }));
+    await user.type(screen.getByRole("textbox", { name: "Team name" }), "Default Product Pod");
+    await user.click(screen.getAllByRole("button", { name: /Save as default template/i })[0]!);
+
+    expect(onSaveDefaultTemplate).toHaveBeenCalledTimes(1);
+    expect(onSaveDefaultTemplate.mock.calls[0]?.[0]).toMatchObject({
+      templateId: room.templateId,
+      name: "Default Product Pod",
+      description: snapshot.templates[room.templateId]?.description,
+    });
+  });
+
   it("opens a draft editor immediately after adding a role or an employee", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
@@ -58,6 +89,7 @@ describe("RoomTeamDialog", () => {
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         onClose={vi.fn()}
         onSave={vi.fn()}
+        onSaveDefaultTemplate={vi.fn()}
       />,
     );
 
@@ -88,6 +120,7 @@ describe("RoomTeamDialog", () => {
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         onClose={vi.fn()}
         onSave={vi.fn()}
+        onSaveDefaultTemplate={vi.fn()}
       />,
     );
 
@@ -110,6 +143,7 @@ describe("RoomTeamDialog", () => {
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         onClose={vi.fn()}
         onSave={vi.fn()}
+        onSaveDefaultTemplate={vi.fn()}
       />,
     );
 
@@ -134,6 +168,7 @@ describe("RoomTeamDialog", () => {
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         onClose={vi.fn()}
         onSave={vi.fn()}
+        onSaveDefaultTemplate={vi.fn()}
       />,
     );
 
@@ -184,6 +219,7 @@ describe("RoomTeamDialog", () => {
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         onClose={vi.fn()}
         onSave={vi.fn()}
+        onSaveDefaultTemplate={vi.fn()}
       />,
     );
 
@@ -204,6 +240,7 @@ describe("RoomTeamDialog", () => {
         globalConfig={createDefaultGlobalWorkspaceConfig("/tmp/openaquarium")}
         onClose={vi.fn()}
         onSave={vi.fn()}
+        onSaveDefaultTemplate={vi.fn()}
       />,
     );
 

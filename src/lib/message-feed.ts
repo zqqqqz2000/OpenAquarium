@@ -1,5 +1,6 @@
 import type { ChatMessage, MemberTask, Room, TaskStatus, TeamMember, WorkspaceSnapshot } from "@/domain/model";
 import { extractAddressedMemberIds } from "@/domain/workspace";
+import { resolveChatAuthorActorKind, resolveChatAuthorMemberId } from "@/lib/chat-author";
 import { isVisibleRoomMessage } from "@/lib/message-visibility";
 
 export type FeedTone = "paper" | "postit" | "blueprint" | "correction";
@@ -64,9 +65,20 @@ function buildContextBadge(id: string, label: string, tone: FeedTone): ContextBa
   };
 }
 
+function resolveHumanHandle(snapshot: WorkspaceSnapshot, humanId: string): string | undefined {
+  return snapshot.humans?.[humanId]?.handle;
+}
+
 export function getMessageMentionHandles(snapshot: WorkspaceSnapshot, message: ChatMessage): string[] {
   return uniqueHandles(
-    message.mentionedMemberIds.map((memberId) => snapshot.members[memberId]?.handle).filter((handle): handle is string => Boolean(handle)),
+    [
+      ...message.mentionedMemberIds
+        .map((memberId) => snapshot.members[memberId]?.handle)
+        .filter((handle): handle is string => Boolean(handle)),
+      ...(message.mentionedHumanIds ?? [])
+        .map((humanId) => resolveHumanHandle(snapshot, humanId))
+        .filter((handle): handle is string => Boolean(handle)),
+    ],
   );
 }
 
@@ -87,10 +99,15 @@ export function getMessageRecipientHandles(
     }
 
     return uniqueHandles(
-      message.recipientMemberIds
-        .filter((memberId) => room.memberIds.includes(memberId))
-        .map((memberId) => snapshot.members[memberId]?.handle)
-        .filter((handle): handle is string => Boolean(handle)),
+      [
+        ...message.recipientMemberIds
+          .filter((memberId) => room.memberIds.includes(memberId))
+          .map((memberId) => snapshot.members[memberId]?.handle)
+          .filter((handle): handle is string => Boolean(handle)),
+        ...(message.recipientHumanIds ?? [])
+          .map((humanId) => resolveHumanHandle(snapshot, humanId))
+          .filter((handle): handle is string => Boolean(handle)),
+      ],
     );
   }
 
@@ -103,7 +120,7 @@ export function getMessageRecipientHandles(
     return addressedHandles;
   }
 
-  if (message.author.kind === "user") {
+  if (resolveChatAuthorActorKind(message.author) === "human") {
     const entryMember = snapshot.members[room.entryMemberId];
     return entryMember ? [entryMember.handle] : [];
   }
@@ -144,7 +161,7 @@ export function getMemberHistory(snapshot: WorkspaceSnapshot, room: Room, member
       const assigned = message.mentionedMemberIds.includes(member.id);
       const referenced = (message.quotedMemberIds ?? []).includes(member.id);
       const directed = message.recipientMemberIds.includes(member.id);
-      const authoredByMember = message.author.kind === "member" && message.author.id === member.id;
+      const authoredByMember = resolveChatAuthorMemberId(message.author) === member.id;
 
       if (ownHandlers.length > 0) {
         contextBadges.push(buildContextBadge("accepted", "Accepted", "blueprint"));

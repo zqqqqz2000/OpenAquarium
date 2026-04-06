@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { I18nProvider } from "@/lib/i18n";
 import { AppThemeProvider } from "@/theme/theme-provider";
 import { APP_THEME_STORAGE_KEY } from "@/theme/theme";
 
@@ -38,9 +39,11 @@ describe("AppThemeProvider", () => {
     mockMatchMedia(false);
 
     render(
-      <AppThemeProvider>
-        <ThemeToggle />
-      </AppThemeProvider>,
+      <I18nProvider>
+        <AppThemeProvider>
+          <ThemeToggle />
+        </AppThemeProvider>
+      </I18nProvider>,
     );
 
     expect(screen.getByRole("button", { name: "Light" }).getAttribute("data-state")).toBeNull();
@@ -55,9 +58,11 @@ describe("AppThemeProvider", () => {
     const user = userEvent.setup();
 
     render(
-      <AppThemeProvider>
-        <ThemeToggle />
-      </AppThemeProvider>,
+      <I18nProvider>
+        <AppThemeProvider>
+          <ThemeToggle />
+        </AppThemeProvider>
+      </I18nProvider>,
     );
 
     await user.click(screen.getByRole("button", { name: "Dark" }));

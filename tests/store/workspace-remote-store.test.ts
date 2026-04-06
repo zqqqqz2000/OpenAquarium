@@ -10,6 +10,7 @@ function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
   return {
     getState: () => Promise.resolve({ snapshot, globalConfig: createDefaultGlobalWorkspaceConfig() }),
     pickProjectPath: () => Promise.reject(new Error("not implemented")),
+    inspectProjectPath: () => Promise.reject(new Error("not implemented")),
     createProject: () => Promise.reject(new Error("not implemented")),
     createRoom: () => Promise.reject(new Error("not implemented")),
     deleteProject: () => Promise.reject(new Error("not implemented")),
@@ -142,5 +143,51 @@ describe("workspace remote store", () => {
     expect(store.getState().snapshot).not.toBe(previousSnapshot);
     expect(store.getState().snapshot.rooms[targetRoomId]).toBe(previousSnapshot.rooms[targetRoomId]);
     expect(store.getState().snapshot.members[targetMemberId]).not.toBe(previousSnapshot.members[targetMemberId]);
+  });
+
+  it("delegates manual project path inspection to the runtime client", async () => {
+    const snapshot = createSeedWorkspace();
+    const client = createClient(snapshot);
+    client.inspectProjectPath = vi.fn(async ({ path }) => ({
+      path,
+      projectName: "Manual Project",
+      projectInteractiveDirectory: `${path}/.openaquarium/interactive`,
+      hasOpenAquariumDirectory: false,
+      canImport: false,
+      roomCount: 0,
+      rooms: [],
+    }));
+    const store = createWorkspaceRemoteStore(client);
+
+    await expect(store.getState().inspectProjectPath({ path: "/tmp/manual-project" })).resolves.toMatchObject({
+      path: "/tmp/manual-project",
+      projectName: "Manual Project",
+    });
+    expect(client.inspectProjectPath).toHaveBeenCalledWith({ path: "/tmp/manual-project" });
+  });
+
+  it("forwards authorHumanId and directHumanId through the sendUserMessage facade", async () => {
+    const snapshot = createSeedWorkspace();
+    const client = createClient(snapshot);
+    client.sendUserMessage = vi.fn(async () => snapshot);
+    const store = createWorkspaceRemoteStore(client);
+
+    store.setState({
+      ...store.getState(),
+      snapshot,
+    });
+
+    await store.getState().sendUserMessage("只发给 Bob", {
+      authorHumanId: "human_alice",
+      directHumanId: "human_bob",
+    });
+
+    expect(client.sendUserMessage).toHaveBeenCalledWith({
+      roomId: snapshot.selection.roomId,
+      content: "只发给 Bob",
+      authorHumanId: "human_alice",
+      directHumanId: "human_bob",
+      directMemberId: undefined,
+    });
   });
 });

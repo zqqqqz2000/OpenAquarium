@@ -9,6 +9,7 @@ import type {
   TeamMember,
   TeamMemberBlueprint,
   TeamTemplate,
+  WorkspaceAccount,
   WorkspaceSnapshot,
 } from "../domain/model";
 import { modelMessageSchema } from "ai";
@@ -44,6 +45,7 @@ function normalizeWorkspaceSnapshot(
   snapshot: WorkspaceSnapshot,
 ): WorkspaceSnapshot {
   const legacyPlaceholderCommands = new Set(["clerk-acp", "research-acp"]);
+  const defaultAccountId = "account_default";
 
   const isOpenAICompatibleConversationSummary = (
     value: OpenAICompatibleConversationState["summary"],
@@ -174,6 +176,70 @@ function normalizeWorkspaceSnapshot(
     quotedMemberIds: message.quotedMemberIds ?? [],
   });
 
+  const normalizedAccounts: Record<string, WorkspaceAccount> = (() => {
+    const entries = Object.entries(snapshot.accounts ?? {}).filter(
+      (
+        entry,
+      ): entry is [string, WorkspaceAccount] => !entry[1].archivedAt,
+    );
+    if (entries.length > 0) {
+      return Object.fromEntries(entries);
+    }
+
+    return {
+      [defaultAccountId]: {
+        id: defaultAccountId,
+        displayName: snapshot.currentUserName,
+        handle: "user",
+      },
+    };
+  })();
+
+  const normalizedAccountOrder = dedupeIds(
+    [
+      ...(snapshot.accountOrder?.length ? snapshot.accountOrder : Object.keys(normalizedAccounts)),
+      ...(normalizedAccounts[defaultAccountId] ? [defaultAccountId] : []),
+    ],
+  ).filter((accountId) => Boolean(normalizedAccounts[accountId]));
+
+  const normalizedCurrentAccountId =
+    (snapshot.currentAccountId && normalizedAccounts[snapshot.currentAccountId])
+      ? snapshot.currentAccountId
+      : (normalizedAccounts[defaultAccountId] ? defaultAccountId : normalizedAccountOrder[0]);
+
+  const normalizedHumans = Object.fromEntries(
+    Object.entries(snapshot.humans ?? {}).flatMap(([humanId, human]) => {
+      if (!snapshot.rooms[human.roomId]) {
+        return [];
+      }
+
+      const fallbackAccountId = normalizedCurrentAccountId ?? normalizedAccountOrder[0];
+      if (!fallbackAccountId) {
+        return [];
+      }
+
+      return [[humanId, {
+        ...human,
+        accountId: human.accountId ?? fallbackAccountId,
+      }]];
+    }),
+  );
+
+  const normalizedHumanOrderByRoom = Object.fromEntries(
+    Object.keys(snapshot.rooms).map((roomId) => {
+      const humanIdsFromSnapshot = snapshot.humanOrderByRoom?.[roomId] ?? [];
+      const humanIdsFromHumans = Object.entries(normalizedHumans)
+        .filter(([, human]) => human.roomId === roomId)
+        .map(([humanId]) => humanId);
+
+      return [
+        roomId,
+        dedupeIds([...humanIdsFromSnapshot, ...humanIdsFromHumans])
+          .filter((humanId) => normalizedHumans[humanId]?.roomId === roomId),
+      ];
+    }),
+  );
+
   const normalizedMessageOrderByRoom = Object.fromEntries(
     Object.entries(snapshot.messageOrderByRoom).map(([roomId, messageIds]) => [
       roomId,
@@ -216,8 +282,13 @@ function normalizeWorkspaceSnapshot(
     ...snapshot,
     templates: normalizedTemplates,
     members: normalizedMembers,
+    accounts: normalizedAccounts,
+    accountOrder: normalizedAccountOrder,
+    humans: normalizedHumans,
+    humanOrderByRoom: normalizedHumanOrderByRoom,
     messages: normalizedMessages,
     messageOrderByRoom: normalizedMessageOrderByRoom,
+    currentAccountId: normalizedCurrentAccountId,
   } satisfies WorkspaceSnapshot;
   const normalizedRooms = Object.fromEntries(
     Object.entries(snapshot.rooms).map(([roomId, room]) => [
@@ -303,11 +374,16 @@ function normalizeWorkspaceSnapshot(
     rooms: normalizedRooms,
     templates: normalizedTemplates,
     members: normalizedMembers,
+    accounts: normalizedAccounts,
+    accountOrder: normalizedAccountOrder,
+    humans: normalizedHumans,
+    humanOrderByRoom: normalizedHumanOrderByRoom,
     messages: normalizedMessages,
     messageOrderByRoom: normalizedMessageOrderByRoom,
     watchers: normalizedWatchers,
     taskTraces: snapshot.taskTraces ?? {},
     taskTraceOrderByTask: snapshot.taskTraceOrderByTask ?? {},
+    currentAccountId: normalizedCurrentAccountId,
   };
 }
 

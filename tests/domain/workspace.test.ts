@@ -17,6 +17,7 @@ import {
   postUserMessage,
   pauseWatcherUntilActivity,
   runWatcher,
+  setActiveAccount,
   setEntryMember,
   upsertTaskTrace,
   updateRoomTeam,
@@ -167,6 +168,89 @@ describe("workspace domain", () => {
     expect(snapshot.rooms[roomId].topic).toBe("实现一个可中断的 agent team");
     expect(snapshot.messageOrderByRoom[roomId]).toHaveLength(1);
     expect(snapshot.members[snapshot.rooms[roomId].entryMemberId].activeTaskId).toBeDefined();
+  });
+
+  it("creates a distinct room human when switching the active account", () => {
+    const context = createRuntimeContext();
+    let snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "ACP Lab",
+        templateId: "template-product-pod",
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId;
+    if (!roomId) {
+      throw new Error("Expected a room id");
+    }
+
+    snapshot.accounts = {
+      ...(snapshot.accounts ?? {}),
+      account_alice: {
+        id: "account_alice",
+        displayName: "Alice",
+        handle: "alice",
+      },
+    };
+    snapshot.accountOrder = [...(snapshot.accountOrder ?? []), "account_alice"];
+
+    const next = setActiveAccount(snapshot, "account_alice");
+
+    expect(next.currentAccountId).toBe("account_alice");
+    expect(next.currentUserName).toBe("Alice");
+    expect(next.humanOrderByRoom?.[roomId]).toEqual([
+      "human_room_1_account_default",
+      "human_room_1_account_alice",
+    ]);
+    expect(next.humans?.human_room_1_account_alice?.accountId).toBe("account_alice");
+  });
+
+  it("authors user messages with the active account identity", () => {
+    const context = createRuntimeContext();
+    let snapshot = createProjectWithRoom(
+      createWorkspaceSnapshot(defaultTemplates),
+      {
+        projectName: "ACP Lab",
+        templateId: "template-product-pod",
+      },
+      context,
+    );
+
+    const roomId = snapshot.selection.roomId;
+    if (!roomId) {
+      throw new Error("Expected a room id");
+    }
+
+    snapshot.accounts = {
+      ...(snapshot.accounts ?? {}),
+      account_alice: {
+        id: "account_alice",
+        displayName: "Alice",
+        handle: "alice",
+      },
+    };
+    snapshot.accountOrder = [...(snapshot.accountOrder ?? []), "account_alice"];
+    snapshot = setActiveAccount(snapshot, "account_alice");
+
+    const next = postUserMessage(
+      snapshot,
+      {
+        roomId,
+        content: "hello",
+      },
+      context,
+    );
+
+    const messageId = next.messageOrderByRoom[roomId]?.at(-1);
+    if (!messageId) {
+      throw new Error("Expected a message");
+    }
+
+    expect(next.messages[messageId]?.author.label).toBe("Alice");
+    expect(next.messages[messageId]?.author.handle).toBe("alice");
+    expect(next.messages[messageId]?.author.accountId).toBe("account_alice");
   });
 
   it("routes the first prompt to the entry member and derives a room name", () => {

@@ -27,6 +27,8 @@ import type { ProjectPathInspectionPayload } from "@/lib/runtime-client";
 import { badgeToneProps } from "@/lib/ui-tone";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
 
+type ProjectSource = "workspace" | "path";
+
 export function CreateProjectDialog(props: {
   templates: TeamTemplate[];
   triggerClassName?: string;
@@ -36,24 +38,57 @@ export function CreateProjectDialog(props: {
   const { templates, triggerClassName, triggerMode = "default", disabled = false } = props;
   const navigate = useNavigate();
   const createProject = useWorkspaceStore((state) => state.createProject);
+  const inspectProjectPath = useWorkspaceStore((state) => state.inspectProjectPath);
   const pickProjectPath = useWorkspaceStore((state) => state.pickProjectPath);
   const [open, setOpen] = useState(false);
   const [projectName, setProjectName] = useState("Untitled Project");
+  const [projectSource, setProjectSource] = useState<ProjectSource>("workspace");
   const [projectPath, setProjectPath] = useState("");
   const [projectPathInspection, setProjectPathInspection] = useState<ProjectPathInspectionPayload | undefined>();
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [actionError, setActionError] = useState<string | undefined>();
+  const [inspectingPath, setInspectingPath] = useState(false);
   const [pickingPath, setPickingPath] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const creatingProjectRef = useRef(false);
-  const selectedTemplate = templates.find((template) => template.id === templateId);
+  const resolvedTemplateId = templates.some((template) => template.id === templateId) ? templateId : (templates[0]?.id ?? "");
+  const selectedTemplate = templates.find((template) => template.id === resolvedTemplateId);
   const selectedTemplateMemberCount = selectedTemplate?.members.length ?? 0;
-  const importingExistingProject = projectPathInspection?.canImport === true;
+  const effectiveProjectPath = projectSource === "path" ? projectPath.trim() : "";
+  const canInspectProjectPath = projectSource === "path" && effectiveProjectPath.length > 0;
+  const importingExistingProject = effectiveProjectPath.length > 0 && projectPathInspection?.canImport === true;
+
+  const handleInspectProjectPath = async (pathValue: string): Promise<ProjectPathInspectionPayload | undefined> => {
+    const trimmedPath = pathValue.trim();
+    if (trimmedPath.length === 0) {
+      setProjectPathInspection(undefined);
+      return undefined;
+    }
+
+    try {
+      setActionError(undefined);
+      setInspectingPath(true);
+      const inspection = await inspectProjectPath({ path: trimmedPath });
+      setProjectPathInspection(inspection);
+      if (inspection.projectName.trim()) {
+        setProjectName(inspection.projectName.trim());
+      }
+      return inspection;
+    } catch (error) {
+      setProjectPathInspection(undefined);
+      setActionError(error instanceof Error ? error.message : String(error));
+      return undefined;
+    } finally {
+      setInspectingPath(false);
+    }
+  };
+
   const handlePickProjectPath = (): void => {
     void (async () => {
       try {
         setActionError(undefined);
         setPickingPath(true);
+        setProjectSource("path");
         const selection = await pickProjectPath();
         if (typeof selection.path === "string" && selection.path.trim().length > 0) {
           setProjectPath(selection.path);
@@ -71,12 +106,7 @@ export function CreateProjectDialog(props: {
   };
 
   const handleCreateProject = (): void => {
-    if (
-      creatingProjectRef.current
-      || disabled
-      || projectName.trim().length === 0
-      || (!importingExistingProject && templateId.length === 0)
-    ) {
+    if (creatingProjectRef.current || disabled || projectName.trim().length === 0) {
       return;
     }
 
@@ -85,10 +115,22 @@ export function CreateProjectDialog(props: {
     void (async () => {
       try {
         setActionError(undefined);
+        const resolvedInspection = effectiveProjectPath.length > 0
+          ? await handleInspectProjectPath(effectiveProjectPath)
+          : undefined;
+        const canImportExistingProject = resolvedInspection?.canImport === true;
+
+        if (projectSource === "path" && effectiveProjectPath.length === 0) {
+          throw new Error("Project path is required when using a custom path source.");
+        }
+        if (!canImportExistingProject && resolvedTemplateId.length === 0) {
+          throw new Error("Team template is required when creating a new project.");
+        }
+
         const next = await createProject({
           projectName,
-          templateId: importingExistingProject ? undefined : templateId,
-          path: projectPath,
+          templateId: canImportExistingProject ? undefined : resolvedTemplateId,
+          path: effectiveProjectPath || undefined,
         });
         startTransition(() => {
           void navigate({
@@ -100,6 +142,7 @@ export function CreateProjectDialog(props: {
           });
         });
         setOpen(false);
+        setProjectSource("workspace");
         setProjectPath("");
         setProjectPathInspection(undefined);
       } catch (error) {
@@ -147,10 +190,57 @@ export function CreateProjectDialog(props: {
               <Input value={projectName} onChange={(event) => setProjectName(event.currentTarget.value)} />
             </label>
             <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">Project source</span>
+              <Select value={projectSource} onValueChange={(value) => setProjectSource(value as ProjectSource)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select a source" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="workspace">OpenAquarium workspace</SelectItem>
+                  <SelectItem value="path">Custom filesystem path</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-xs leading-5 text-muted-foreground">
+                默认直接在当前 OpenAquarium 工作区创建；切到自定义路径时可在网页内输入或浏览目录。
+              </span>
+            </label>
+            <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">Project path</span>
               <div className="flex flex-wrap items-center gap-2">
-                <Input readOnly value={projectPath} placeholder="未选择目录" className="flex-1" />
-                <Button type="button" variant="outline" onClick={handlePickProjectPath} disabled={disabled || pickingPath || creatingProject}>
+                <Input
+                  value={projectPath}
+                  onChange={(event) => {
+                    setProjectPath(event.currentTarget.value);
+                    setProjectPathInspection(undefined);
+                    setActionError(undefined);
+                  }}
+                  onBlur={() => {
+                    if (projectSource !== "path") {
+                      return;
+                    }
+                    void handleInspectProjectPath(projectPath);
+                  }}
+                  placeholder={projectSource === "path" ? "输入项目绝对路径或相对路径" : "使用当前 OpenAquarium workspace"}
+                  className="flex-1"
+                  disabled={disabled || creatingProject || projectSource !== "path"}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label="Inspect path"
+                  onClick={() => {
+                    void handleInspectProjectPath(projectPath);
+                  }}
+                  disabled={disabled || !canInspectProjectPath || pickingPath || inspectingPath || creatingProject}
+                >
+                  {inspectingPath ? "Inspecting…" : "Inspect path"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handlePickProjectPath}
+                  disabled={disabled || pickingPath || inspectingPath || creatingProject || projectSource !== "path"}
+                >
                   <FolderSearch size={16} />
                   {pickingPath ? "选择中…" : "选择文件夹"}
                 </Button>
@@ -169,13 +259,17 @@ export function CreateProjectDialog(props: {
                 ) : null}
               </div>
               <span className="text-xs leading-5 text-muted-foreground">
-                可选。点击选择目录后，ACP session 默认会从这个路径启动。
+                {projectSource === "path"
+                  ? inspectingPath
+                    ? "正在检查这个路径是否已有 OpenAquarium room context…"
+                    : "输入路径后会在提交前自动检查；如路径内已有 room context，将切到导入流程。"
+                  : "保持为空时，ACP session 默认从当前 OpenAquarium workspace 启动。"}
               </span>
             </label>
             {!importingExistingProject ? (
               <label className="flex flex-col gap-2">
                 <span className="text-sm font-medium">Team template</span>
-                <Select value={templateId} onValueChange={setTemplateId}>
+                <Select value={resolvedTemplateId} onValueChange={setTemplateId}>
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select a team template" />
                   </SelectTrigger>
@@ -203,7 +297,7 @@ export function CreateProjectDialog(props: {
                     <Badge variant="outline">{projectPathInspection.roomCount} rooms</Badge>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge variant="outline">{projectPath.trim().length > 0 ? "ACP cwd follows project path" : "ACP cwd uses OA workspace"}</Badge>
+                    <Badge variant="outline">{effectiveProjectPath.length > 0 ? "ACP cwd follows project path" : "ACP cwd uses OA workspace"}</Badge>
                     <Badge variant="outline">team restored from room state</Badge>
                   </div>
                   <div className="mt-3 flex flex-col gap-2">
@@ -232,7 +326,7 @@ export function CreateProjectDialog(props: {
                     <Badge variant="outline">{selectedTemplateMemberCount} members</Badge>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge variant="outline">{projectPath.trim().length > 0 ? "ACP cwd follows project path" : "ACP cwd uses OA workspace"}</Badge>
+                    <Badge variant="outline">{effectiveProjectPath.length > 0 ? "ACP cwd follows project path" : "ACP cwd uses OA workspace"}</Badge>
                     <Badge variant="outline">{selectedTemplate?.accentTone ?? "paper"}</Badge>
                   </div>
                   {projectPathInspection?.hasOpenAquariumDirectory ? (
@@ -264,7 +358,8 @@ export function CreateProjectDialog(props: {
                   disabled
                   || creatingProject
                   || projectName.trim().length === 0
-                  || (!importingExistingProject && templateId.length === 0)
+                  || (projectSource === "path" && effectiveProjectPath.length === 0)
+                  || (!importingExistingProject && resolvedTemplateId.length === 0)
                 }
               >
                 {creatingProject

@@ -7,9 +7,11 @@ import type { Project, Room, TeamTemplate } from "@/domain/model";
 import { RunningMembersHoverCard, type RunningMemberPreview } from "@/components/members/running-members-hover-card";
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog";
 import { CreateRoomDialog } from "@/components/projects/create-room-dialog";
+import { LocaleToggle } from "@/components/theme/locale-toggle";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/lib/i18n";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RoomWatcherPauseSummary } from "@/lib/watcher-state";
 import { badgeToneProps, compactBadgeClassName } from "@/lib/ui-tone";
@@ -469,6 +471,7 @@ export function Sidebar(props: {
     onOpenMember,
   } = props;
   const actionsDisabled = !connected || loading;
+  const { t } = useI18n();
   const [expandedProjectOverrides, setExpandedProjectOverrides] = useState<Record<string, boolean>>({});
   const [templatesExpanded, setTemplatesExpanded] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{ kind: "project" | "room" | "template"; id: string } | undefined>(undefined);
@@ -494,7 +497,7 @@ export function Sidebar(props: {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
-                    aria-label={connected ? "Runtime online" : "Runtime offline"}
+                    aria-label={connected ? t("sidebar.runtimeOnline") : t("sidebar.runtimeOffline")}
                     className={cn(
                       "inline-flex size-2.5 shrink-0 rounded-full border border-black/5",
                       connected
@@ -503,17 +506,18 @@ export function Sidebar(props: {
                     )}
                   />
                 </TooltipTrigger>
-                <TooltipContent side="bottom">{connected ? "Runtime online" : "Runtime offline"}</TooltipContent>
+                <TooltipContent side="bottom">{connected ? t("sidebar.runtimeOnline") : t("sidebar.runtimeOffline")}</TooltipContent>
               </Tooltip>
-              {loading ? <Badge variant="secondary">Loading…</Badge> : null}
+              {loading ? <Badge variant="secondary">{t("sidebar.loading")}</Badge> : null}
             </div>
-            <p className="m-0 text-xs text-muted-foreground">ACP multi-agent workspace.</p>
+            <p className="m-0 text-xs text-muted-foreground">{t("sidebar.subtitle")}</p>
           </div>
         </div>
         <ThemeToggle className="w-full" />
+        <LocaleToggle className="w-full" />
         {!connected ? (
           <p className="m-0 text-xs leading-5 text-muted-foreground">
-            启动本地 runtime：<span className="font-mono">bun run server</span>
+            {t("sidebar.startRuntime")} <span className="font-mono">bun run server</span>
           </p>
         ) : null}
         {error ? <p className="m-0 text-xs leading-5 text-destructive">{error}</p> : null}
@@ -524,7 +528,7 @@ export function Sidebar(props: {
           <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
             <div className="flex min-w-0 items-center gap-2">
               <FolderKanban size={18} />
-              <p className="m-0 text-lg font-semibold tracking-tight">Projects</p>
+              <p className="m-0 text-lg font-semibold tracking-tight">{t("sidebar.projects")}</p>
               <Badge variant="outline">{projects.length}</Badge>
             </div>
             <CreateProjectDialog templates={templates} triggerMode="icon" disabled={actionsDisabled} />

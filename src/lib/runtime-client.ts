@@ -57,6 +57,10 @@ export interface ProjectPathInspectionPayload {
   rooms: ProjectPathInspectionRoomPayload[];
 }
 
+export interface InspectProjectPathInput {
+  path: string;
+}
+
 export function resolveWorkspaceRuntimeBaseUrl(): string {
   const configured = import.meta.env.VITE_OA_SERVER_URL as string | undefined;
   return configured ?? "http://127.0.0.1:4301";
@@ -105,6 +109,18 @@ export class WorkspaceRuntimeClient {
     return parseJson(
       await fetch(`${this.baseUrl}/api/system/project-path`, {
         method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source: "picker" }),
+      }),
+    );
+  }
+
+  async inspectProjectPath(input: InspectProjectPathInput): Promise<ProjectPathInspectionPayload> {
+    return parseJson(
+      await fetch(`${this.baseUrl}/api/system/project-path/inspect`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
       }),
     );
   }
@@ -165,7 +181,13 @@ export class WorkspaceRuntimeClient {
     return payload.snapshot;
   }
 
-  async sendUserMessage(input: { roomId: string; content: string; directMemberId?: string }): Promise<WorkspaceSnapshot> {
+  async sendUserMessage(input: {
+    roomId: string;
+    content: string;
+    authorHumanId?: string;
+    directMemberId?: string;
+    directHumanId?: string;
+  }): Promise<WorkspaceSnapshot> {
     const payload = await parseJson<{ snapshot: WorkspaceSnapshot }>(
       await fetch(`${this.baseUrl}/api/rooms/${input.roomId}/messages`, {
         method: "POST",
