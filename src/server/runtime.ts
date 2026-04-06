@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { watch, type FSWatcher } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import type {
   GlobalWorkspaceConfig,
@@ -88,6 +89,11 @@ import {
 import { importProjectFromRoomContexts } from "./room-context-import";
 import { createDefaultWorkspaceSnapshot } from "../lib/default-workspace";
 import { resolveDirectTarget } from "../lib/direct-target";
+import {
+  buildUserChatImageMarkdown,
+  resolveUserChatImageContentType,
+  sanitizeUserChatAssetFileName,
+} from "../lib/chat/user-chat-assets";
 import { buildProviderModelProfileFromDraft, type ModelProfileDraft } from "../lib/global-config-draft";
 import { isVisibleMemberRoomMessage } from "../lib/message-visibility";
 import { CODEX_ACP_THINKING_DEPTH_ENV_KEY } from "../lib/acp/providers/codex-session";
@@ -100,6 +106,40 @@ import { inspectLocalImage } from "./image-inspector";
 import { resolveAccessiblePath, resolveExecutorDirectories } from "./member-workspace-tools";
 
 type SnapshotListener = (snapshot: WorkspaceSnapshot) => void;
+
+function collectStreamDescendantTaskIds(
+  snapshot: WorkspaceSnapshot,
+  rootMessageId: string,
+): Set<string> {
+  const relatedMessageIds = new Set<string>([rootMessageId]);
+  const relatedTaskIds = new Set<string>();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+
+    Object.values(snapshot.tasks).forEach((task) => {
+      if (relatedTaskIds.has(task.id) || !relatedMessageIds.has(task.sourceMessageId)) {
+        return;
+      }
+
+      relatedTaskIds.add(task.id);
+      changed = true;
+    });
+
+    Object.values(snapshot.messages).forEach((message) => {
+      if (!message.taskId || !relatedTaskIds.has(message.taskId) || relatedMessageIds.has(message.id)) {
+        return;
+      }
+
+      relatedMessageIds.add(message.id);
+      changed = true;
+    });
+  }
+
+  return relatedTaskIds;
+}
+
 type TemplateGenerator = (brief: string, args: { workspaceRoot: string; references: TeamTemplate[] }) => Promise<TeamTemplate>;
 
 const STALE_RUNNING_TASK_MAX_AGE_MS = 5 * 60 * 1000;
@@ -778,6 +818,62 @@ export class WorkspaceRuntime {
     return inspectProjectRoomContext(normalizedPath);
   }
 
+  async writeRoomAsset(input: {
+    roomId: string;
+    fileName: string;
+    contentType?: string;
+    body: Buffer;
+  }): Promise<{
+    path: string;
+    markdown: string;
+  }> {
+    const room = this.snapshot.rooms[input.roomId];
+    if (!room) {
+      throw new Error(`Unknown room "${input.roomId}"`);
+    }
+
+    const project = this.snapshot.projects[room.projectId];
+    if (!project) {
+      throw new Error(`Unknown project "${room.projectId}"`);
+    }
+
+    if (input.body.byteLength === 0) {
+      throw new Error("Asset body is empty");
+    }
+
+    const resolvedContentType = resolveUserChatImageContentType(input.contentType, input.fileName);
+    if (!resolvedContentType) {
+      throw new Error("Only PNG, JPEG, GIF, and WebP images are supported.");
+    }
+
+    const projectRoot = resolveProjectWorkingDirectory(project, this.workspaceRoot);
+    const sanitizedFileName = sanitizeUserChatAssetFileName(input.fileName, resolvedContentType);
+    const timestamp = new Date().toISOString().replace(/[-:.TZ]/gu, "").slice(0, 14);
+    const uniqueFileName = `${timestamp}-${randomUUID().slice(0, 8)}-${sanitizedFileName}`;
+    const relativeAssetPath = path.posix.join(
+      ".openaquarium",
+      "interactive",
+      "rooms",
+      room.id,
+      "assets",
+      "user-chat",
+      uniqueFileName,
+    );
+    const absoluteAssetPath = path.join(projectRoot, relativeAssetPath);
+
+    await mkdir(path.dirname(absoluteAssetPath), { recursive: true });
+    await writeFile(absoluteAssetPath, input.body);
+
+    const roomAssetPath = `./${relativeAssetPath}`;
+    return {
+      path: roomAssetPath,
+      markdown: buildUserChatImageMarkdown({
+        assetPath: roomAssetPath,
+        fileName: sanitizedFileName,
+      }),
+    };
+  }
+
   async readRoomAsset(input: {
     roomId: string;
     filePath: string;
@@ -949,6 +1045,9 @@ export class WorkspaceRuntime {
       this.context,
     );
     const nextTaskIds = Object.keys(next.tasks).filter((taskId) => !previous.tasks[taskId] && next.tasks[taskId]?.status === "running");
+    const rootMessageId = Object.keys(next.messages).find(
+      (messageId) => !previous.messages[messageId] && next.messages[messageId]?.author.kind === "user",
+    );
 
     if (nextTaskIds.length === 0) {
       await this.applySnapshot(previous, next);
@@ -994,8 +1093,33 @@ export class WorkspaceRuntime {
       ),
     );
 
+    const settled = rootMessageId
+      ? new Promise<void>((resolve) => {
+          const maybeResolve = (snapshot: WorkspaceSnapshot): void => {
+            const relatedTaskIds = collectStreamDescendantTaskIds(snapshot, rootMessageId);
+            if (relatedTaskIds.size === 0) {
+              return;
+            }
+
+            const hasRunningTask = [...relatedTaskIds].some(
+              (taskId) => snapshot.tasks[taskId]?.status === "running",
+            );
+            if (!hasRunningTask) {
+              unsubscribe();
+              resolve();
+            }
+          };
+
+          const unsubscribe = this.subscribe((snapshot) => {
+            maybeResolve(snapshot);
+          });
+
+          maybeResolve(this.snapshot);
+        })
+      : completion;
+
     await this.applySnapshot(previous, next);
-    await completion.finally(() => {
+    await Promise.all([completion, settled]).finally(() => {
       routes.forEach((route) => {
         this.taskObservers.delete(route.taskId);
       });
@@ -1451,6 +1575,8 @@ export class WorkspaceRuntime {
     }
 
     this.cleanupRemovedRuntimeState(previous, prepared);
+    this.snapshot = compactWorkspaceSnapshot(this.applyWatcherRoomSuspensions(prepared));
+
     await syncRoomTranscriptFiles({
       workspaceRoot: this.workspaceRoot,
       previous,
@@ -1465,7 +1591,6 @@ export class WorkspaceRuntime {
       workspaceRoot: this.workspaceRoot,
       next: prepared,
     });
-    this.snapshot = compactWorkspaceSnapshot(this.applyWatcherRoomSuspensions(prepared));
     await this.persistImmediately(this.snapshot);
     this.logger?.info("snapshot-applied", summarizeWorkspaceSnapshot(this.snapshot));
     this.syncWatchers();

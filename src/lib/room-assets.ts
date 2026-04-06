@@ -15,16 +15,32 @@ export function isRoomAssetUrl(value: string): boolean {
   return !EXTERNAL_URL_PATTERN.test(normalized);
 }
 
+export function normalizeRoomAssetPath(filePath: string): string {
+  const normalized = filePath.trim();
+
+  if (!normalized || normalized.startsWith("//")) {
+    return normalized;
+  }
+
+  if (normalized.startsWith("/")) {
+    return `.${normalized}`;
+  }
+
+  return normalized;
+}
+
 export function resolveRoomAssetUrl(
   roomId: string | undefined,
   filePath: string,
   baseUrl = resolveWorkspaceRuntimeBaseUrl(),
 ): string {
-  if (!roomId || !isRoomAssetUrl(filePath)) {
+  const normalizedPath = normalizeRoomAssetPath(filePath);
+
+  if (!roomId || !isRoomAssetUrl(normalizedPath)) {
     return filePath;
   }
 
   const url = new URL(`${baseUrl}/api/rooms/${roomId}/assets`);
-  url.searchParams.set("path", filePath);
+  url.searchParams.set("path", normalizedPath);
   return url.toString();
 }

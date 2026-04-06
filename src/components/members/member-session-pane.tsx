@@ -673,6 +673,7 @@ export function MemberSessionPane(props: {
           <ChatComposer
             className="py-0"
             contentClassName="gap-2 p-0"
+            roomId={room.id}
             textareaClassName="min-h-12"
             connected={connected && canSendDirectMessage}
             error={canSendDirectMessage ? error : "当前 session 不支持直接发消息。"}

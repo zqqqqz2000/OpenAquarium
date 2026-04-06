@@ -48,6 +48,15 @@ async function readJson<T>(request: IncomingMessage): Promise<T> {
   return (body ? JSON.parse(body) : {}) as T;
 }
 
+async function readRequestBodyBuffer(request: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(normalizeChunk(chunk as Buffer | string | Uint8Array));
+  }
+
+  return Buffer.concat(chunks);
+}
+
 function sendJson(response: ServerResponse, statusCode: number, payload: JsonPayload): void {
   response.statusCode = statusCode;
   response.setHeader("content-type", "application/json; charset=utf-8");
@@ -745,6 +754,36 @@ export async function startWorkspaceHttpServer(args: {
       }
 
       const roomAssetMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/assets$/u);
+      if (request.method === "POST" && roomAssetMatch) {
+        const [, roomId] = roomAssetMatch;
+        const fileName = url.searchParams.get("fileName");
+
+        if (!roomId || !fileName) {
+          sendJson(response, 400, { error: "Missing room id or file name" });
+          return;
+        }
+
+        const body = await readRequestBodyBuffer(request);
+        if (body.byteLength === 0) {
+          sendJson(response, 400, { error: "Missing asset body" });
+          return;
+        }
+
+        sendJson(
+          response,
+          200,
+          await args.runtime.writeRoomAsset({
+            roomId,
+            fileName,
+            contentType: Array.isArray(request.headers["content-type"])
+              ? request.headers["content-type"][0]
+              : request.headers["content-type"],
+            body,
+          }),
+        );
+        return;
+      }
+
       if (request.method === "GET" && roomAssetMatch) {
         const [, roomId] = roomAssetMatch;
         const filePath = url.searchParams.get("path");

@@ -99,6 +99,8 @@ describe("runtime room context integration", () => {
       path.join(".openaquarium", "interactive", "rooms", room.id, "interactive", "main.aqtree.xml"),
     );
     expect(todoTreeXml).toContain("<aqtree");
+    expect(todoTreeXml).toContain('id="root"');
+    expect(todoTreeXml).toContain('status="todo"');
   });
 
   it("imports an existing project path without requiring a team template", async () => {

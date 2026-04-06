@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -172,6 +172,113 @@ describe("ChatComposer", () => {
     await user.type(textbox, "继续发给别的 member。");
 
     expect(button).toBeEnabled();
+  });
+
+  it("uploads image files and appends room asset markdown into the composer", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const onUploadFiles = vi.fn(async () => [
+      {
+        path: "./.openaquarium/interactive/rooms/room_1/assets/user-chat/uploaded-diagram.png",
+        markdown: "![uploaded diagram](./.openaquarium/interactive/rooms/room_1/assets/user-chat/uploaded-diagram.png)",
+      },
+    ]);
+
+    render(
+      <ChatComposer
+        connected
+        error={undefined}
+        members={members}
+        onSend={vi.fn()}
+        onUploadFiles={onUploadFiles}
+        roomId={room.id}
+      />,
+    );
+
+    const uploadInput = screen.getByLabelText("Upload images");
+    const file = new File(["png-image"], "uploaded diagram.png", { type: "image/png" });
+
+    await user.upload(uploadInput, file);
+
+    expect(onUploadFiles).toHaveBeenCalledTimes(1);
+    const uploadedFilesCall = onUploadFiles.mock.calls.at(0);
+    expect(uploadedFilesCall?.at(0)).toHaveLength(1);
+    expect(screen.getByRole("textbox")).toHaveValue(
+      "![uploaded diagram](./.openaquarium/interactive/rooms/room_1/assets/user-chat/uploaded-diagram.png)",
+    );
+    expect(await screen.findByText("Image preview")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "uploaded diagram" })).toHaveAttribute(
+      "src",
+      expect.stringContaining(`/api/rooms/${room.id}/assets?path=`),
+    );
+  });
+
+  it("intercepts pasted images, uploads them, and inserts markdown into the composer", async () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const onUploadFiles = vi.fn(async () => [
+      {
+        path: "./.openaquarium/interactive/rooms/room_1/assets/user-chat/pasted-image.png",
+        markdown: "![pasted image](./.openaquarium/interactive/rooms/room_1/assets/user-chat/pasted-image.png)",
+      },
+    ]);
+
+    render(
+      <ChatComposer
+        connected
+        error={undefined}
+        members={members}
+        onSend={vi.fn()}
+        onUploadFiles={onUploadFiles}
+        roomId={room.id}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox");
+    const file = new File(["png-image"], "pasted image.png", { type: "image/png" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [file],
+        items: [],
+      },
+    });
+
+    expect(onUploadFiles).toHaveBeenCalledTimes(1);
+    expect(await screen.findByDisplayValue(
+      "![pasted image](./.openaquarium/interactive/rooms/room_1/assets/user-chat/pasted-image.png)",
+    )).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: "pasted image" })).toBeInTheDocument();
+  });
+
+  it("shows a clear degradation error for unsupported pasted files", async () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const onUploadFiles = vi.fn();
+
+    render(
+      <ChatComposer
+        connected
+        error={undefined}
+        members={members}
+        onSend={vi.fn()}
+        onUploadFiles={onUploadFiles}
+      />,
+    );
+
+    fireEvent.paste(screen.getByRole("textbox"), {
+      clipboardData: {
+        files: [new File(["plain text"], "note.txt", { type: "text/plain" })],
+        items: [],
+      },
+    });
+
+    expect(onUploadFiles).not.toHaveBeenCalled();
+    expect(await screen.findByText("Only PNG, JPEG, GIF, and WebP images are supported.")).toBeInTheDocument();
   });
 
   it("can receive a preferred direct target and focus signal from the parent view", () => {

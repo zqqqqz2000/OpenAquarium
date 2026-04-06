@@ -52,6 +52,9 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toContain(`prompt: ${member.prompt}`);
     expect(prompt).toContain("[AqTree]");
     expect(prompt).toContain("*.aqtree.xml");
+    expect(prompt).toContain("Treat any node with child <node> elements as a category node");
+    expect(prompt).toContain("explicit progress wins");
+    expect(prompt).toContain("subtree progress must be derived from descendant executable leaf nodes");
     expect(prompt).toContain("Provider bindings are intentionally not exported");
   });
 

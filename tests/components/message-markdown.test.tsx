@@ -68,7 +68,7 @@ describe("MessageMarkdown", () => {
       "http://127.0.0.1:4301/api/rooms/room-rich/assets?path=",
     );
     expect(decodeURIComponent(inlineImage.getAttribute("src") ?? "")).toContain(
-      "/artifacts/plan.png",
+      "./artifacts/plan.png",
     );
 
     await user.click(screen.getByRole("button", { name: "Open image preview: 流程图" }));

@@ -204,6 +204,42 @@ describe("member workspace tools", () => {
     expect(output.output).toContain("later");
   });
 
+  it("waits briefly for delayed terminal output when read_thread_terminal is called immediately", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-member-tools-read-terminal-immediate-"));
+    const tools = createWorkspaceTools({
+      request: createRequest(workspaceRoot),
+      host: createHost(),
+      projectWorkingDirectory: workspaceRoot,
+      accessibleRoots: [workspaceRoot],
+      terminalRegistry: new TerminalRegistry(),
+    });
+    const execCommand = getToolExecutor<{
+      cmd: string;
+      shell?: string;
+      login?: boolean;
+      yield_time_ms: number;
+      max_output_tokens: number;
+    }, {
+      session_id: string;
+    }>(tools.exec_command);
+    const readThreadTerminal = getToolExecutor<Record<string, never>, {
+      output: string;
+      running: boolean;
+    }>(tools.read_thread_terminal);
+
+    await execCommand({
+      cmd: buildNodeCommand("setTimeout(() => process.stdout.write('later-now\\n'), 60); setTimeout(() => process.exit(0), 220);"),
+      shell: "/bin/zsh",
+      login: false,
+      yield_time_ms: 10,
+      max_output_tokens: 400,
+    });
+
+    const output = await readThreadTerminal({});
+    expect(output.running).toBe(true);
+    expect(output.output).toContain("later-now");
+  });
+
   it("applies structured patches inside the workspace root", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-member-tools-patch-"));
     const filePath = path.join(workspaceRoot, "notes.txt");

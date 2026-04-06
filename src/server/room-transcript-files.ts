@@ -29,6 +29,7 @@ function formatReferenceHandles(message: ChatMessage, snapshot: WorkspaceSnapsho
 function formatTranscriptEntry(snapshot: WorkspaceSnapshot, message: ChatMessage): string {
   const lines = [
     `- [${message.createdAt}] ${message.author.label} (${message.transport}/${message.status})`,
+    `  <!-- messageId: ${message.id} -->`,
     `  ${message.content.replace(/\n/gu, "\n  ")}`,
     ...formatHandles("  assignments", message.mentionedMemberIds, snapshot, "@>"),
     ...formatReferenceHandles(message, snapshot).map((line) => `  ${line}`),

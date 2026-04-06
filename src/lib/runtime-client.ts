@@ -13,6 +13,7 @@ import type {
   WorkspaceSnapshot,
 } from "@/domain/model";
 import type { ModelProfileDraft } from "@/lib/global-config-draft";
+import type { UserChatAssetUploadResult } from "@/lib/chat/user-chat-assets";
 
 export type WatcherRunOutcome = "triggered" | "busy" | "disabled" | "suspended" | "baselined" | "idle";
 
@@ -201,6 +202,26 @@ export class WorkspaceRuntimeClient {
     const url = new URL(`${this.baseUrl}/api/rooms/${roomId}/assets`);
     url.searchParams.set("path", filePath);
     return url.toString();
+  }
+
+  async uploadRoomAsset(input: {
+    roomId: string;
+    file: Blob;
+    fileName: string;
+    contentType?: string;
+  }): Promise<UserChatAssetUploadResult> {
+    const url = new URL(`${this.baseUrl}/api/rooms/${input.roomId}/assets`);
+    url.searchParams.set("fileName", input.fileName);
+
+    return parseJson(
+      await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": input.contentType?.trim() || "application/octet-stream",
+        },
+        body: input.file,
+      }),
+    );
   }
 
   async updatePrompt(memberId: string, prompt: string): Promise<WorkspaceSnapshot> {

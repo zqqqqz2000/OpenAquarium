@@ -70,6 +70,9 @@ describe("room context files", () => {
       path.join(".openaquarium", "interactive", "rooms", room.id, "interactive", "main.aqtree.xml"),
     );
     expect(todoTreeXml).toContain("<aqtree");
+    expect(todoTreeXml).toContain('id="root"');
+    expect(todoTreeXml).toContain('id="root" title="');
+    expect(todoTreeXml).toContain('status="todo"');
     expect(todoTreeXml).toContain('title="In Progress"');
   });
 

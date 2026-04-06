@@ -623,6 +623,25 @@ export function ChatPane(props: {
     members,
     snapshot,
   });
+  const uploadRoomAssets = useCallback(
+    async (files: File[]) => {
+      if (!room) {
+        throw new Error("No room selected");
+      }
+
+      return Promise.all(
+        files.map((file) =>
+          runtimeClient.uploadRoomAsset({
+            roomId: room.id,
+            file,
+            fileName: file.name,
+            contentType: file.type,
+          }),
+        ),
+      );
+    },
+    [room, runtimeClient],
+  );
   const membersNeedingProviderAssociation = useMemo(
     () =>
       members.filter((member) =>
@@ -1309,11 +1328,13 @@ export function ChatPane(props: {
           <ChatComposer
             className="shrink-0 py-0"
             contentClassName="gap-2 p-0"
+            roomId={room?.id}
             textareaClassName="min-h-16"
             connected={connected}
             error={error}
             members={members}
             onSend={roomChat.sendMessage}
+            onUploadFiles={room ? uploadRoomAssets : undefined}
             sending={roomChat.hasActiveStreams}
             draftKey={room ? `room:${room.id}` : undefined}
           />

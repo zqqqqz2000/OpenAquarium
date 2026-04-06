@@ -133,6 +133,7 @@ function parseTranscriptEntry(args: {
   const contentLines: string[] = [];
   const mentionedMemberIds: string[] = [];
   const quotedMemberIds: string[] = [];
+  let messageId: MessageId | undefined;
 
   restLines.forEach((line) => {
     if (!line.startsWith("  ")) {
@@ -140,6 +141,12 @@ function parseTranscriptEntry(args: {
     }
 
     const body = line.slice(2);
+    const messageIdMatch = /^<!-- messageId: (.+?) -->$/u.exec(body);
+    if (messageIdMatch?.[1]) {
+      messageId = messageIdMatch[1];
+      return;
+    }
+
     if (body.startsWith("assignments: ")) {
       parseHandleTokens(body.slice("assignments: ".length)).forEach((handle) => {
         const memberId = resolveMemberIdByHandleOrName(snapshot, room, handle);
@@ -164,7 +171,7 @@ function parseTranscriptEntry(args: {
   });
 
   return {
-    id: `history-md:${room.id}:${entryIndex}`,
+    id: messageId ?? `history-md:${room.id}:${entryIndex}`,
     roomId: room.id,
     author: resolveTranscriptAuthor(snapshot, room, authorLabel),
     content: contentLines.join("\n"),

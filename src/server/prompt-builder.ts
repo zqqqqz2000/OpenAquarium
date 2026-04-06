@@ -398,6 +398,9 @@ function buildTodoTreePromptSections(
     "Use XML with a single <aqtree> root and nested <node> elements to represent the tree. Legacy <aqtodo> roots may still exist and should be treated as compatible.",
     "Recommended node attributes: id, title, status (todo|in_progress|blocked|done), member, priority, tags, progress.",
     "Supported node metadata children: <note>, <details>, <code language=\"...\">...</code>, <image src=\"...\" alt=\"...\" />, and nested <node> children.",
+    "Treat any node with child <node> elements as a category node: use it to group related work for readers, and keep executable work in descendant leaf nodes.",
+    "For a single node, explicit progress wins; otherwise use the built-in fallback done=100, in_progress=50, and todo/blocked=0.",
+    "For a category node, subtree progress must be derived from descendant executable leaf nodes using the average of their completion, so prompts, runtime, and UI all show the same percentage.",
     "Keep the tree user-facing: use it to track progress, blockers, ownership, screenshots, and code evidence. Edit the XML file directly when you need to update state.",
   ];
 }

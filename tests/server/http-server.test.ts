@@ -927,6 +927,64 @@ describe("workspace http api routing", () => {
     }
   });
 
+  it("uploads room chat images as room assets and serves them back through the asset route", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-upload-asset-"));
+    const projectRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-http-upload-asset-project-"),
+    );
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Uploaded Asset API",
+      templateId: "template-product-pod",
+      path: projectRoot,
+    });
+    const imageBody = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9oZx2kcAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const server = await startWorkspaceHttpServer({
+      runtime,
+      host: "127.0.0.1",
+      port: await reservePort(),
+    });
+
+    try {
+      const uploadResponse = await fetch(
+        `http://127.0.0.1:${server.port}/api/rooms/${created.roomId}/assets?fileName=${encodeURIComponent("Flow Diagram.png")}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "image/png",
+          },
+          body: imageBody,
+        },
+      );
+
+      expect(uploadResponse.status).toBe(200);
+      const payload = await uploadResponse.json() as { path: string; markdown: string };
+
+      expect(payload.path).toContain(`.openaquarium/interactive/rooms/${created.roomId}/assets/user-chat/`);
+      expect(payload.markdown).toContain(`![Flow Diagram](${payload.path})`);
+
+      const readResponse = await fetch(
+        `http://127.0.0.1:${server.port}/api/rooms/${created.roomId}/assets?path=${encodeURIComponent(payload.path)}`,
+      );
+
+      expect(readResponse.status).toBe(200);
+      expect(readResponse.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await readResponse.arrayBuffer())).toEqual(imageBody);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("imports an existing project through the JSON API without requiring templateId", async () => {
     const workspaceRoot = await mkdtemp(
       path.join(os.tmpdir(), "oa-http-import-"),

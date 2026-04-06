@@ -1709,6 +1709,63 @@ describe("WorkspaceRuntime", () => {
     expect(routedTasks.every((task) => task.status !== "running")).toBe(true);
   });
 
+  it("waits for routed follow-up tasks before streamUserMessage resolves", async () => {
+    const workspaceRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-runtime-stream-follow-up-route-"),
+    );
+    let runtime: WorkspaceRuntime;
+    runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(
+        path.join(workspaceRoot, ".openaquarium", "state.json"),
+      ),
+      workspaceRoot,
+      executorFactory: ({ member }) =>
+        new FakeExecutor(async (request, callbacks) => {
+          if (member.handle === "research") {
+            await runtime.sendMemberMessage({
+              roomId: request.room.id,
+              memberId: member.id,
+              taskId: request.task.id,
+              content: "@>lead 我补完事实了，请你收口。",
+            });
+            await callbacks.onComplete("research done", "end_turn");
+            return;
+          }
+
+          await new Promise((resolve) =>
+            setTimeout(resolve, member.handle === "lead" ? 40 : 10),
+          );
+          await callbacks.onComplete(`${member.handle} done`, "end_turn");
+        }),
+    });
+    runtimes.push(runtime);
+
+    const created = await runtime.createProject({
+      projectName: "Stream Follow-up Route",
+      templateId: "template-product-pod",
+    });
+
+    await runtime.streamUserMessage(
+      {
+        roomId: created.roomId,
+        content: "@>research 先补事实。",
+      },
+      {},
+    );
+
+    const snapshot = runtime.getSnapshot();
+    const roomTasks = Object.values(snapshot.tasks).filter(
+      (task) => task.roomId === created.roomId,
+    );
+    const leadTask = roomTasks.find(
+      (task) => snapshot.members[task.memberId]?.handle === "lead",
+    );
+
+    expect(leadTask).toBeDefined();
+    expect(roomTasks.every((task) => task.status !== "running")).toBe(true);
+  });
+
   it("continues id allocation after restart instead of colliding with persisted state", async () => {
     const workspaceRoot = await mkdtemp(
       path.join(os.tmpdir(), "oa-runtime-ids-"),

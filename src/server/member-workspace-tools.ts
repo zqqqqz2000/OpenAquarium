@@ -94,6 +94,40 @@ async function readTerminalResult(args: {
   };
 }
 
+async function readThreadTerminalResult(args: {
+  terminalRegistry: TerminalRegistry;
+  sessionId: string;
+  terminalId: string;
+  maxOutputTokens: number;
+}) {
+  const initial = await readTerminalResult({
+    terminalRegistry: args.terminalRegistry,
+    sessionId: args.sessionId,
+    terminalId: args.terminalId,
+    maxOutputTokens: args.maxOutputTokens,
+    consume: true,
+  });
+
+  if (initial.output.length > 0 || !initial.running) {
+    return initial;
+  }
+
+  await waitForTerminalYield({
+    terminalRegistry: args.terminalRegistry,
+    sessionId: args.sessionId,
+    terminalId: args.terminalId,
+    yieldTimeMs: 120,
+  });
+
+  return readTerminalResult({
+    terminalRegistry: args.terminalRegistry,
+    sessionId: args.sessionId,
+    terminalId: args.terminalId,
+    maxOutputTokens: args.maxOutputTokens,
+    consume: true,
+  });
+}
+
 function resolveShellCommand(input: {
   cmd: string;
   shell?: string;
@@ -426,12 +460,11 @@ export function createWorkspaceTools(args: {
             message: "No terminal session has been started for this task.",
           };
         }
-        return readTerminalResult({
+        return readThreadTerminalResult({
           terminalRegistry,
           sessionId: request.task.id,
           terminalId,
           maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-          consume: true,
         });
       },
     }),
