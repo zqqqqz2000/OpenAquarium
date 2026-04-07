@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MessageSquare, Users, FolderKanban, BarChart3 } from "lucide-react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,9 +7,26 @@ import {
   updateWorkspaceFlexLayoutModelJsonPresentation,
 } from "@/components/chat/workspace-flex-layout";
 import {
+  WORKSPACE_FLEXLAYOUT_PRIMARY_TABSET_ID,
   WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID,
   buildWorkspaceFlexLayoutModelJson,
 } from "@/components/chat/workspace-flex-layout-support";
+
+function createMockDomRect(width: number, height: number): DOMRect {
+  return {
+    x: 0,
+    y: 0,
+    width,
+    height,
+    top: 0,
+    left: 0,
+    right: width,
+    bottom: height,
+    toJSON() {
+      return this;
+    },
+  } as DOMRect;
+}
 
 beforeAll(() => {
   vi.stubGlobal(
@@ -20,6 +37,11 @@ beforeAll(() => {
       disconnect(): void {}
     },
   );
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  });
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
 });
 
 beforeEach(() => {
@@ -44,13 +66,15 @@ describe("WorkspaceFlexLayout", () => {
       primaryTabTitle: "Chat",
       rightTabsetWidth: 420,
     });
-    const rightTabset = modelJson.layout.children[1];
+    const rightTabset = modelJson.layout.children.find(
+      (child) => child.type === "tabset" && child.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID,
+    );
 
     if (rightTabset?.type !== "tabset") {
-      throw new Error("Expected the second root child to be a tabset");
+      throw new Error("Expected the right root child to be a tabset");
     }
 
-    rightTabset.maxWidth = 420;
+    (rightTabset as { maxWidth?: number }).maxWidth = 420;
     const nextModelJson = updateWorkspaceFlexLayoutModelJsonPresentation({
       modelJson,
       primaryTabTitle: "Workspace Chat",
@@ -58,8 +82,11 @@ describe("WorkspaceFlexLayout", () => {
     const nextRightTabset = nextModelJson.layout.children.find(
       (child) => child.type === "tabset" && child.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID,
     );
-    const primaryTab = nextModelJson.layout.children[0]?.type === "tabset"
-      ? nextModelJson.layout.children[0].children?.[0]
+    const primaryTabset = nextModelJson.layout.children.find(
+      (child) => child.type === "tabset" && child.id === WORKSPACE_FLEXLAYOUT_PRIMARY_TABSET_ID,
+    );
+    const primaryTab = primaryTabset?.type === "tabset"
+      ? (primaryTabset.children?.[0] as { type?: string; name?: string } | undefined)
       : undefined;
 
     expect(nextRightTabset?.type).toBe("tabset");
@@ -69,13 +96,25 @@ describe("WorkspaceFlexLayout", () => {
     expect(primaryTab?.name).toBe("Workspace Chat");
   });
 
-  it("renders desktop layout with FlexLayout and one right-side tabset", () => {
+  it("renders desktop layout with project, chat, and right-side tabsets", async () => {
+    const getBoundingClientRectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => createMockDomRect(1024, 768));
+
     const { container } = render(
       <WorkspaceFlexLayout
-        collapsed={false}
         layoutKey="room-a"
-        panelWidth={420}
+        leftCollapsed={false}
+        leftPanelWidth={304}
+        rightCollapsed={false}
+        rightPanelWidth={420}
         panels={{
+          projects: {
+            id: "projects",
+            title: "Projects",
+            icon: FolderKanban,
+            content: <div>projects content</div>,
+          },
           chat: {
             id: "chat",
             title: "Chat",
@@ -104,12 +143,23 @@ describe("WorkspaceFlexLayout", () => {
       />,
     );
 
-    expect(screen.getByTestId("workspace-flex-layout")).toBeInTheDocument();
-    expect(container.querySelector(".flexlayout__layout")).not.toBeNull();
-    expect(container.querySelectorAll(".flexlayout__tabset").length).toBe(2);
-    expect(screen.getAllByText("Chat").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Members").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Todo").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Dashboard").length).toBeGreaterThan(0);
+    try {
+      expect(screen.getByTestId("workspace-flex-layout")).toBeInTheDocument();
+      expect(screen.getByTestId("workspace-flex-layout")).toHaveClass("relative", "h-full");
+      expect(container.querySelector(".flexlayout__layout")).not.toBeNull();
+      expect(container.querySelectorAll(".flexlayout__tabset").length).toBe(3);
+      expect(screen.getAllByText("Chat").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Projects").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Members").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Todo").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Dashboard").length).toBeGreaterThan(0);
+      await waitFor(() => {
+        expect(screen.getByText("projects content")).toBeInTheDocument();
+        expect(screen.getByText("chat content")).toBeInTheDocument();
+        expect(screen.getByText("members content")).toBeInTheDocument();
+      });
+    } finally {
+      getBoundingClientRectSpy.mockRestore();
+    }
   });
 });

@@ -28,10 +28,12 @@ import {
   buildWorkspaceFlexLayoutModelJson,
   configureWorkspaceFlexLayoutModel,
   interceptWorkspaceFlexLayoutAction,
+  sanitizeWorkspaceFlexLayoutModelJson,
+  workspaceFlexLayoutPanelOrder,
   workspaceFlexLayoutRightPanelOrder,
 } from "@/components/chat/workspace-flex-layout-support";
 
-export type WorkspacePanelId = "chat" | "members" | "todo" | "dashboard";
+export type WorkspacePanelId = "projects" | "chat" | "members" | "todo" | "dashboard";
 
 interface WorkspacePanelDefinition {
   badge?: ReactNode;
@@ -74,7 +76,7 @@ function useMediaQuery(query: string): boolean {
 }
 
 function isWorkspacePanelId(value: string | undefined): value is WorkspacePanelId {
-  return workspaceFlexLayoutRightPanelOrder.includes(value as WorkspacePanelId);
+  return workspaceFlexLayoutPanelOrder.includes(value as WorkspacePanelId);
 }
 
 function renderFlexLayoutTabContent(panel: WorkspacePanelDefinition): ReactNode {
@@ -94,6 +96,18 @@ function cloneModelJson(modelJson: IJsonModel): IJsonModel {
 
 type WorkspaceFlexLayoutJsonNode = IJsonRowNode | IJsonTabSetNode | IJsonTabNode;
 
+function isWorkspaceFlexLayoutTabNode(
+  node: WorkspaceFlexLayoutJsonNode | undefined,
+): node is IJsonTabNode {
+  return node?.type === "tab";
+}
+
+function isWorkspaceFlexLayoutTabSetNode(
+  node: WorkspaceFlexLayoutJsonNode | undefined,
+): node is IJsonTabSetNode {
+  return node?.type === "tabset";
+}
+
 function updateWorkspaceFlexLayoutJsonNodePresentation(args: {
   node: WorkspaceFlexLayoutJsonNode | undefined;
   primaryTabTitle: string;
@@ -104,7 +118,7 @@ function updateWorkspaceFlexLayoutJsonNodePresentation(args: {
     return;
   }
 
-  if (node.type === "tab") {
+  if (isWorkspaceFlexLayoutTabNode(node)) {
     if (
       node.id === WORKSPACE_FLEXLAYOUT_PRIMARY_TAB_ID
       || node.component === WORKSPACE_FLEXLAYOUT_PRIMARY_COMPONENT
@@ -116,9 +130,13 @@ function updateWorkspaceFlexLayoutJsonNodePresentation(args: {
     return;
   }
 
-  if (node.type === "tabset" && node.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID) {
+  if (isWorkspaceFlexLayoutTabSetNode(node) && node.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID) {
     delete node.minWidth;
     delete node.maxWidth;
+  }
+
+  if (!isWorkspaceFlexLayoutTabSetNode(node) && node.type !== "row") {
+    return;
   }
 
   if (!Array.isArray(node.children)) {
@@ -145,36 +163,67 @@ export function updateWorkspaceFlexLayoutModelJsonPresentation(args: {
     primaryTabTitle,
   });
 
-  return nextModelJson;
+  return sanitizeWorkspaceFlexLayoutModelJson({
+    modelJson: nextModelJson,
+    primaryTabTitle,
+  });
 }
 
 function createWorkspaceDesktopModel(args: {
   activePanelId: WorkspacePanelId;
+  leftCollapsed: boolean;
+  leftPanelWidth: number;
   modelJson?: IJsonModel;
-  panelWidth: number;
   primaryTabTitle: string;
+  rightCollapsed: boolean;
+  rightPanelWidth: number;
 }): Model {
-  const { activePanelId, modelJson, panelWidth, primaryTabTitle } = args;
-  const nextModelJson = updateWorkspaceFlexLayoutModelJsonPresentation({
+  const {
+    activePanelId,
+    leftCollapsed,
+    leftPanelWidth,
+    modelJson,
+    primaryTabTitle,
+    rightCollapsed,
+    rightPanelWidth,
+  } = args;
+  const nextModelJson = sanitizeWorkspaceFlexLayoutModelJson({
     modelJson: modelJson ?? buildWorkspaceFlexLayoutModelJson({
       defaultActivePanelId: activePanelId,
+      includeProjectsPanel: !leftCollapsed,
+      includeRightPanel: !rightCollapsed,
+      leftTabsetWidth: leftPanelWidth,
       primaryTabTitle,
-      rightTabsetWidth: panelWidth,
+      rightTabsetWidth: rightPanelWidth,
     }),
+    includeProjectsPanel: !leftCollapsed,
+    includeRightPanel: !rightCollapsed,
+    leftTabsetWidth: leftPanelWidth,
     primaryTabTitle,
+    rightTabsetWidth: rightPanelWidth,
   });
 
   return configureWorkspaceFlexLayoutModel(Model.fromJson(nextModelJson));
 }
 
 export function WorkspaceFlexLayout(props: {
-  collapsed: boolean;
   layoutKey: string;
-  onResizeStart?: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  panelWidth?: number;
+  leftCollapsed: boolean;
+  leftPanelWidth?: number;
+  onRightResizeStart?: (event: ReactPointerEvent<HTMLDivElement>) => void;
   panels: Record<WorkspacePanelId, WorkspacePanelDefinition>;
+  rightCollapsed: boolean;
+  rightPanelWidth?: number;
 }) {
-  const { collapsed, layoutKey, onResizeStart, panelWidth = 372, panels } = props;
+  const {
+    layoutKey,
+    leftCollapsed,
+    leftPanelWidth = 304,
+    onRightResizeStart,
+    panels,
+    rightCollapsed,
+    rightPanelWidth = 372,
+  } = props;
   const isMobile = useMediaQuery("(max-width: 1023px)");
   const [activePanelId, setActivePanelId] = useState<WorkspacePanelId>(
     () => workspaceActivePanelIdByKey.get(layoutKey) ?? "chat",
@@ -182,9 +231,12 @@ export function WorkspaceFlexLayout(props: {
   const [model, setModel] = useState<Model>(() =>
     createWorkspaceDesktopModel({
       activePanelId: workspaceActivePanelIdByKey.get(layoutKey) ?? "chat",
+      leftCollapsed,
+      leftPanelWidth,
       modelJson: workspaceDesktopModelJsonByKey.get(layoutKey),
-      panelWidth,
       primaryTabTitle: panels.chat.title,
+      rightCollapsed,
+      rightPanelWidth,
     }),
   );
 
@@ -193,20 +245,23 @@ export function WorkspaceFlexLayout(props: {
     setModel(
       createWorkspaceDesktopModel({
         activePanelId: workspaceActivePanelIdByKey.get(layoutKey) ?? "chat",
+        leftCollapsed,
+        leftPanelWidth,
         modelJson: workspaceDesktopModelJsonByKey.get(layoutKey),
-        panelWidth,
         primaryTabTitle: panels.chat.title,
+        rightCollapsed,
+        rightPanelWidth,
       }),
     );
-  }, [layoutKey, panelWidth, panels.chat.title]);
+  }, [layoutKey, leftCollapsed, leftPanelWidth, panels.chat.title, rightCollapsed, rightPanelWidth]);
 
   useEffect(() => {
     workspaceActivePanelIdByKey.set(layoutKey, activePanelId);
   }, [activePanelId, layoutKey]);
 
   const orderedMobilePanels = useMemo(
-    () => (collapsed ? (["chat"] satisfies WorkspacePanelId[]) : workspaceFlexLayoutRightPanelOrder),
-    [collapsed],
+    () => (rightCollapsed ? (["chat"] satisfies WorkspacePanelId[]) : (["chat", ...workspaceFlexLayoutRightPanelOrder] satisfies WorkspacePanelId[])),
+    [rightCollapsed],
   );
 
   useEffect(() => {
@@ -278,7 +333,7 @@ export function WorkspaceFlexLayout(props: {
     const activePanel = panels[activePanelId];
 
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
         <div className="-mx-1 flex shrink-0 gap-2 overflow-x-auto px-1 pb-1">
           {orderedMobilePanels.map((panelId) => {
             const panel = panels[panelId];
@@ -320,11 +375,11 @@ export function WorkspaceFlexLayout(props: {
     );
   }
 
-  if (collapsed) {
+  if (leftCollapsed && rightCollapsed) {
     return (
       <section
         data-workspace-panel-id={panels.chat.id}
-        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm"
+        className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm"
       >
         <div className="min-h-0 flex-1 overflow-hidden p-3">{panels.chat.content}</div>
       </section>
@@ -332,11 +387,11 @@ export function WorkspaceFlexLayout(props: {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 gap-3 overflow-hidden">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 gap-3 overflow-hidden">
       <div
         data-testid="workspace-flex-layout"
         className={cn(
-          "flexlayout__theme_light dark:flexlayout__theme_dark flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm",
+          "relative flexlayout__theme_light dark:flexlayout__theme_dark flex h-full min-h-0 min-w-0 flex-1 overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm",
         )}
       >
         <Layout
@@ -347,13 +402,15 @@ export function WorkspaceFlexLayout(props: {
           onModelChange={handleModelChange}
         />
       </div>
-      <div
-        aria-hidden
-        className="hidden w-4 shrink-0 cursor-col-resize xl:block"
-        onPointerDown={onResizeStart}
-      >
-        <div className="h-full w-px rounded-full bg-border/80" />
-      </div>
+      {!rightCollapsed ? (
+        <div
+          aria-hidden
+          className="hidden w-4 shrink-0 cursor-col-resize xl:block"
+          onPointerDown={onRightResizeStart}
+        >
+          <div className="h-full w-px rounded-full bg-border/80" />
+        </div>
+      ) : null}
     </div>
   );
 }

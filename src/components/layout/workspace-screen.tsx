@@ -437,15 +437,55 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   };
 
   const isOverlayLayout = layoutMode === "overlay";
-  const gridColumns = getRoomGridColumns(
-    {
-      leftCollapsed,
-      leftWidth,
-      rightCollapsed,
-      rightWidth,
-    },
-    layoutMode,
+  const sidebarPanel = (
+    <Sidebar
+      collapsed={isOverlayLayout ? leftCollapsed : false}
+      overlay={isOverlayLayout}
+      onToggleCollapsed={toggleLeftCollapsed}
+      projects={sidebarData.projects}
+      roomsByProject={sidebarData.roomsByProject}
+      projectActivityById={sidebarData.projectActivityById}
+      roomActivityById={sidebarData.roomActivityById}
+      roomWatcherPauseById={sidebarData.roomWatcherPauseById}
+      projectUnreadCountById={sidebarData.projectUnreadCountById}
+      roomUnreadCountById={sidebarData.roomUnreadCountById}
+      projectRunningMembersById={sidebarData.projectRunningMembersById}
+      roomRunningMembersById={sidebarData.roomRunningMembersById}
+      activeProjectId={selectedProjectId}
+      activeRoomId={selectedRoomId}
+      templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+      activeTemplateId={selectedTemplateId}
+      connected={connected}
+      error={error}
+      loading={loading}
+      deletingProjectId={deletingProjectId}
+      deletingRoomId={deletingRoomId}
+      deletingTemplateId={deletingTemplateId}
+      togglingRoomWatcherSuspensionRoomId={togglingRoomWatcherSuspensionRoomId}
+      onResizeStart={startSidebarResize}
+      onDeleteProject={(targetProjectId) => void handleDeleteProject(targetProjectId)}
+      onDeleteRoom={(targetRoomId) => void handleDeleteRoom(targetRoomId)}
+      onToggleRoomWatcherSuspension={(targetRoomId) => void handleToggleRoomWatcherSuspension(targetRoomId)}
+      onDeleteTemplate={(templateIdToDelete) => void handleDeleteTemplate(templateIdToDelete)}
+      onOpenMember={openRoomMemberFromSidebar}
+      onOpenTemplate={openTemplateStudio}
+      onOpenTemplateStudio={() => {
+        setSelectedTemplateId((current) => current ?? template?.id ?? snapshot.templateOrder[0]);
+        setTemplateStudioOpen(true);
+      }}
+    />
   );
+  const gridColumns = isOverlayLayout
+    ? getRoomGridColumns(
+        {
+          leftCollapsed,
+          leftWidth,
+          rightCollapsed,
+          rightWidth,
+        },
+        layoutMode,
+      )
+    : { leftPanel: "0rem", templateColumns: "minmax(0, 1fr)" };
   const gridStyle = {
     "--oa-left-panel": gridColumns.leftPanel,
     "--oa-room-grid-columns": gridColumns.templateColumns,
@@ -462,44 +502,11 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
             onClick={toggleLeftCollapsed}
           />
         ) : null}
-        <Sidebar
-          collapsed={leftCollapsed}
-          overlay={isOverlayLayout}
-          onToggleCollapsed={toggleLeftCollapsed}
-          projects={sidebarData.projects}
-          roomsByProject={sidebarData.roomsByProject}
-          projectActivityById={sidebarData.projectActivityById}
-          roomActivityById={sidebarData.roomActivityById}
-          roomWatcherPauseById={sidebarData.roomWatcherPauseById}
-          projectUnreadCountById={sidebarData.projectUnreadCountById}
-          roomUnreadCountById={sidebarData.roomUnreadCountById}
-          projectRunningMembersById={sidebarData.projectRunningMembersById}
-          roomRunningMembersById={sidebarData.roomRunningMembersById}
-          activeProjectId={selectedProjectId}
-          activeRoomId={selectedRoomId}
-          templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
-          activeTemplateId={selectedTemplateId}
-          connected={connected}
-          error={error}
-          loading={loading}
-          deletingProjectId={deletingProjectId}
-          deletingRoomId={deletingRoomId}
-          deletingTemplateId={deletingTemplateId}
-          togglingRoomWatcherSuspensionRoomId={togglingRoomWatcherSuspensionRoomId}
-          onResizeStart={startSidebarResize}
-          onDeleteProject={(targetProjectId) => void handleDeleteProject(targetProjectId)}
-          onDeleteRoom={(targetRoomId) => void handleDeleteRoom(targetRoomId)}
-          onToggleRoomWatcherSuspension={(targetRoomId) => void handleToggleRoomWatcherSuspension(targetRoomId)}
-          onDeleteTemplate={(templateIdToDelete) => void handleDeleteTemplate(templateIdToDelete)}
-          onOpenMember={openRoomMemberFromSidebar}
-          onOpenTemplate={openTemplateStudio}
-          onOpenTemplateStudio={() => {
-            setSelectedTemplateId((current) => current ?? template?.id ?? snapshot.templateOrder[0]);
-            setTemplateStudioOpen(true);
-          }}
-        />
+        {isOverlayLayout ? sidebarPanel : null}
         <ChatPane
           leftSidebarCollapsed={leftCollapsed}
+          leftSidebarWidth={leftWidth}
+          projectsPanelContent={!isOverlayLayout ? sidebarPanel : undefined}
           rightSidebarCollapsed={rightCollapsed}
           rightSidebarWidth={rightWidth}
           snapshot={snapshot}

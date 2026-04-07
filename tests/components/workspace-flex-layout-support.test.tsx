@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { Actions, DockLocation } from "flexlayout-react";
-import { MessageSquare, Users } from "lucide-react";
+import { BarChart3, FolderKanban, MessageSquare, Users } from "lucide-react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
@@ -62,10 +62,11 @@ describe("workspace flex layout support spike", () => {
     const factory = createWorkspaceFlexLayoutFactory({
       primaryContent: <div data-testid="primary-content">primary</div>,
       panels: {
+        projects: { title: "Projects", icon: FolderKanban, content: <div data-testid="projects-content">projects</div> },
         chat: { title: "Chat", icon: MessageSquare, content: <div data-testid="chat-content">chat</div> },
         members: { title: "Members", icon: Users, content: <div data-testid="members-content">members</div> },
         todo: { title: "Todo", content: <div data-testid="todo-content">todo</div> },
-        dashboard: { title: "Dashboard", content: <div data-testid="dashboard-content">dashboard</div> },
+        dashboard: { title: "Dashboard", icon: BarChart3, content: <div data-testid="dashboard-content">dashboard</div> },
       },
     });
 
@@ -85,10 +86,11 @@ describe("workspace flex layout support spike", () => {
 
   it("customizes tab headers and renders workspace plus right-side tabs", () => {
     const panels = {
+      projects: { title: "Projects", icon: FolderKanban, content: <div data-testid="projects-panel-body">projects body</div> },
       chat: { title: "Chat", icon: MessageSquare, content: <div data-testid="chat-panel-body">chat body</div> },
       members: { title: "Members", icon: Users, content: <div data-testid="members-panel-body">members body</div>, badge: <span>4</span> },
       todo: { title: "Todo", content: <div data-testid="todo-panel-body">todo body</div> },
-      dashboard: { title: "Dashboard", content: <div data-testid="dashboard-panel-body">dashboard body</div> },
+      dashboard: { title: "Dashboard", icon: BarChart3, content: <div data-testid="dashboard-panel-body">dashboard body</div> },
     };
     const metadata = createWorkspaceFlexLayoutMetadata(panels, "Workspace");
     const tabRenderer = createWorkspaceFlexLayoutTabRenderer(metadata);
@@ -110,7 +112,9 @@ describe("workspace flex layout support spike", () => {
     expect(screen.getByTestId("custom-tab-content")).toHaveTextContent("Members");
     expect(screen.getByTestId("custom-tab-content")).toHaveTextContent("4");
     expect(screen.getByTestId("workspace-flex-layout-support")).toBeInTheDocument();
+    expect(screen.getByTestId("workspace-flex-layout-support")).toHaveClass("relative");
     expect(screen.getAllByText("Workspace").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Projects").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Members").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Todo").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Dashboard").length).toBeGreaterThan(0);

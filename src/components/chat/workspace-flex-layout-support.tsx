@@ -15,9 +15,10 @@ import {
   type TabNode,
 } from "flexlayout-react";
 
+import { clampLeftPanelWidth, clampRightPanelWidth } from "@/lib/shell-panels";
 import { cn } from "@/lib/utils";
 
-export type WorkspaceFlexLayoutPanelId = "chat" | "members" | "todo" | "dashboard";
+export type WorkspaceFlexLayoutPanelId = "projects" | "chat" | "members" | "todo" | "dashboard";
 
 type PanelIcon = LucideIcon | ReactNode;
 
@@ -30,6 +31,9 @@ export interface WorkspaceFlexLayoutSupportPanel {
 
 interface WorkspaceFlexLayoutModelOptions {
   defaultActivePanelId?: WorkspaceFlexLayoutPanelId;
+  includeProjectsPanel?: boolean;
+  includeRightPanel?: boolean;
+  leftTabsetWidth?: number;
   primaryTabTitle?: string;
   rightTabsetWidth?: number;
 }
@@ -41,16 +45,19 @@ interface WorkspaceFlexLayoutMetadata {
 }
 
 interface WorkspaceFlexLayoutSplitWeights {
+  left?: number;
   primary: number;
-  right: number;
+  right?: number;
 }
 
 export const WORKSPACE_FLEXLAYOUT_PRIMARY_COMPONENT = "workspace-primary";
+export const WORKSPACE_FLEXLAYOUT_LEFT_TABSET_ID = "workspace-left-tabset";
 export const WORKSPACE_FLEXLAYOUT_PRIMARY_TABSET_ID = "workspace-primary-tabset";
 export const WORKSPACE_FLEXLAYOUT_PRIMARY_TAB_ID = "workspace-primary-tab";
 export const WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID = "workspace-right-tabset";
 
 export const workspaceFlexLayoutPanelOrder: WorkspaceFlexLayoutPanelId[] = [
+  "projects",
   "chat",
   "members",
   "todo",
@@ -64,6 +71,30 @@ export const workspaceFlexLayoutRightPanelOrder: WorkspaceFlexLayoutPanelId[] = 
 ];
 
 type WorkspaceFlexLayoutJsonNode = IJsonRowNode | IJsonTabSetNode | IJsonTabNode;
+
+function isWorkspaceFlexLayoutRowNode(
+  node: WorkspaceFlexLayoutJsonNode | undefined,
+): node is IJsonRowNode {
+  return node?.type === "row";
+}
+
+function isWorkspaceFlexLayoutTabSetNode(
+  node: WorkspaceFlexLayoutJsonNode | undefined,
+): node is IJsonTabSetNode {
+  return node?.type === "tabset";
+}
+
+function isWorkspaceFlexLayoutTabNode(
+  node: WorkspaceFlexLayoutJsonNode | undefined,
+): node is IJsonTabNode {
+  return node?.type === "tab";
+}
+
+function isWorkspaceRightPanelId(
+  panelId: WorkspaceFlexLayoutPanelId | undefined,
+): panelId is typeof workspaceFlexLayoutRightPanelOrder[number] {
+  return workspaceFlexLayoutRightPanelOrder.includes(panelId as typeof workspaceFlexLayoutRightPanelOrder[number]);
+}
 
 function buildWorkspaceFlexLayoutTabId(
   panelId: WorkspaceFlexLayoutPanelId,
@@ -86,7 +117,7 @@ export function getWorkspaceFlexLayoutPanelIdFromComponent(
     return "chat";
   }
 
-  return workspaceFlexLayoutRightPanelOrder.includes(component as WorkspaceFlexLayoutPanelId)
+  return workspaceFlexLayoutPanelOrder.includes(component as WorkspaceFlexLayoutPanelId)
     ? (component as WorkspaceFlexLayoutPanelId)
     : undefined;
 }
@@ -104,23 +135,25 @@ function buildWorkspaceFlexLayoutTabNode(
   };
 }
 
-function getWorkspaceFlexLayoutSplitWeights(
-  rightTabsetWidth?: number,
-): WorkspaceFlexLayoutSplitWeights {
-  if (typeof rightTabsetWidth !== "number" || !Number.isFinite(rightTabsetWidth)) {
-    return { primary: 68, right: 32 };
-  }
-
-  const clampedRightWidth = Math.min(520, Math.max(280, Math.round(rightTabsetWidth)));
+function getWorkspaceFlexLayoutSplitWeights(args: {
+  includeProjectsPanel: boolean;
+  includeRightPanel: boolean;
+  leftTabsetWidth?: number;
+  rightTabsetWidth?: number;
+}): WorkspaceFlexLayoutSplitWeights {
+  const { includeProjectsPanel, includeRightPanel, leftTabsetWidth, rightTabsetWidth } = args;
+  const leftWidth = includeProjectsPanel ? clampLeftPanelWidth(leftTabsetWidth ?? 304) : 0;
+  const rightWidth = includeRightPanel ? clampRightPanelWidth(rightTabsetWidth ?? 372) : 0;
   const primaryBaselineWidth = 780;
-  const rightWeight = Math.min(
-    45,
-    Math.max(24, Math.round((clampedRightWidth / (primaryBaselineWidth + clampedRightWidth)) * 100)),
-  );
+  const totalWidth = primaryBaselineWidth + leftWidth + rightWidth;
+  const leftWeight = includeProjectsPanel ? Math.round((leftWidth / totalWidth) * 100) : 0;
+  const rightWeight = includeRightPanel ? Math.round((rightWidth / totalWidth) * 100) : 0;
+  const primaryWeight = Math.max(1, 100 - leftWeight - rightWeight);
 
   return {
-    primary: 100 - rightWeight,
-    right: rightWeight,
+    left: includeProjectsPanel ? leftWeight : undefined,
+    primary: primaryWeight,
+    right: includeRightPanel ? rightWeight : undefined,
   };
 }
 
@@ -179,11 +212,65 @@ export function buildWorkspaceFlexLayoutModelJson(
 ): IJsonModel {
   const {
     defaultActivePanelId = "chat",
+    includeProjectsPanel = false,
+    includeRightPanel = true,
+    leftTabsetWidth,
     primaryTabTitle = "Workspace",
     rightTabsetWidth,
   } = options;
   const selectedIndex = Math.max(0, workspaceFlexLayoutRightPanelOrder.indexOf(defaultActivePanelId));
-  const splitWeights = getWorkspaceFlexLayoutSplitWeights(rightTabsetWidth);
+  const splitWeights = getWorkspaceFlexLayoutSplitWeights({
+    includeProjectsPanel,
+    includeRightPanel,
+    leftTabsetWidth,
+    rightTabsetWidth,
+  });
+  const children: IJsonTabSetNode[] = [];
+
+  if (includeProjectsPanel) {
+    children.push({
+      type: "tabset",
+      id: WORKSPACE_FLEXLAYOUT_LEFT_TABSET_ID,
+      weight: splitWeights.left,
+      enableDivide: true,
+      enableDrag: true,
+      enableDrop: true,
+      selected: 0,
+      children: [buildWorkspaceFlexLayoutTabNode("projects")],
+    });
+  }
+
+  children.push({
+    type: "tabset",
+    id: WORKSPACE_FLEXLAYOUT_PRIMARY_TABSET_ID,
+    weight: splitWeights.primary,
+    enableDivide: true,
+    enableDrag: true,
+    enableDrop: true,
+    selected: 0,
+    children: [
+      {
+        ...buildWorkspaceFlexLayoutTabNode("chat"),
+        name: primaryTabTitle,
+      },
+    ],
+  });
+
+  if (includeRightPanel) {
+    children.push({
+      type: "tabset",
+      id: WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID,
+      weight: splitWeights.right,
+      enableDivide: true,
+      enableDrag: true,
+      enableDrop: true,
+      enableTabWrap: true,
+      selected: selectedIndex,
+      children: workspaceFlexLayoutRightPanelOrder.map((panelId) =>
+        buildWorkspaceFlexLayoutTabNode(panelId),
+      ),
+    });
+  }
 
   return {
     global: {
@@ -200,36 +287,7 @@ export function buildWorkspaceFlexLayoutModelJson(
     layout: {
       type: "row",
       weight: 100,
-      children: [
-        {
-          type: "tabset",
-          id: WORKSPACE_FLEXLAYOUT_PRIMARY_TABSET_ID,
-          weight: splitWeights.primary,
-          enableDivide: true,
-          enableDrag: true,
-          enableDrop: true,
-          selected: 0,
-          children: [
-            {
-              ...buildWorkspaceFlexLayoutTabNode("chat"),
-              name: primaryTabTitle,
-            },
-          ],
-        },
-        {
-          type: "tabset",
-          id: WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID,
-          weight: splitWeights.right,
-          enableDivide: true,
-          enableDrag: true,
-          enableDrop: true,
-          enableTabWrap: true,
-          selected: selectedIndex,
-          children: workspaceFlexLayoutRightPanelOrder.map((panelId) =>
-            buildWorkspaceFlexLayoutTabNode(panelId),
-          ),
-        },
-      ],
+      children,
     },
   };
 }
@@ -241,14 +299,25 @@ function cloneWorkspaceFlexLayoutModelJson(modelJson: IJsonModel): IJsonModel {
 function normalizeWorkspaceFlexLayoutJsonNode(
   node: WorkspaceFlexLayoutJsonNode | undefined,
   seenPanelIds: Set<WorkspaceFlexLayoutPanelId>,
+  options: {
+    includeProjectsPanel: boolean;
+    includeRightPanel: boolean;
+  },
 ): WorkspaceFlexLayoutJsonNode | undefined {
   if (!node) {
     return undefined;
   }
 
-  if (node.type === "tab") {
+  if (isWorkspaceFlexLayoutTabNode(node)) {
     const panelId = getWorkspaceFlexLayoutPanelIdFromComponent(node.component);
-    if (!panelId || seenPanelIds.has(panelId)) {
+    const isProjectsPanel = panelId === "projects";
+    const isRightPanel = isWorkspaceRightPanelId(panelId);
+    if (
+      !panelId
+      || seenPanelIds.has(panelId)
+      || (isProjectsPanel && !options.includeProjectsPanel)
+      || (isRightPanel && !options.includeRightPanel)
+    ) {
       return undefined;
     }
 
@@ -263,10 +332,10 @@ function normalizeWorkspaceFlexLayoutJsonNode(
     } satisfies IJsonTabNode;
   }
 
-  if (node.type === "tabset") {
+  if (isWorkspaceFlexLayoutTabSetNode(node)) {
     const children = (node.children ?? [])
-      .map((child) => normalizeWorkspaceFlexLayoutJsonNode(child, seenPanelIds))
-      .filter((child): child is IJsonTabNode => child?.type === "tab");
+      .map((child) => normalizeWorkspaceFlexLayoutJsonNode(child, seenPanelIds, options))
+      .filter((child): child is IJsonTabNode => isWorkspaceFlexLayoutTabNode(child));
 
     if (children.length === 0) {
       return undefined;
@@ -289,9 +358,9 @@ function normalizeWorkspaceFlexLayoutJsonNode(
   }
 
   const children = (node.children ?? [])
-    .map((child) => normalizeWorkspaceFlexLayoutJsonNode(child, seenPanelIds))
+    .map((child) => normalizeWorkspaceFlexLayoutJsonNode(child, seenPanelIds, options))
     .filter((child): child is IJsonRowNode | IJsonTabSetNode => (
-      child?.type === "row" || child?.type === "tabset"
+      isWorkspaceFlexLayoutRowNode(child) || isWorkspaceFlexLayoutTabSetNode(child)
     ));
 
   if (children.length === 0) {
@@ -308,11 +377,11 @@ function normalizeWorkspaceFlexLayoutJsonNode(
 function collectWorkspaceFlexLayoutTabsets(
   node: WorkspaceFlexLayoutJsonNode,
 ): IJsonTabSetNode[] {
-  if (node.type === "tabset") {
+  if (isWorkspaceFlexLayoutTabSetNode(node)) {
     return [node];
   }
 
-  if (node.type !== "row") {
+  if (!isWorkspaceFlexLayoutRowNode(node)) {
     return [];
   }
 
@@ -320,20 +389,42 @@ function collectWorkspaceFlexLayoutTabsets(
 }
 
 export function sanitizeWorkspaceFlexLayoutModelJson(args: {
+  includeProjectsPanel?: boolean;
+  includeRightPanel?: boolean;
+  leftTabsetWidth?: number;
   modelJson: IJsonModel;
   primaryTabTitle?: string;
   rightTabsetWidth?: number;
 }): IJsonModel {
-  const { modelJson, primaryTabTitle = "Workspace", rightTabsetWidth } = args;
+  const {
+    includeProjectsPanel = false,
+    includeRightPanel = true,
+    leftTabsetWidth,
+    modelJson,
+    primaryTabTitle = "Workspace",
+    rightTabsetWidth,
+  } = args;
   const seenPanelIds = new Set<WorkspaceFlexLayoutPanelId>();
-  const splitWeights = getWorkspaceFlexLayoutSplitWeights(rightTabsetWidth);
+  const splitWeights = getWorkspaceFlexLayoutSplitWeights({
+    includeProjectsPanel,
+    includeRightPanel,
+    leftTabsetWidth,
+    rightTabsetWidth,
+  });
   const normalizedLayout = normalizeWorkspaceFlexLayoutJsonNode(
     cloneWorkspaceFlexLayoutModelJson(modelJson).layout,
     seenPanelIds,
+    {
+      includeProjectsPanel,
+      includeRightPanel,
+    },
   );
 
-  if (!normalizedLayout || normalizedLayout.type !== "row") {
+  if (!isWorkspaceFlexLayoutRowNode(normalizedLayout)) {
     return buildWorkspaceFlexLayoutModelJson({
+      includeProjectsPanel,
+      includeRightPanel,
+      leftTabsetWidth,
       primaryTabTitle,
       rightTabsetWidth,
     });
@@ -356,25 +447,45 @@ export function sanitizeWorkspaceFlexLayoutModelJson(args: {
   };
 
   const tabsets = collectWorkspaceFlexLayoutTabsets(nextModelJson.layout);
+  const leftTabset = includeProjectsPanel
+    ? tabsets.find((tabset) => tabset.id === WORKSPACE_FLEXLAYOUT_LEFT_TABSET_ID)
+    : undefined;
   const primaryTabset = tabsets.find((tabset) => tabset.id === WORKSPACE_FLEXLAYOUT_PRIMARY_TABSET_ID)
     ?? tabsets[0];
-  const rightTabset = tabsets.find((tabset) => tabset.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID)
-    ?? tabsets.find((tabset) => tabset !== primaryTabset)
-    ?? primaryTabset;
+  const rightTabset = includeRightPanel
+    ? tabsets.find((tabset) => tabset.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID)
+      ?? tabsets.find((tabset) => tabset !== primaryTabset && tabset !== leftTabset)
+    : undefined;
 
-  if (!primaryTabset || !rightTabset) {
+  if (!primaryTabset || (includeProjectsPanel && !leftTabset) || (includeRightPanel && !rightTabset)) {
     return buildWorkspaceFlexLayoutModelJson({
+      includeProjectsPanel,
+      includeRightPanel,
+      leftTabsetWidth,
       primaryTabTitle,
       rightTabsetWidth,
     });
   }
 
   workspaceFlexLayoutPanelOrder.forEach((panelId) => {
-    if (seenPanelIds.has(panelId)) {
+    const shouldInclude = panelId === "projects"
+      ? includeProjectsPanel
+      : panelId === "chat"
+        ? true
+        : includeRightPanel;
+    if (!shouldInclude || seenPanelIds.has(panelId)) {
       return;
     }
 
-    const targetTabset = panelId === "chat" ? primaryTabset : rightTabset;
+    const targetTabset = panelId === "projects"
+      ? leftTabset
+      : panelId === "chat"
+        ? primaryTabset
+        : rightTabset;
+    if (!targetTabset) {
+      return;
+    }
+
     targetTabset.children = [
       ...targetTabset.children,
       buildWorkspaceFlexLayoutTabNode(panelId),
@@ -389,7 +500,11 @@ export function sanitizeWorkspaceFlexLayoutModelJson(args: {
     primaryTab.name = primaryTabTitle;
   }
 
-  if (rightTabset.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID) {
+  if (leftTabset?.id === WORKSPACE_FLEXLAYOUT_LEFT_TABSET_ID) {
+    leftTabset.weight = splitWeights.left;
+  }
+
+  if (rightTabset?.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID) {
     delete rightTabset.minWidth;
     delete rightTabset.maxWidth;
     rightTabset.weight = splitWeights.right;
@@ -417,14 +532,16 @@ export function createWorkspaceFlexLayoutMetadata(
       title: primaryTabTitle,
     },
     ...Object.fromEntries(
-      workspaceFlexLayoutRightPanelOrder.map((panelId) => [
-        panelId,
-        {
-          title: panels[panelId].title,
-          icon: renderPanelIcon(panels[panelId].icon),
-          badge: panels[panelId].badge,
-        },
-      ]),
+      workspaceFlexLayoutPanelOrder
+        .filter((panelId) => panelId !== "chat")
+        .map((panelId) => [
+          panelId,
+          {
+            title: panels[panelId].title,
+            icon: renderPanelIcon(panels[panelId].icon),
+            badge: panels[panelId].badge,
+          },
+        ]),
     ),
   };
 }
@@ -442,7 +559,7 @@ export function createWorkspaceFlexLayoutFactory(args: {
       return primaryContent;
     }
 
-    if (!component || !workspaceFlexLayoutRightPanelOrder.includes(component as WorkspaceFlexLayoutPanelId)) {
+    if (!component || !workspaceFlexLayoutPanelOrder.includes(component as WorkspaceFlexLayoutPanelId)) {
       return null;
     }
 
@@ -484,7 +601,11 @@ export function WorkspaceFlexLayoutSupport(props: {
     primaryTabTitle = "Workspace",
   } = props;
   const model = useMemo(
-    () => createWorkspaceFlexLayoutModel({ defaultActivePanelId, primaryTabTitle }),
+    () => createWorkspaceFlexLayoutModel({
+      defaultActivePanelId,
+      includeProjectsPanel: true,
+      primaryTabTitle,
+    }),
     [defaultActivePanelId, primaryTabTitle],
   );
   const metadataByComponent = useMemo(
@@ -504,7 +625,7 @@ export function WorkspaceFlexLayoutSupport(props: {
     <div
       data-testid="workspace-flex-layout-support"
       className={cn(
-        "flexlayout__theme_light dark:flexlayout__theme_dark h-full min-h-[24rem] min-w-0 overflow-hidden",
+        "relative flexlayout__theme_light dark:flexlayout__theme_dark h-full min-h-[24rem] min-w-0 overflow-hidden",
         className,
       )}
     >

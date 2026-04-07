@@ -129,6 +129,7 @@ export class AcpMemberExecutor implements MemberExecutor {
   private preparedSessionContinuation?: ExecutionSessionContinuation;
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
+  private currentTurnPromptVisible = false;
 
   constructor(args: {
     workspaceRoot: string;
@@ -164,6 +165,10 @@ export class AcpMemberExecutor implements MemberExecutor {
       };
     }
 
+    if (this.currentTurn && this.preparedTaskId !== request.task.id) {
+      await this.cancel();
+    }
+
     await this.resetUncommittedSessionIfNeeded();
     const tools = this.createWorkspaceTools({
       ...request,
@@ -183,6 +188,7 @@ export class AcpMemberExecutor implements MemberExecutor {
 
     const abortController = new AbortController();
     this.currentAbortController = abortController;
+    this.currentTurnPromptVisible = false;
     this.logger?.info("acp-execute-start", {
       taskId: request.task.id,
       roomId: request.room.id,
@@ -288,6 +294,9 @@ export class AcpMemberExecutor implements MemberExecutor {
           },
         });
         promptOpened = true;
+        if (this.currentAbortController === abortController) {
+          this.currentTurnPromptVisible = true;
+        }
         await callbacks.onPromptVisible?.();
 
         this.logger?.info("acp-stream-await-finish", {
@@ -347,6 +356,7 @@ export class AcpMemberExecutor implements MemberExecutor {
         if (this.currentAbortController === abortController) {
           this.currentAbortController = undefined;
           this.currentTurn = undefined;
+          this.currentTurnPromptVisible = false;
         }
         if (this.preparedTaskId === request.task.id) {
           this.preparedTaskId = undefined;
@@ -370,10 +380,12 @@ export class AcpMemberExecutor implements MemberExecutor {
 
     const abortController = this.currentAbortController;
     const currentTurn = this.currentTurn;
+    const shouldPersistSessionOnCancel = this.currentTurnPromptVisible;
     this.logger?.warn("acp-cancel-start", {
       memberId: this.member.id,
       memberHandle: this.member.handle,
       providerSessionId: this.providerSessionId ?? null,
+      shouldPersistSessionOnCancel,
     });
     abortController.abort("cancelled");
     try {
@@ -383,10 +395,24 @@ export class AcpMemberExecutor implements MemberExecutor {
         () => undefined,
         `ACP cancel for @${this.member.handle}`,
       );
+      if (shouldPersistSessionOnCancel) {
+        try {
+          await this.commitSessionIdIfNeeded();
+        } catch (error) {
+          this.logger?.warn("acp-cancel-session-persist-failed", {
+            memberId: this.member.id,
+            memberHandle: this.member.handle,
+            providerSessionId: this.providerSessionId ?? null,
+            pendingPersistedSessionId: this.pendingPersistedSessionId ?? null,
+            message: getErrorMessage(error as RuntimeError),
+          });
+        }
+      }
       this.logger?.info("acp-cancel-complete", {
         memberId: this.member.id,
         memberHandle: this.member.handle,
         providerSessionId: this.providerSessionId ?? null,
+        persistedProviderSessionId: this.persistedProviderSessionId ?? null,
       });
     } catch {
       this.logger?.warn("acp-cancel-timeout-reset-provider", {

@@ -556,6 +556,8 @@ function RoleGroupHoverPreview(props: {
 
 export function ChatPane(props: {
   leftSidebarCollapsed: boolean;
+  leftSidebarWidth?: number;
+  projectsPanelContent?: ReactNode;
   rightSidebarCollapsed: boolean;
   rightSidebarWidth?: number;
   snapshot: WorkspaceSnapshot;
@@ -576,6 +578,8 @@ export function ChatPane(props: {
 }) {
   const {
     leftSidebarCollapsed,
+    leftSidebarWidth = 304,
+    projectsPanelContent,
     rightSidebarCollapsed,
     rightSidebarWidth = 372,
     snapshot,
@@ -1403,11 +1407,19 @@ export function ChatPane(props: {
         ) : null}
         <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
           <WorkspaceFlexLayout
-            collapsed={rightSidebarCollapsed}
             layoutKey={layoutKey}
-            onResizeStart={onRightSidebarResizeStart}
-            panelWidth={rightSidebarWidth}
+            leftCollapsed={leftSidebarCollapsed}
+            leftPanelWidth={leftSidebarWidth}
+            onRightResizeStart={onRightSidebarResizeStart}
+            rightCollapsed={rightSidebarCollapsed}
+            rightPanelWidth={rightSidebarWidth}
             panels={{
+              projects: {
+                id: "projects",
+                title: "Projects",
+                icon: FolderKanban,
+                content: projectsPanelContent ?? <div className="h-full min-h-0 min-w-0 overflow-hidden" />,
+              },
               chat: {
                 id: "chat",
                 title: "Chat",
