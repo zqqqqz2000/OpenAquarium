@@ -52,7 +52,7 @@ export function createDefaultProviderModelProfiles(): ProviderModelProfile[] {
       id: DEFAULT_CODEX_MODEL_PROFILE_ID,
       name: "Codex ACP",
       description:
-        "Default Codex ACP model profile for template editing and room members. Uses codex-acp >=0.7.0 for runtime model discovery.",
+        "Default Codex ACP model profile for template editing and room members. Uses codex-acp >=0.11.1 for runtime model discovery.",
       providerType: "acp",
       binding: createCodexAcpProvider(),
     },

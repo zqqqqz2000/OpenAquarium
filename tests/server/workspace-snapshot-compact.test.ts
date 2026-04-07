@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceSnapshot } from "@/domain/model";
+import { CODEX_ACP_MIN_VERSION_PACKAGE_SPEC } from "@/lib/acp";
 import {
   DEFAULT_WORKSPACE_SNAPSHOT_COMPACTION_LIMITS,
   compactWorkspaceSnapshot,
@@ -154,7 +155,7 @@ function buildSnapshot(): WorkspaceSnapshot {
           kind: "codex-acp",
           label: "Codex ACP",
           command: "npx",
-          args: ["@zed-industries/codex-acp@^0.7.0"],
+          args: [CODEX_ACP_MIN_VERSION_PACKAGE_SPEC],
           env: {},
           capabilities: ["prompt"],
         },
@@ -285,7 +286,7 @@ describe("compactWorkspaceSnapshot", () => {
             kind: "codex-acp",
             label: "Codex ACP",
             command: "npx",
-            args: ["@zed-industries/codex-acp@^0.7.0"],
+            args: [CODEX_ACP_MIN_VERSION_PACKAGE_SPEC],
             env: {},
             capabilities: ["prompt"],
           },

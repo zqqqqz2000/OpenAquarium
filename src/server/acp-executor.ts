@@ -130,6 +130,7 @@ export class AcpMemberExecutor implements MemberExecutor {
   private providerSessionId?: string;
   private persistedProviderSessionId?: string;
   private pendingPersistedSessionId?: string;
+  private reconnectProviderSessionId?: string;
   private preparedTaskId?: string;
   private preparedSessionContinuation?: ExecutionSessionContinuation;
   private currentTurn?: Promise<void>;
@@ -387,7 +388,10 @@ export class AcpMemberExecutor implements MemberExecutor {
   }
 
   async discardSession(): Promise<void> {
-    await this.resetProvider({ reason: "discard-session" });
+    await this.resetProvider({
+      preserveCurrentSessionId: true,
+      reason: "discard-session",
+    });
   }
 
   async cancel(): Promise<void> {
@@ -467,7 +471,10 @@ export class AcpMemberExecutor implements MemberExecutor {
         memberHandle: this.member.handle,
         providerSessionId: this.providerSessionId ?? null,
       });
-      await this.resetProvider({ reason: "cancel-timeout" });
+      await this.resetProvider({
+        preserveCurrentSessionId: true,
+        reason: "cancel-timeout",
+      });
       if (this.currentAbortController === abortController) {
         this.currentAbortController = undefined;
       }
@@ -508,13 +515,27 @@ export class AcpMemberExecutor implements MemberExecutor {
     });
   }
 
-  private async resetProvider(options: { clearPersistedSession?: boolean; reason?: string } = {}): Promise<void> {
+  private async resetProvider(options: {
+    clearPersistedSession?: boolean;
+    preserveCurrentSessionId?: boolean;
+    reason?: string;
+  } = {}): Promise<void> {
+    const nextSessionId =
+      options.preserveCurrentSessionId
+        ? this.pendingPersistedSessionId
+          ?? this.provider.getSessionId()
+          ?? this.providerSessionId
+          ?? this.persistedProviderSessionId
+        : undefined;
     this.logger?.warn("acp-provider-reset", {
       memberId: this.member.id,
       memberHandle: this.member.handle,
       providerSessionId: this.providerSessionId ?? null,
       persistedProviderSessionId: this.persistedProviderSessionId ?? null,
+      reconnectProviderSessionId: this.reconnectProviderSessionId ?? null,
       clearPersistedSession: options.clearPersistedSession ?? false,
+      preserveCurrentSessionId: options.preserveCurrentSessionId ?? false,
+      nextSessionId: nextSessionId ?? null,
       reason: options.reason ?? null,
     });
     this.provider.cleanup();
@@ -522,6 +543,7 @@ export class AcpMemberExecutor implements MemberExecutor {
     this.pendingPersistedSessionId = undefined;
     this.preparedTaskId = undefined;
     this.preparedSessionContinuation = undefined;
+    this.reconnectProviderSessionId = undefined;
     if (options.clearPersistedSession) {
       this.persistedProviderSessionId = undefined;
       this.providerSessionId = undefined;
@@ -530,7 +552,11 @@ export class AcpMemberExecutor implements MemberExecutor {
         sessionId: undefined,
       });
     } else {
-      this.providerSessionId = this.persistedProviderSessionId;
+      this.providerSessionId = nextSessionId ?? this.persistedProviderSessionId;
+      this.reconnectProviderSessionId =
+        nextSessionId && nextSessionId !== this.persistedProviderSessionId
+          ? nextSessionId
+          : undefined;
     }
     this.provider = this.createProvider();
   }
@@ -539,6 +565,7 @@ export class AcpMemberExecutor implements MemberExecutor {
     tools: ReturnType<AcpMemberExecutor["createWorkspaceTools"]>,
     request: ExecutionPreparationRequest,
   ): Promise<{ sessionContinuation: ExecutionSessionContinuation }> {
+    const requestedSessionId = this.providerSessionId;
     this.logger?.info("acp-session-prepare-start", {
       taskId: request.task.id,
       memberId: request.member.id,
@@ -546,6 +573,7 @@ export class AcpMemberExecutor implements MemberExecutor {
       providerKind: request.member.provider.kind,
       providerSessionId: this.providerSessionId ?? null,
       persistedProviderSessionId: this.persistedProviderSessionId ?? null,
+      reconnectProviderSessionId: this.reconnectProviderSessionId ?? null,
     });
 
     if (this.member.provider.kind !== "codex-acp") {
@@ -567,14 +595,17 @@ export class AcpMemberExecutor implements MemberExecutor {
         tools,
       });
     } catch (error) {
-      if (!isMissingPersistedSessionError(error as RuntimeError, this.providerSessionId)) {
+      if (!isMissingPersistedSessionError(error as RuntimeError, requestedSessionId)) {
         throw error;
       }
 
-      this.logger?.warn("acp-session-reset-stale", {
+      this.logger?.warn("acp-session-resume-missing", {
         memberId: this.member.id,
         memberHandle: this.member.handle,
         providerSessionId: this.providerSessionId ?? null,
+        requestedSessionId: requestedSessionId ?? null,
+        persistedProviderSessionId: this.persistedProviderSessionId ?? null,
+        reconnectProviderSessionId: this.reconnectProviderSessionId ?? null,
         message: getErrorMessage(error as RuntimeError),
       });
       await this.resetProvider({ clearPersistedSession: true, reason: "stale-session" });
@@ -584,11 +615,14 @@ export class AcpMemberExecutor implements MemberExecutor {
       });
     }
 
-    let sessionContinuation: ExecutionSessionContinuation = this.persistedProviderSessionId ? "resumed" : "fresh";
+    let sessionContinuation: ExecutionSessionContinuation = "fresh";
     this.stageSessionIdIfNeeded();
     const currentSessionId = this.provider.getSessionId() ?? this.providerSessionId;
-    if (!this.persistedProviderSessionId || currentSessionId !== this.persistedProviderSessionId) {
-      sessionContinuation = "fresh";
+    if (
+      (requestedSessionId && currentSessionId === requestedSessionId)
+      || (this.persistedProviderSessionId && currentSessionId === this.persistedProviderSessionId)
+    ) {
+      sessionContinuation = "resumed";
     }
 
     this.logger?.info("acp-session-prepare-complete", {
@@ -598,6 +632,7 @@ export class AcpMemberExecutor implements MemberExecutor {
       providerSessionId: this.providerSessionId ?? null,
       persistedProviderSessionId: this.persistedProviderSessionId ?? null,
       pendingPersistedSessionId: this.pendingPersistedSessionId ?? null,
+      reconnectProviderSessionId: this.reconnectProviderSessionId ?? null,
       sessionContinuation,
     });
 
@@ -605,6 +640,13 @@ export class AcpMemberExecutor implements MemberExecutor {
   }
 
   private async resetUncommittedSessionIfNeeded(): Promise<void> {
+    if (
+      this.reconnectProviderSessionId
+      && this.providerSessionId === this.reconnectProviderSessionId
+    ) {
+      return;
+    }
+
     if (!this.pendingPersistedSessionId && this.providerSessionId === this.persistedProviderSessionId) {
       return;
     }
@@ -615,6 +657,7 @@ export class AcpMemberExecutor implements MemberExecutor {
       providerSessionId: this.providerSessionId ?? null,
       persistedProviderSessionId: this.persistedProviderSessionId ?? null,
       pendingPersistedSessionId: this.pendingPersistedSessionId ?? null,
+      reconnectProviderSessionId: this.reconnectProviderSessionId ?? null,
     });
     await this.resetProvider({ reason: "reset-uncommitted" });
   }
@@ -633,6 +676,9 @@ export class AcpMemberExecutor implements MemberExecutor {
     this.providerSessionId = sessionId;
     if (!sessionId || sessionId === this.persistedProviderSessionId) {
       this.pendingPersistedSessionId = undefined;
+      if (!sessionId || sessionId === this.reconnectProviderSessionId) {
+        this.reconnectProviderSessionId = undefined;
+      }
       return;
     }
 
@@ -644,6 +690,9 @@ export class AcpMemberExecutor implements MemberExecutor {
     });
     this.persistedProviderSessionId = sessionId;
     this.pendingPersistedSessionId = undefined;
+    if (this.reconnectProviderSessionId === sessionId) {
+      this.reconnectProviderSessionId = undefined;
+    }
     await this.host.persistMemberSession?.({
       memberId: this.member.id,
       sessionId,

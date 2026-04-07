@@ -11,6 +11,7 @@ import {
   createWorkspaceSnapshot,
   postUserMessage,
 } from "@/domain/workspace";
+import { CODEX_ACP_MIN_VERSION_PACKAGE_SPEC } from "@/lib/acp";
 import { defaultTemplates } from "@/lib/sample-data/templates";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { OpenAquariumGlobalConfigManager } from "@/server/global-config";
@@ -849,7 +850,7 @@ describe("WorkspaceRuntime", () => {
               kind: "codex-acp",
               label: "Codex ACP",
               command: "npx",
-              args: ["@zed-industries/codex-acp@^0.7.0"],
+              args: [CODEX_ACP_MIN_VERSION_PACKAGE_SPEC],
               env: {},
               capabilities: ["prompt", "cancel", "loadSession"],
             },

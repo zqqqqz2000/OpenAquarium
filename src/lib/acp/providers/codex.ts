@@ -3,7 +3,7 @@ import { mergeCodexAcpEnv } from "./codex-session";
 
 export const CODEX_ACP_NPX_COMMAND = "npx";
 export const CODEX_ACP_PACKAGE_NAME = "@zed-industries/codex-acp";
-export const CODEX_ACP_MIN_VERSION = "^0.7.0";
+export const CODEX_ACP_MIN_VERSION = "^0.11.1";
 export const CODEX_ACP_MIN_VERSION_PACKAGE_SPEC = `${CODEX_ACP_PACKAGE_NAME}@${CODEX_ACP_MIN_VERSION}`;
 export const CODEX_ACP_NPX_ARGS = [CODEX_ACP_MIN_VERSION_PACKAGE_SPEC];
 

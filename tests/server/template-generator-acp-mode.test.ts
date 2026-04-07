@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CODEX_ACP_MIN_VERSION_PACKAGE_SPEC } from "@/lib/acp";
+
 const {
   cleanupMock,
   generateTextMock,
@@ -69,7 +71,7 @@ describe("AcpTemplateGenerationTransport", () => {
               kind: "codex-acp",
               label: "Codex ACP",
               command: "npx",
-              args: ["@zed-industries/codex-acp@^0.7.0"],
+              args: [CODEX_ACP_MIN_VERSION_PACKAGE_SPEC],
               env: {},
               capabilities: ["prompt", "cancel", "loadSession"],
             },
@@ -95,7 +97,7 @@ describe("AcpTemplateGenerationTransport", () => {
               kind: "codex-acp",
               label: "Codex ACP",
               command: "npx",
-              args: ["@zed-industries/codex-acp@^0.7.0"],
+              args: [CODEX_ACP_MIN_VERSION_PACKAGE_SPEC],
               env: {},
               capabilities: ["prompt", "cancel", "loadSession"],
             },

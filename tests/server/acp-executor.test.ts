@@ -594,6 +594,95 @@ describe("AcpMemberExecutor", () => {
     expect(secondComplete).toHaveBeenCalledWith("second turn", "stop");
   });
 
+  it("reconnects to the same codex session after a cancel timeout before falling back to fresh", async () => {
+    vi.useFakeTimers();
+    const persistMemberSession = vi.fn(() => Promise.resolve());
+    let resolvePromptVisible: (() => void) | undefined;
+    const promptVisible = new Promise<void>((resolve) => {
+      resolvePromptVisible = resolve;
+    });
+    let releaseFirstTurn: (() => void) | undefined;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    streamTextMock
+      .mockReturnValueOnce({
+        text: new Promise<string>((resolve) => {
+          void firstTurn.then(() => {
+            resolve("first turn");
+          });
+        }),
+        finishReason: new Promise<string>((resolve) => {
+          void firstTurn.then(() => {
+            resolve("stop");
+          });
+        }),
+      })
+      .mockReturnValueOnce({
+        text: Promise.resolve("second turn"),
+        finishReason: Promise.resolve("stop"),
+      });
+    initSessionMock.mockResolvedValue(createMockSessionResponse("session_fresh"));
+
+    const request = createRequest();
+    const executor = new AcpMemberExecutor({
+      workspaceRoot: process.cwd(),
+      member: request.member,
+      host: createHost({
+        persistMemberSession,
+      }),
+    });
+
+    const firstRun = executor.execute(request, {
+      onPromptVisible: () => {
+        resolvePromptVisible?.();
+        return Promise.resolve();
+      },
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError: () => Promise.resolve(),
+    });
+    await promptVisible;
+    providerRecords[0]!.model.connection = {};
+
+    const nextRequest: ExecutionRequest = {
+      ...request,
+      task: {
+        ...request.task,
+        id: "task_2",
+      },
+    };
+    const preparationPromise = executor.prepareExecution(toPreparationRequest(nextRequest));
+    await vi.advanceTimersByTimeAsync(5_000);
+    const preparation = await preparationPromise;
+
+    expect(preparation).toMatchObject({
+      sessionContinuation: "resumed",
+      providerSessionId: "session_fresh",
+      persistedProviderSessionId: undefined,
+    });
+    expect(createACPProviderMock).toHaveBeenCalledTimes(2);
+    expect(createACPProviderMock.mock.calls[1]?.[0]).toMatchObject({
+      existingSessionId: "session_fresh",
+    });
+
+    releaseFirstTurn?.();
+    await firstRun;
+
+    await executor.execute(nextRequest, {
+      onDraft: () => Promise.resolve(),
+      onStatus: () => Promise.resolve(),
+      onComplete: () => Promise.resolve(),
+      onError: () => Promise.resolve(),
+    });
+
+    expect(persistMemberSession).toHaveBeenCalledWith({
+      memberId: "member_1",
+      sessionId: "session_fresh",
+    });
+  });
+
   it("resets a stale persisted codex session and retries once", async () => {
     initSessionMock
       .mockRejectedValueOnce(new Error("Resource not found"))
