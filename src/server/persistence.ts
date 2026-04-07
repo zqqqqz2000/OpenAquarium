@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -5,6 +6,7 @@ import type {
   ChatMessage,
   OpenAICompatibleConversationState,
   OpenAICompatibleConversationSummary,
+  ProjectRole,
   ProviderBinding,
   TeamMember,
   TeamMemberBlueprint,
@@ -41,11 +43,16 @@ function dedupeIds(ids: string[]): string[] {
   return [...new Set(ids)];
 }
 
+function normalizeUserHandle(value: string): string {
+  return value.trim().replace(/^[@>]+/u, "").toLowerCase();
+}
+
 function normalizeWorkspaceSnapshot(
   snapshot: WorkspaceSnapshot,
 ): WorkspaceSnapshot {
   const legacyPlaceholderCommands = new Set(["clerk-acp", "research-acp"]);
   const defaultAccountId = "account_default";
+  const nowMs = Date.now();
 
   const isOpenAICompatibleConversationSummary = (
     value: OpenAICompatibleConversationState["summary"],
@@ -207,6 +214,112 @@ function normalizeWorkspaceSnapshot(
       ? snapshot.currentAccountId
       : (normalizedAccounts[defaultAccountId] ? defaultAccountId : normalizedAccountOrder[0]);
 
+  const normalizedUsers = Object.fromEntries(
+    Object.entries(snapshot.users ?? {}).flatMap(([userId, user]) => {
+      if (user.archivedAt) {
+        return [];
+      }
+
+      const handle = normalizeUserHandle(user.handle ?? "");
+      const displayName = user.displayName?.trim() || handle || userId;
+      const passwordSalt = user.passwordSalt?.trim() || "";
+      const passwordHash = user.passwordHash?.trim() || "";
+      const createdAt = user.createdAt?.trim() || "";
+
+      if (!handle || !passwordSalt || !passwordHash || !createdAt) {
+        return [];
+      }
+
+      return [[userId, {
+        ...user,
+        handle,
+        displayName,
+        isAdmin: user.isAdmin === true,
+        passwordSalt,
+        passwordHash,
+        createdAt,
+        updatedAt: user.updatedAt?.trim() || createdAt,
+      }]];
+    }),
+  );
+
+  const normalizedUserOrder = dedupeIds(
+    [
+      ...(snapshot.userOrder?.length ? snapshot.userOrder : Object.keys(normalizedUsers)),
+    ],
+  ).filter((userId) => Boolean(normalizedUsers[userId]));
+
+  if (normalizedUserOrder.length > 0 && !Object.values(normalizedUsers).some((user) => user.isAdmin === true)) {
+    const bootstrapUserId = normalizedUserOrder[0];
+    if (bootstrapUserId && normalizedUsers[bootstrapUserId]) {
+      normalizedUsers[bootstrapUserId] = {
+        ...normalizedUsers[bootstrapUserId],
+        isAdmin: true,
+      };
+    }
+  }
+
+  const normalizedAuthSessions = Object.fromEntries(
+    Object.entries(snapshot.authSessions ?? {}).flatMap(([sessionId, session]) => {
+      const tokenHash = session.tokenHash?.trim() || "";
+      const createdAt = session.createdAt?.trim() || "";
+      const expiresAt = session.expiresAt?.trim() || "";
+      const lastSeenAt = session.lastSeenAt?.trim() || createdAt;
+      const expiresAtMs = Date.parse(expiresAt);
+
+      if (
+        !normalizedUsers[session.userId]
+        || !tokenHash
+        || !createdAt
+        || !Number.isFinite(expiresAtMs)
+        || expiresAtMs <= nowMs
+      ) {
+        return [];
+      }
+
+      return [[sessionId, {
+        ...session,
+        tokenHash,
+        createdAt,
+        lastSeenAt,
+        expiresAt,
+      }]];
+    }),
+  );
+
+  const normalizedAuthSessionOrder = dedupeIds(
+    [
+      ...(snapshot.authSessionOrder?.length ? snapshot.authSessionOrder : Object.keys(normalizedAuthSessions)),
+    ],
+  ).filter((sessionId) => Boolean(normalizedAuthSessions[sessionId]));
+
+  const normalizedProjectMemberships = Object.fromEntries(
+    Object.entries(snapshot.projectMemberships ?? {}).flatMap(([membershipId, membership]) => {
+      const createdAt = membership.createdAt?.trim() || "";
+
+      if (
+        membership.archivedAt
+        || !createdAt
+        || !snapshot.projects[membership.projectId]
+        || !normalizedUsers[membership.userId]
+      ) {
+        return [];
+      }
+
+      const role: ProjectRole =
+        membership.role === "owner" || membership.role === "admin"
+          ? membership.role
+          : "member";
+
+      return [[membershipId, {
+        ...membership,
+        role,
+        createdAt,
+        updatedAt: membership.updatedAt?.trim() || createdAt,
+      }]];
+    }),
+  );
+
   const normalizedHumans = Object.fromEntries(
     Object.entries(snapshot.humans ?? {}).flatMap(([humanId, human]) => {
       if (!snapshot.rooms[human.roomId]) {
@@ -284,6 +397,11 @@ function normalizeWorkspaceSnapshot(
     members: normalizedMembers,
     accounts: normalizedAccounts,
     accountOrder: normalizedAccountOrder,
+    users: normalizedUsers,
+    userOrder: normalizedUserOrder,
+    authSessions: normalizedAuthSessions,
+    authSessionOrder: normalizedAuthSessionOrder,
+    projectMemberships: normalizedProjectMemberships,
     humans: normalizedHumans,
     humanOrderByRoom: normalizedHumanOrderByRoom,
     messages: normalizedMessages,
@@ -376,6 +494,11 @@ function normalizeWorkspaceSnapshot(
     members: normalizedMembers,
     accounts: normalizedAccounts,
     accountOrder: normalizedAccountOrder,
+    users: normalizedUsers,
+    userOrder: normalizedUserOrder,
+    authSessions: normalizedAuthSessions,
+    authSessionOrder: normalizedAuthSessionOrder,
+    projectMemberships: normalizedProjectMemberships,
     humans: normalizedHumans,
     humanOrderByRoom: normalizedHumanOrderByRoom,
     messages: normalizedMessages,
@@ -432,9 +555,8 @@ export class WorkspacePersistence {
       null,
       2,
     );
-    const tempPath = `${this.filePath}.tmp`;
-
     this.pendingWrite = this.pendingWrite.then(async () => {
+      const tempPath = `${this.filePath}.${randomUUID()}.tmp`;
       await mkdir(directory, { recursive: true });
       await writeFile(tempPath, payload, "utf8");
       await rename(tempPath, this.filePath);

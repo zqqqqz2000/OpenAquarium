@@ -7,12 +7,14 @@ import type {
   Project,
   ProviderBinding,
   Room,
+  RoomHumanParticipant,
   TeamMember,
   WorkspaceSnapshot,
 } from "../domain/model";
 import { extractAddressedMemberIds } from "../domain/workspace";
 import { resolveAvailableSkills } from "./skills";
 import { isVisibleMemberRoomMessage } from "../lib/message-visibility";
+import { resolveChatAuthorActorKind } from "@/lib/chat-author";
 import { formatTime } from "../lib/utils";
 import type { ExecutionMember, ExecutionSessionContinuation } from "./executor";
 import {
@@ -67,13 +69,61 @@ function summarizeReferenceHandles(message: ChatMessage, snapshot: WorkspaceSnap
   return summarizeHandles("references", message.quotedMemberIds ?? [], snapshot);
 }
 
-function summarizeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): string {
-  const recipientSuffix =
-    message.recipientUser
-      ? " | recipients: You"
-      : summarizeHandles("recipients", message.recipientMemberIds, snapshot);
+function summarizeHumanHandles(prefix: string, humanIds: string[], snapshot: WorkspaceSnapshot): string {
+  if (humanIds.length === 0) {
+    return "";
+  }
 
-  return `[${formatTime(message.createdAt)}] ${message.author.label} (${message.transport}/${message.status}): ${message.content}${summarizeHandles("assignments", message.mentionedMemberIds, snapshot, "@>")}${summarizeReferenceHandles(message, snapshot)}${recipientSuffix}`;
+  const handles = humanIds
+    .map((humanId) => snapshot.humans?.[humanId]?.handle)
+    .filter((handle): handle is string => Boolean(handle));
+  return handles.length > 0 ? ` | ${prefix}: ${handles.map((handle) => `@${handle}`).join(", ")}` : "";
+}
+
+function describePromptMessageAuthor(message: ChatMessage): string {
+  const actorKind = resolveChatAuthorActorKind(message.author);
+  const handleSuffix = message.author.handle ? ` @${message.author.handle}` : "";
+  return `${message.author.label}${handleSuffix} [${actorKind}]`;
+}
+
+function summarizeMessageRecipients(snapshot: WorkspaceSnapshot, message: ChatMessage): string {
+  if (message.recipientUser) {
+    const activeHuman = snapshot.currentAccountId
+      ? Object.values(snapshot.humans ?? {}).find((human) => human.accountId === snapshot.currentAccountId && !human.archivedAt)
+      : undefined;
+    return activeHuman
+      ? ` | recipients: @user (active human: @${activeHuman.handle})`
+      : " | recipients: @user";
+  }
+
+  return `${summarizeHandles("recipients", message.recipientMemberIds, snapshot)}${summarizeHumanHandles("recipients", message.recipientHumanIds ?? [], snapshot)}`;
+}
+
+function buildRoomHumansSection(room: Room, snapshot: WorkspaceSnapshot): string[] {
+  const activeHumans = (snapshot.humanOrderByRoom?.[room.id] ?? [])
+    .map((humanId) => snapshot.humans?.[humanId])
+    .filter((human): human is RoomHumanParticipant => human !== undefined && human.roomId === room.id && !human.archivedAt);
+
+  const activeAccountId = snapshot.currentAccountId;
+  const activeHuman = activeAccountId
+    ? activeHumans.find((human) => human.accountId === activeAccountId)
+    : undefined;
+
+  return [
+    "[Room Humans]",
+    ...(activeHumans.length > 0
+      ? activeHumans.map((human) => `- @${human.handle}: ${human.displayName}${human.accountId === activeAccountId ? " (active human)" : ""}`)
+      : ["(none)"]),
+    activeHuman
+      ? `@user currently aliases the active human above for private replies; plain @handle may refer to either room humans or members, while @> still routes only members.`
+      : "Plain @handle may refer to either room humans or members; @> still routes only members.",
+  ];
+}
+
+function summarizeMessage(snapshot: WorkspaceSnapshot, message: ChatMessage): string {
+  const recipientSuffix = summarizeMessageRecipients(snapshot, message);
+
+  return `[${formatTime(message.createdAt)}] ${describePromptMessageAuthor(message)} (${message.transport}/${message.status}): ${message.content}${summarizeHandles("assignments", message.mentionedMemberIds, snapshot, "@>")}${summarizeHumanHandles("mentions", message.mentionedHumanIds ?? [], snapshot)}${summarizeReferenceHandles(message, snapshot)}${recipientSuffix}`;
 }
 
 function summarizeProjectTopic(topic: string): string {
@@ -479,7 +529,7 @@ function buildSharedSections(args: {
       : undefined;
   const preferredTools = [
     "oa_send_group_message: preferred for visible room replies.",
-    "oa_send_direct_message: preferred for private teammate DMs and replies to @user.",
+    "oa_send_direct_message: preferred for private teammate DMs and direct replies to room humans; use @user when you specifically mean the currently active human alias.",
     "oa_role_add_employee / oa_role_remove_employee / oa_role_rename_employee: structured staffing tools; check the returned `ok` field before claiming success.",
     "oa_room_state: inspect transcript and member/task state before retrying a send.",
     "oa_read_file: read room transcript files, member history files, or source files when you need deeper context.",
@@ -489,7 +539,7 @@ function buildSharedSections(args: {
     "oa_run_room_watcher: trigger a watcher immediately when needed.",
     "Configured MCP tools are also available when the selected provider profile defines MCP servers; call those tools directly by their exposed names.",
     `CLI pause fallback for persistent watch: ${roomWatchScript} --watcher <watcher-id> --pause-until-activity`,
-    `CLI fallback examples if the dedicated tools are unavailable: ${roomSendScript} --room ${room.id} --member ${member.id} --scope group --text "your message" | ${roomSendScript} --room ${room.id} --member ${member.id} --scope direct --target @user --text "private message" | ${roomStateScript} --room ${room.id}`,
+    `CLI fallback examples if the dedicated tools are unavailable: ${roomSendScript} --room ${room.id} --member ${member.id} --scope group --text "your message" | ${roomSendScript} --room ${room.id} --member ${member.id} --scope direct --target @user --text "private message to the active human" | ${roomStateScript} --room ${room.id}`,
   ].join("\n");
 
   return [
@@ -597,6 +647,8 @@ function buildFullPrompt(args: {
     "[Team Roster]",
     roster,
     "",
+    ...buildRoomHumansSection(room, snapshot),
+    "",
     args.transcriptLabel ?? "[Recent Room Transcript]",
     ...(transcriptSection.note ? [transcriptSection.note] : []),
     transcriptSection.content,
@@ -606,7 +658,7 @@ function buildFullPrompt(args: {
     "2. `@handle` is only a passive reference for explanation. Never use plain `@handle` to assign work. It does not notify that teammate, does not route work, and does not start a task for them.",
     "3. `@>handle` is an active assignment. That teammate immediately gets the message as work and may be interrupted to act on it, including inside backticks or fenced code blocks.",
     "4. Keep room messages concise and actionable, but do not stay silent on long tasks. Send an early visible progress update, then continue at meaningful milestones, blockers, or plan changes.",
-    "5. Prefer group messages for user-facing progress updates; use direct messages only for private coordination or explicit one-to-one follow-up. Use @user when you need to reply privately to the human.",
+    "5. Prefer group messages for user-facing progress updates; use direct messages only for private coordination or explicit one-to-one follow-up. Target a room human handle like @alice when you mean that specific human, or use @user when you mean the currently active human alias; plain @handle may still reference other room humans without routing work.",
     "6. Do not paste reasoning, tool narration, or step-by-step plans into room or DM messages, and do not resend the same room or DM content unless room state confirms it is missing.",
     "7. The final task completion text is private session output, not a room reply. Only text sent via the room/DM tools is user-visible.",
     "8. Treat the shared room context directory as the durable source for older room transcript and member history. The inline room transcript below is a bounded excerpt, not the full record. Read the files with oa_read_file when watcher context or the current transcript is insufficient. User-visible room and direct messages render as Markdown with code fences, Mermaid diagrams, math formulas, and CJK-friendly parsing. Prefer $$...$$ for formulas.",
@@ -689,6 +741,8 @@ function buildIncrementalPrompt(args: {
     ...buildWatcherPromptSections(sourceMessage, watcherPrompt),
     "",
     ...buildCompactContextPathSections(args),
+    "",
+    ...buildRoomHumansSection(room, snapshot),
     "",
     "[Relevant History]",
     previousTask

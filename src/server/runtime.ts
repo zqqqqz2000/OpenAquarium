@@ -1,10 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { watch, type FSWatcher } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import type {
+  AuthSession,
   GlobalWorkspaceConfig,
+  LoginInput,
+  ProjectMembership,
+  ProjectRole,
   ProviderBinding,
   ProviderConnectionTestResult,
   Room,
@@ -12,8 +16,10 @@ import type {
   TeamMember,
   TeamTemplate,
   TemplateStudioModelCatalog,
+  UpdateMeInput,
   UpdateGlobalConfigInput,
   UpdateRoomSettingsInput,
+  User,
   WorkspaceSnapshot,
 } from "../domain/model";
 import {
@@ -35,6 +41,7 @@ import {
   postUserMessage,
   pauseWatcherUntilActivity as pauseWatcherUntilActivityInWorkspace,
   runWatcher,
+  setActiveAccount as setActiveAccountInWorkspace,
   setEntryMember,
   toggleRoomWatcherSuspension as toggleRoomWatcherSuspensionInWorkspace,
   toggleWatcher,
@@ -46,6 +53,7 @@ import {
   upsertTaskTrace,
   upsertMemberWatcher,
   syncUnreadStateForMessage,
+  upsertWorkspaceAccount,
 } from "../domain/workspace";
 import type { applyRoleStaffingOperation } from "../domain/workspace";
 import { createRuntimeContext, createSystemClockContext, type MutationContext } from "../domain/identity";
@@ -76,7 +84,9 @@ import { getRoomTranscriptFilePath, syncRoomTranscriptFiles } from "./room-trans
 import { loadRoomMessageHistoryPage, syncRoomMessageHistoryFiles } from "./room-message-history";
 import { normalizeProjectPath, resolveProjectWorkingDirectory } from "./project-paths";
 import {
+  browseProjectDirectories,
   getProjectInteractiveDirectoryPath,
+  type ProjectDirectoryBrowseResult,
   type ProjectPathInspectionResult,
   getProviderAssociationNotice,
   getRoomContextDirectoryPath,
@@ -146,6 +156,195 @@ const STALE_RUNNING_TASK_MAX_AGE_MS = 5 * 60 * 1000;
 const DEFAULT_TASK_EXECUTION_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TASK_EXECUTION_MAX_RETRIES = 5;
 const RUNNING_TASK_REAPER_MAX_INTERVAL_MS = 60 * 1000;
+const AUTH_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const USER_PROJECTION_ACCOUNT_PREFIX = "account_user_";
+const DEFAULT_BOOTSTRAP_ADMIN_HANDLE = "admin";
+const BOOTSTRAP_ADMIN_HANDLE_ENV_KEY = "OA_BOOTSTRAP_ADMIN_HANDLE";
+const BOOTSTRAP_ADMIN_PASSWORD_ENV_KEY = "OA_BOOTSTRAP_ADMIN_PASSWORD";
+const BOOTSTRAP_ADMIN_DISPLAY_NAME_ENV_KEY = "OA_BOOTSTRAP_ADMIN_DISPLAY_NAME";
+
+interface AuthenticatedSession {
+  session: AuthSession;
+  user: User;
+}
+
+interface AuthStatePayload {
+  required: boolean;
+  authenticated: false;
+}
+
+interface ProjectMemberView {
+  membershipId: string;
+  projectId: string;
+  userId: string;
+  handle: string;
+  displayName: string;
+  role: ProjectRole;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+interface ManagedUserView {
+  id: string;
+  handle: string;
+  displayName: string;
+  isAdmin: boolean;
+  createdAt: string;
+  updatedAt?: string;
+  memberships: Array<{
+    id: string;
+    projectId: string;
+    projectName: string;
+    projectPath?: string;
+    role: ProjectRole;
+    createdAt: string;
+    updatedAt?: string;
+  }>;
+}
+
+function normalizeUserHandle(value: string): string {
+  return value
+    .trim()
+    .replace(/^[@>]+/u, "")
+    .toLowerCase()
+    .replace(/\s+/gu, "-")
+    .replace(/[^a-z0-9_-]/gu, "");
+}
+
+function normalizeUserDisplayName(displayName: string | undefined, fallbackHandle: string): string {
+  return displayName?.trim() || fallbackHandle || "User";
+}
+
+function countWorkspaceAdmins(snapshot: WorkspaceSnapshot): number {
+  return Object.values(snapshot.users ?? {}).filter((user) => !user.archivedAt && user.isAdmin === true).length;
+}
+
+function ensureWorkspaceAdminPresence(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
+  const activeUsers = Object.values(snapshot.users ?? {}).filter((user) => !user.archivedAt);
+  if (activeUsers.length === 0 || activeUsers.some((user) => user.isAdmin === true)) {
+    return snapshot;
+  }
+
+  const preferredUserId =
+    (snapshot.userOrder ?? []).find((userId) => {
+      const candidate = snapshot.users?.[userId];
+      return Boolean(candidate && !candidate.archivedAt);
+    })
+    ?? activeUsers
+      .slice()
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))[0]?.id;
+  if (!preferredUserId || !snapshot.users?.[preferredUserId]) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    users: {
+      ...snapshot.users,
+      [preferredUserId]: {
+        ...snapshot.users[preferredUserId],
+        isAdmin: true,
+      },
+    },
+  };
+}
+
+function readBootstrapAdminConfig(): {
+  handle: string;
+  password: string;
+  displayName: string;
+} | undefined {
+  const password = process.env[BOOTSTRAP_ADMIN_PASSWORD_ENV_KEY]?.trim();
+  if (!password) {
+    return undefined;
+  }
+
+  const handle = normalizeUserHandle(process.env[BOOTSTRAP_ADMIN_HANDLE_ENV_KEY] ?? DEFAULT_BOOTSTRAP_ADMIN_HANDLE);
+  if (!handle) {
+    return undefined;
+  }
+
+  return {
+    handle,
+    password,
+    displayName: normalizeUserDisplayName(process.env[BOOTSTRAP_ADMIN_DISPLAY_NAME_ENV_KEY], handle),
+  };
+}
+
+function hashAuthToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function createPasswordHash(password: string, salt: string): string {
+  return scryptSync(password, salt, 64).toString("hex");
+}
+
+function verifyPassword(user: User, password: string): boolean {
+  const expected = Buffer.from(user.passwordHash, "hex");
+  const actual = Buffer.from(createPasswordHash(password, user.passwordSalt), "hex");
+
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function createAuthSessionToken(): string {
+  return `${randomUUID().replace(/-/gu, "")}${randomBytes(16).toString("hex")}`;
+}
+
+function buildAuthSessionExpiry(createdAt: string): string {
+  return new Date(Date.parse(createdAt) + AUTH_SESSION_MAX_AGE_MS).toISOString();
+}
+
+function getProjectMembershipId(projectId: string, userId: string): string {
+  return `membership_${projectId}_${userId}`;
+}
+
+function getUserProjectionAccountId(userId: string): string {
+  return `${USER_PROJECTION_ACCOUNT_PREFIX}${userId}`;
+}
+
+function projectRoleRank(role: ProjectRole): number {
+  switch (role) {
+    case "owner":
+      return 3;
+    case "admin":
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+function cloneAuthCollections(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
+  return {
+    ...snapshot,
+    accounts: snapshot.accounts ? { ...snapshot.accounts } : {},
+    accountOrder: [...(snapshot.accountOrder ?? [])],
+    users: snapshot.users ? { ...snapshot.users } : {},
+    userOrder: [...(snapshot.userOrder ?? [])],
+    authSessions: snapshot.authSessions ? { ...snapshot.authSessions } : {},
+    authSessionOrder: [...(snapshot.authSessionOrder ?? [])],
+    projectMemberships: snapshot.projectMemberships ? { ...snapshot.projectMemberships } : {},
+    humans: snapshot.humans ? { ...snapshot.humans } : {},
+    humanOrderByRoom: snapshot.humanOrderByRoom
+      ? Object.fromEntries(
+        Object.entries(snapshot.humanOrderByRoom).map(([roomId, humanIds]) => [roomId, [...humanIds]]),
+      )
+      : {},
+  };
+}
+
+export class UnauthorizedRuntimeError extends Error {
+  constructor(message = "Unauthorized") {
+    super(message);
+    this.name = "UnauthorizedRuntimeError";
+  }
+}
+
+export class ForbiddenRuntimeError extends Error {
+  constructor(message = "Forbidden") {
+    super(message);
+    this.name = "ForbiddenRuntimeError";
+  }
+}
 
 export interface TaskStreamRoute {
   taskId: string;
@@ -521,7 +720,7 @@ export class WorkspaceRuntime {
     context?: MutationContext;
     logger?: DiagnosticsLogger;
   }) {
-    this.snapshot = args.initialSnapshot;
+    this.snapshot = ensureWorkspaceAdminPresence(args.initialSnapshot);
     Object.values(args.initialSnapshot.rooms).forEach((room) => {
       if (room.watchersSuspended === true) {
         this.suspendedWatcherRoomIds.add(room.id);
@@ -636,7 +835,7 @@ export class WorkspaceRuntime {
             });
           },
           runWatcher: async (input: { watcherId: string }) => {
-            await this.runWatcherNow(input.watcherId);
+            await this.runWatcherInBackground(input.watcherId);
           },
           inspectRoomState: (input: { roomId: string }) => Promise.resolve(this.describeRoomState(input.roomId)),
           persistMemberSession: async (input: { memberId: string; sessionId?: string }) => {
@@ -735,11 +934,1065 @@ export class WorkspaceRuntime {
     return this.globalConfig;
   }
 
+  private resolveAuthenticatedSessionSync(sessionToken?: string): AuthenticatedSession | undefined {
+    const normalizedToken = sessionToken?.trim();
+    if (!normalizedToken) {
+      return undefined;
+    }
+
+    const tokenHash = hashAuthToken(normalizedToken);
+    const matchedSession = Object.values(this.snapshot.authSessions ?? {})
+      .find((session) => session.tokenHash === tokenHash);
+
+    if (!matchedSession) {
+      return undefined;
+    }
+
+    const expiresAtMs = Date.parse(matchedSession.expiresAt);
+    const user = this.snapshot.users?.[matchedSession.userId];
+    if (!user || user.archivedAt || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      return undefined;
+    }
+
+    return {
+      session: matchedSession,
+      user,
+    };
+  }
+
+  getAuthorizedSnapshot(sessionToken?: string): WorkspaceSnapshot {
+    const auth = this.resolveAuthenticatedSessionSync(sessionToken);
+    const visibleProjectIds = new Set(
+      auth
+        ? Object.values(this.snapshot.projectMemberships ?? {})
+          .filter((membership) => !membership.archivedAt && membership.userId === auth.user.id)
+          .map((membership) => membership.projectId)
+        : [],
+    );
+    const visibleRoomIds = new Set(
+      this.snapshot.projectOrder.flatMap((projectId) => visibleProjectIds.has(projectId)
+        ? (this.snapshot.roomOrderByProject[projectId] ?? []).filter((roomId) => Boolean(this.snapshot.rooms[roomId]))
+        : []),
+    );
+    const visibleMemberIds = new Set(
+      [...visibleRoomIds].flatMap((roomId) => this.snapshot.rooms[roomId]?.memberIds ?? []),
+    );
+    const visibleWatcherIds = new Set(
+      [...visibleRoomIds].flatMap((roomId) => this.snapshot.rooms[roomId]?.watcherIds ?? []),
+    );
+    const visibleHumanIds = new Set(
+      [...visibleRoomIds].flatMap((roomId) => this.snapshot.humanOrderByRoom?.[roomId] ?? []),
+    );
+    const visibleMessageIds = new Set(
+      [...visibleRoomIds].flatMap((roomId) => this.snapshot.messageOrderByRoom[roomId] ?? []),
+    );
+    const visibleTaskIds = new Set(
+      Object.values(this.snapshot.tasks)
+        .filter((task) => visibleRoomIds.has(task.roomId))
+        .map((task) => task.id),
+    );
+    const visibleTraceIds = new Set(
+      [...visibleTaskIds].flatMap((taskId) => this.snapshot.taskTraceOrderByTask[taskId] ?? []),
+    );
+    const visibleAccountIds = new Set(
+      [...visibleHumanIds]
+        .map((humanId) => this.snapshot.humans?.[humanId]?.accountId)
+        .filter((accountId): accountId is string => Boolean(accountId)),
+    );
+
+    const selectionProjectId = this.snapshot.selection.projectId && visibleProjectIds.has(this.snapshot.selection.projectId)
+      ? this.snapshot.selection.projectId
+      : this.snapshot.projectOrder.find((projectId) => visibleProjectIds.has(projectId));
+    const selectionRoomId = this.snapshot.selection.roomId && visibleRoomIds.has(this.snapshot.selection.roomId)
+      ? this.snapshot.selection.roomId
+      : (selectionProjectId ? (this.snapshot.roomOrderByProject[selectionProjectId] ?? []).find((roomId) => visibleRoomIds.has(roomId)) : undefined);
+    const selectionMemberId = this.snapshot.selection.memberId && visibleMemberIds.has(this.snapshot.selection.memberId)
+      ? this.snapshot.selection.memberId
+      : (selectionRoomId ? this.snapshot.rooms[selectionRoomId]?.entryMemberId : undefined);
+
+    return {
+      ...this.snapshot,
+      projects: Object.fromEntries(
+        Object.entries(this.snapshot.projects).filter(([projectId]) => visibleProjectIds.has(projectId)),
+      ),
+      projectOrder: this.snapshot.projectOrder.filter((projectId) => visibleProjectIds.has(projectId)),
+      rooms: Object.fromEntries(
+        Object.entries(this.snapshot.rooms).filter(([roomId]) => visibleRoomIds.has(roomId)),
+      ),
+      roomOrderByProject: Object.fromEntries(
+        this.snapshot.projectOrder
+          .filter((projectId) => visibleProjectIds.has(projectId))
+          .map((projectId) => [
+            projectId,
+            (this.snapshot.roomOrderByProject[projectId] ?? []).filter((roomId) => visibleRoomIds.has(roomId)),
+          ]),
+      ),
+      members: Object.fromEntries(
+        Object.entries(this.snapshot.members).filter(([memberId]) => visibleMemberIds.has(memberId)),
+      ),
+      humans: Object.fromEntries(
+        Object.entries(this.snapshot.humans ?? {}).filter(([humanId]) => visibleHumanIds.has(humanId)),
+      ),
+      humanOrderByRoom: Object.fromEntries(
+        [...visibleRoomIds].map((roomId) => [roomId, (this.snapshot.humanOrderByRoom?.[roomId] ?? []).filter((humanId) => visibleHumanIds.has(humanId))]),
+      ),
+      messages: Object.fromEntries(
+        Object.entries(this.snapshot.messages).filter(([messageId]) => visibleMessageIds.has(messageId)),
+      ),
+      messageOrderByRoom: Object.fromEntries(
+        [...visibleRoomIds].map((roomId) => [roomId, (this.snapshot.messageOrderByRoom[roomId] ?? []).filter((messageId) => visibleMessageIds.has(messageId))]),
+      ),
+      tasks: Object.fromEntries(
+        Object.entries(this.snapshot.tasks).filter(([taskId]) => visibleTaskIds.has(taskId)),
+      ),
+      taskTraces: Object.fromEntries(
+        Object.entries(this.snapshot.taskTraces).filter(([traceId]) => visibleTraceIds.has(traceId)),
+      ),
+      taskTraceOrderByTask: Object.fromEntries(
+        [...visibleTaskIds].map((taskId) => [taskId, (this.snapshot.taskTraceOrderByTask[taskId] ?? []).filter((traceId) => visibleTraceIds.has(traceId))]),
+      ),
+      watchers: Object.fromEntries(
+        Object.entries(this.snapshot.watchers).filter(([watcherId]) => visibleWatcherIds.has(watcherId)),
+      ),
+      accounts: Object.fromEntries(
+        Object.entries(this.snapshot.accounts ?? {}).filter(([accountId]) => visibleAccountIds.has(accountId)),
+      ),
+      accountOrder: (this.snapshot.accountOrder ?? []).filter((accountId) => visibleAccountIds.has(accountId)),
+      selection: {
+        projectId: selectionProjectId,
+        roomId: selectionRoomId,
+        memberId: selectionMemberId,
+      },
+      currentUserName: auth?.user.displayName ?? this.snapshot.currentUserName,
+      currentAccountId:
+        this.snapshot.currentAccountId && visibleAccountIds.has(this.snapshot.currentAccountId)
+          ? this.snapshot.currentAccountId
+          : undefined,
+    };
+  }
+
+  private isAuthenticationEnabled(snapshot: WorkspaceSnapshot = this.snapshot): boolean {
+    return Object.values(snapshot.users ?? {}).some((user) => !user.archivedAt)
+      || Object.values(snapshot.projectMemberships ?? {}).some((membership) => !membership.archivedAt)
+      || Object.keys(snapshot.authSessions ?? {}).length > 0;
+  }
+
+  private isClientAuthenticationRequired(): boolean {
+    return true;
+  }
+
+  private buildFilteredSnapshot(projectIds: Set<string>, auth?: AuthenticatedSession): WorkspaceSnapshot {
+    const roomIds = new Set(
+      [...projectIds].flatMap((projectId) => this.snapshot.roomOrderByProject[projectId] ?? []),
+    );
+    const memberIds = new Set(
+      [...roomIds].flatMap((roomId) => this.snapshot.rooms[roomId]?.memberIds ?? []),
+    );
+    const humanIds = new Set(
+      [...roomIds].flatMap((roomId) => this.snapshot.humanOrderByRoom?.[roomId] ?? []),
+    );
+    const messageIds = new Set(
+      [...roomIds].flatMap((roomId) => this.snapshot.messageOrderByRoom[roomId] ?? []),
+    );
+    const taskIds = new Set(
+      Object.values(this.snapshot.tasks)
+        .filter((task) => roomIds.has(task.roomId))
+        .map((task) => task.id),
+    );
+    const traceIds = new Set(
+      [...taskIds].flatMap((taskId) => this.snapshot.taskTraceOrderByTask[taskId] ?? []),
+    );
+    const watcherIds = new Set(
+      Object.values(this.snapshot.watchers)
+        .filter((watcher) => roomIds.has(watcher.roomId))
+        .map((watcher) => watcher.id),
+    );
+    const accountIds = new Set<string>(
+      [...humanIds]
+        .map((humanId) => this.snapshot.humans?.[humanId]?.accountId)
+        .filter((accountId): accountId is string => Boolean(accountId)),
+    );
+    const projectionAccountId = auth ? getUserProjectionAccountId(auth.user.id) : undefined;
+    if (projectionAccountId && this.snapshot.accounts?.[projectionAccountId]) {
+      accountIds.add(projectionAccountId);
+    }
+    if (this.snapshot.currentAccountId && this.snapshot.accounts?.[this.snapshot.currentAccountId]) {
+      accountIds.add(this.snapshot.currentAccountId);
+    }
+
+    const projectOrder = this.snapshot.projectOrder.filter((projectId) => projectIds.has(projectId));
+    const projects = Object.fromEntries(
+      projectOrder
+        .map((projectId) => [projectId, this.snapshot.projects[projectId]] as const)
+        .filter((entry): entry is [string, WorkspaceSnapshot["projects"][string]] => Boolean(entry[1])),
+    );
+    const rooms = Object.fromEntries(
+      [...roomIds]
+        .map((roomId) => [roomId, this.snapshot.rooms[roomId]] as const)
+        .filter((entry): entry is [string, WorkspaceSnapshot["rooms"][string]] => Boolean(entry[1])),
+    );
+    const selectionProjectId = this.snapshot.selection.projectId && projectIds.has(this.snapshot.selection.projectId)
+      ? this.snapshot.selection.projectId
+      : projectOrder[0];
+    const selectionRoomCandidates = selectionProjectId ? (this.snapshot.roomOrderByProject[selectionProjectId] ?? []) : [];
+    const selectionRoomId =
+      this.snapshot.selection.roomId && roomIds.has(this.snapshot.selection.roomId)
+        ? this.snapshot.selection.roomId
+        : selectionRoomCandidates.find((roomId) => roomIds.has(roomId));
+    const selectionMemberId =
+      selectionRoomId && this.snapshot.selection.memberId && rooms[selectionRoomId]?.memberIds.includes(this.snapshot.selection.memberId)
+        ? this.snapshot.selection.memberId
+        : (selectionRoomId ? rooms[selectionRoomId]?.entryMemberId : undefined);
+
+    return {
+      ...this.snapshot,
+      projects,
+      projectOrder,
+      rooms,
+      roomOrderByProject: Object.fromEntries(
+        projectOrder.map((projectId) => [
+          projectId,
+          (this.snapshot.roomOrderByProject[projectId] ?? []).filter((roomId) => roomIds.has(roomId)),
+        ]),
+      ),
+      members: Object.fromEntries(
+        [...memberIds]
+          .map((memberId) => [memberId, this.snapshot.members[memberId]] as const)
+          .filter((entry): entry is [string, WorkspaceSnapshot["members"][string]] => Boolean(entry[1])),
+      ),
+      humans: Object.fromEntries(
+        [...humanIds]
+          .map((humanId) => [humanId, this.snapshot.humans?.[humanId]] as const)
+          .filter((entry): entry is [string, NonNullable<WorkspaceSnapshot["humans"]>[string]] => Boolean(entry[1])),
+      ),
+      humanOrderByRoom: Object.fromEntries(
+        [...roomIds].map((roomId) => [
+          roomId,
+          (this.snapshot.humanOrderByRoom?.[roomId] ?? []).filter((humanId) => humanIds.has(humanId)),
+        ]),
+      ),
+      messages: Object.fromEntries(
+        [...messageIds]
+          .map((messageId) => [messageId, this.snapshot.messages[messageId]] as const)
+          .filter((entry): entry is [string, WorkspaceSnapshot["messages"][string]] => Boolean(entry[1])),
+      ),
+      messageOrderByRoom: Object.fromEntries(
+        [...roomIds].map((roomId) => [
+          roomId,
+          (this.snapshot.messageOrderByRoom[roomId] ?? []).filter((messageId) => messageIds.has(messageId)),
+        ]),
+      ),
+      tasks: Object.fromEntries(
+        [...taskIds]
+          .map((taskId) => [taskId, this.snapshot.tasks[taskId]] as const)
+          .filter((entry): entry is [string, WorkspaceSnapshot["tasks"][string]] => Boolean(entry[1])),
+      ),
+      taskTraces: Object.fromEntries(
+        [...traceIds]
+          .map((traceId) => [traceId, this.snapshot.taskTraces[traceId]] as const)
+          .filter((entry): entry is [string, WorkspaceSnapshot["taskTraces"][string]] => Boolean(entry[1])),
+      ),
+      taskTraceOrderByTask: Object.fromEntries(
+        [...taskIds].map((taskId) => [
+          taskId,
+          (this.snapshot.taskTraceOrderByTask[taskId] ?? []).filter((traceId) => traceIds.has(traceId)),
+        ]),
+      ),
+      watchers: Object.fromEntries(
+        [...watcherIds]
+          .map((watcherId) => [watcherId, this.snapshot.watchers[watcherId]] as const)
+          .filter((entry): entry is [string, WorkspaceSnapshot["watchers"][string]] => Boolean(entry[1])),
+      ),
+      accounts: Object.fromEntries(
+        [...accountIds]
+          .map((accountId) => [accountId, this.snapshot.accounts?.[accountId]] as const)
+          .filter((entry): entry is [string, NonNullable<WorkspaceSnapshot["accounts"]>[string]] => Boolean(entry[1])),
+      ),
+      accountOrder: (this.snapshot.accountOrder ?? []).filter((accountId) => accountIds.has(accountId)),
+      users: undefined,
+      userOrder: undefined,
+      authSessions: undefined,
+      authSessionOrder: undefined,
+      projectMemberships: Object.fromEntries(
+        Object.entries(this.snapshot.projectMemberships ?? {})
+          .filter(([, membership]) => !membership.archivedAt && projectIds.has(membership.projectId)),
+      ),
+      selection: {
+        projectId: selectionProjectId,
+        roomId: selectionRoomId,
+        memberId: selectionMemberId,
+      },
+      currentUserName: auth?.user.displayName ?? this.snapshot.currentUserName,
+      currentAccountId:
+        projectionAccountId && this.snapshot.accounts?.[projectionAccountId]
+          ? projectionAccountId
+          : undefined,
+    };
+  }
+
+  async getClientState(args: { sessionToken?: string } = {}): Promise<{
+    snapshot: WorkspaceSnapshot;
+    auth: AuthStatePayload | ({ required: boolean } & ReturnType<WorkspaceRuntime["buildAuthResponse"]>);
+  }> {
+    const authRequired = this.isClientAuthenticationRequired();
+    const auth = args.sessionToken?.trim()
+      ? await this.resolveAuthenticatedSession(args.sessionToken, { touch: false })
+      : undefined;
+    const visibleProjectIds = authRequired
+      ? new Set(
+        auth?.user.isAdmin
+          ? this.snapshot.projectOrder
+          : (auth ? this.buildMembershipViews(auth.user.id) : []).map((membership) => membership.projectId),
+      )
+      : new Set(this.snapshot.projectOrder);
+
+    return {
+      snapshot: this.buildFilteredSnapshot(visibleProjectIds, auth),
+      auth: auth
+        ? {
+            required: authRequired,
+            ...this.buildAuthResponse(auth),
+          }
+        : {
+            required: authRequired,
+            authenticated: false,
+          },
+    };
+  }
+
+  private buildUserView(user: User): {
+    id: string;
+    handle: string;
+    displayName: string;
+    isAdmin: boolean;
+    createdAt: string;
+    updatedAt?: string;
+  } {
+    return {
+      id: user.id,
+      handle: user.handle,
+      displayName: user.displayName,
+      isAdmin: user.isAdmin === true,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+  }
+
+  private buildMembershipViews(userId: string): Array<{
+    id: string;
+    projectId: string;
+    projectName: string;
+    projectPath?: string;
+    role: ProjectRole;
+    createdAt: string;
+    updatedAt?: string;
+  }> {
+    return Object.values(this.snapshot.projectMemberships ?? {})
+      .filter((membership) => !membership.archivedAt && membership.userId === userId)
+      .filter((membership) => Boolean(this.snapshot.projects[membership.projectId]))
+      .sort((left, right) => {
+        const leftIndex = this.snapshot.projectOrder.indexOf(left.projectId);
+        const rightIndex = this.snapshot.projectOrder.indexOf(right.projectId);
+        return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex)
+          - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex)
+          || left.createdAt.localeCompare(right.createdAt);
+      })
+      .map((membership) => {
+        const project = this.snapshot.projects[membership.projectId]!;
+        return {
+          id: membership.id,
+          projectId: membership.projectId,
+          projectName: project.name,
+          projectPath: project.path,
+          role: membership.role,
+          createdAt: membership.createdAt,
+          updatedAt: membership.updatedAt,
+        };
+      });
+  }
+
+  private buildProjectMemberViews(projectId: string): ProjectMemberView[] {
+    return Object.values(this.snapshot.projectMemberships ?? {})
+      .filter((membership) => !membership.archivedAt && membership.projectId === projectId)
+      .flatMap((membership) => {
+        const user = this.snapshot.users?.[membership.userId];
+        if (!user || user.archivedAt) {
+          return [];
+        }
+
+        return [{
+          membershipId: membership.id,
+          projectId: membership.projectId,
+          userId: user.id,
+          handle: user.handle,
+          displayName: user.displayName,
+          role: membership.role,
+          createdAt: membership.createdAt,
+          updatedAt: membership.updatedAt,
+        } satisfies ProjectMemberView];
+      })
+      .sort((left, right) =>
+        projectRoleRank(right.role) - projectRoleRank(left.role)
+        || left.displayName.localeCompare(right.displayName)
+        || left.handle.localeCompare(right.handle),
+      );
+  }
+
+  private buildManagedUserView(user: User): ManagedUserView {
+    return {
+      ...this.buildUserView(user),
+      memberships: this.buildMembershipViews(user.id),
+    };
+  }
+
+  private buildAuthResponse(
+    auth: AuthenticatedSession,
+    sessionToken?: string,
+    createdUser = false,
+  ): {
+    authenticated: true;
+    createdUser: boolean;
+    sessionToken?: string;
+    session: { id: string; expiresAt: string; lastSeenAt: string };
+    user: { id: string; handle: string; displayName: string; isAdmin: boolean; createdAt: string; updatedAt?: string };
+    memberships: ReturnType<WorkspaceRuntime["buildMembershipViews"]>;
+  } {
+    return {
+      authenticated: true,
+      createdUser,
+      sessionToken,
+      session: {
+        id: auth.session.id,
+        expiresAt: auth.session.expiresAt,
+        lastSeenAt: auth.session.lastSeenAt,
+      },
+      user: this.buildUserView(auth.user),
+      memberships: this.buildMembershipViews(auth.user.id),
+    };
+  }
+
+  private isWorkspaceAdmin(user: User | undefined): boolean {
+    return Boolean(user && !user.archivedAt && user.isAdmin === true);
+  }
+
+  private async requireWorkspaceAdmin(sessionToken?: string): Promise<AuthenticatedSession> {
+    const auth = await this.requireAuthenticatedSession(sessionToken);
+    if (!this.isWorkspaceAdmin(auth.user)) {
+      throw new ForbiddenRuntimeError("Workspace admin access is required.");
+    }
+
+    return auth;
+  }
+
+  private findProjectMembership(snapshot: WorkspaceSnapshot, userId: string, projectId: string): ProjectMembership | undefined {
+    return Object.values(snapshot.projectMemberships ?? {})
+      .find((membership) => !membership.archivedAt && membership.userId === userId && membership.projectId === projectId);
+  }
+
+  private ensureProjectMembership(
+    snapshot: WorkspaceSnapshot,
+    args: { projectId: string; userId: string; role: ProjectRole; now: string },
+  ): void {
+    snapshot.projectMemberships ??= {};
+
+    const membershipId = getProjectMembershipId(args.projectId, args.userId);
+    const existing = snapshot.projectMemberships[membershipId];
+    const nextRole = existing && projectRoleRank(existing.role) > projectRoleRank(args.role)
+      ? existing.role
+      : args.role;
+
+    snapshot.projectMemberships[membershipId] = {
+      id: membershipId,
+      projectId: args.projectId,
+      userId: args.userId,
+      role: nextRole,
+      createdAt: existing?.createdAt ?? args.now,
+      updatedAt: args.now,
+    };
+  }
+
+  private maybeBootstrapLegacyProjectOwnership(snapshot: WorkspaceSnapshot, userId: string, now: string): void {
+    const hasActiveMembership = Object.values(snapshot.projectMemberships ?? {})
+      .some((membership) => !membership.archivedAt);
+    if (hasActiveMembership) {
+      return;
+    }
+
+    snapshot.projectOrder.forEach((projectId) => {
+      this.ensureProjectMembership(snapshot, {
+        projectId,
+        userId,
+        role: "owner",
+        now,
+      });
+    });
+  }
+
+  private resolveProjectedHumanHandle(snapshot: WorkspaceSnapshot, roomId: string, user: User, humanId: string): string {
+    const preferredHandle = normalizeUserHandle(user.handle);
+    const memberConflict = (snapshot.rooms[roomId]?.memberIds ?? [])
+      .some((memberId) => snapshot.members[memberId]?.handle.toLowerCase() === preferredHandle);
+    const humanConflict = (snapshot.humanOrderByRoom?.[roomId] ?? [])
+      .map((candidateId) => snapshot.humans?.[candidateId])
+      .some((human) => human && !human.archivedAt && human.id !== humanId && human.handle.toLowerCase() === preferredHandle);
+
+    if (!memberConflict && !humanConflict) {
+      return preferredHandle;
+    }
+
+    return `${preferredHandle}-${user.id.slice(-6)}`;
+  }
+
+  private ensureUserProjection(snapshot: WorkspaceSnapshot, roomId: string, user: User): string {
+    const accountId = getUserProjectionAccountId(user.id);
+
+    snapshot.accounts ??= {};
+    snapshot.accountOrder ??= [];
+    snapshot.accounts[accountId] = {
+      id: accountId,
+      displayName: user.displayName,
+      handle: user.handle,
+    };
+    if (!snapshot.accountOrder.includes(accountId)) {
+      snapshot.accountOrder = [...snapshot.accountOrder, accountId];
+    }
+
+    snapshot.humans ??= {};
+    snapshot.humanOrderByRoom ??= {};
+    snapshot.humanOrderByRoom[roomId] = snapshot.humanOrderByRoom[roomId] ?? [];
+
+    const humanId = `human_user_${roomId}_${user.id}`;
+    snapshot.humans[humanId] = {
+      ...(snapshot.humans[humanId] ?? {}),
+      id: humanId,
+      roomId,
+      displayName: user.displayName,
+      handle: this.resolveProjectedHumanHandle(snapshot, roomId, user, humanId),
+      kind: "human",
+      accountId,
+      archivedAt: undefined,
+    };
+
+    if (!snapshot.humanOrderByRoom[roomId].includes(humanId)) {
+      snapshot.humanOrderByRoom[roomId] = [...snapshot.humanOrderByRoom[roomId], humanId];
+    }
+
+    return humanId;
+  }
+
+  private syncUserProjection(snapshot: WorkspaceSnapshot, user: User): void {
+    const accountId = getUserProjectionAccountId(user.id);
+
+    if (snapshot.accounts?.[accountId]) {
+      snapshot.accounts[accountId] = {
+        ...snapshot.accounts[accountId],
+        displayName: user.displayName,
+        handle: user.handle,
+        archivedAt: undefined,
+      };
+    }
+
+    Object.entries(snapshot.humans ?? {}).forEach(([humanId, human]) => {
+      if (human.accountId !== accountId || human.archivedAt) {
+        return;
+      }
+
+      snapshot.humans![humanId] = {
+        ...human,
+        displayName: user.displayName,
+        handle: this.resolveProjectedHumanHandle(snapshot, human.roomId, user, humanId),
+        archivedAt: undefined,
+      };
+
+      snapshot.humanOrderByRoom ??= {};
+      snapshot.humanOrderByRoom[human.roomId] = snapshot.humanOrderByRoom[human.roomId] ?? [];
+      if (!snapshot.humanOrderByRoom[human.roomId].includes(humanId)) {
+        snapshot.humanOrderByRoom[human.roomId] = [...snapshot.humanOrderByRoom[human.roomId], humanId];
+      }
+    });
+  }
+
+  private async resolveAuthenticatedSession(
+    sessionToken?: string,
+    options: { touch?: boolean } = {},
+  ): Promise<AuthenticatedSession | undefined> {
+    const normalizedToken = sessionToken?.trim();
+    if (!normalizedToken) {
+      return undefined;
+    }
+
+    const tokenHash = hashAuthToken(normalizedToken);
+    const matchedSession = Object.values(this.snapshot.authSessions ?? {})
+      .find((session) => session.tokenHash === tokenHash);
+
+    if (!matchedSession) {
+      return undefined;
+    }
+
+    const expiresAtMs = Date.parse(matchedSession.expiresAt);
+    const user = this.snapshot.users?.[matchedSession.userId];
+    if (!user || user.archivedAt || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      const previous = this.snapshot;
+      const next = cloneAuthCollections(previous);
+      delete next.authSessions?.[matchedSession.id];
+      next.authSessionOrder = (next.authSessionOrder ?? []).filter((sessionId) => sessionId !== matchedSession.id);
+      await this.applySnapshot(previous, next);
+      return undefined;
+    }
+
+    if (options.touch === false) {
+      return {
+        session: matchedSession,
+        user,
+      };
+    }
+
+    const now = this.context.now();
+    const previous = this.snapshot;
+    const next = cloneAuthCollections(previous);
+    next.authSessions![matchedSession.id] = {
+      ...matchedSession,
+      lastSeenAt: now,
+    };
+    await this.applySnapshot(previous, next);
+
+    return {
+      session: this.snapshot.authSessions![matchedSession.id],
+      user: this.snapshot.users![user.id],
+    };
+  }
+
+  private async requireAuthenticatedSession(sessionToken?: string): Promise<AuthenticatedSession> {
+    const auth = await this.resolveAuthenticatedSession(sessionToken);
+    if (!auth) {
+      throw new UnauthorizedRuntimeError("Login required.");
+    }
+
+    return auth;
+  }
+
+  private async requireProjectAccess(
+    projectId: string,
+    sessionToken: string | undefined,
+    allowedRoles: ProjectRole[] = ["member", "admin", "owner"],
+  ): Promise<AuthenticatedSession & { membership: ProjectMembership } | undefined> {
+    if (!this.isAuthenticationEnabled()) {
+      return undefined;
+    }
+
+    if (!sessionToken?.trim()) {
+      throw new UnauthorizedRuntimeError("Login required.");
+    }
+
+    const auth = await this.requireAuthenticatedSession(sessionToken);
+    const membership = this.findProjectMembership(this.snapshot, auth.user.id, projectId);
+    if (this.isWorkspaceAdmin(auth.user)) {
+      return {
+        ...auth,
+        membership: membership ?? {
+          id: getProjectMembershipId(projectId, auth.user.id),
+          projectId,
+          userId: auth.user.id,
+          role: "owner",
+          createdAt: auth.user.createdAt,
+          updatedAt: auth.user.updatedAt,
+        },
+      };
+    }
+    if (!membership) {
+      throw new ForbiddenRuntimeError(`Project "${projectId}" is not available to the current user.`);
+    }
+    if (!allowedRoles.some((role) => projectRoleRank(membership.role) >= projectRoleRank(role))) {
+      throw new ForbiddenRuntimeError(`Project role "${membership.role}" cannot perform this action.`);
+    }
+
+    return {
+      ...auth,
+      membership,
+    };
+  }
+
+  private async requireRoomAccess(
+    roomId: string,
+    sessionToken: string | undefined,
+    allowedRoles: ProjectRole[] = ["member", "admin", "owner"],
+  ): Promise<AuthenticatedSession & { membership: ProjectMembership } | undefined> {
+    const room = this.snapshot.rooms[roomId];
+    if (!room) {
+      throw new Error(`Unknown room "${roomId}"`);
+    }
+
+    return this.requireProjectAccess(room.projectId, sessionToken, allowedRoles);
+  }
+
+  private resolveRoomForMember(memberId: string): Room | undefined {
+    return Object.values(this.snapshot.rooms)
+      .find((room) => room.memberIds.includes(memberId));
+  }
+
+  private resolveRoomForWatcher(watcherId: string): Room | undefined {
+    const watcher = this.snapshot.watchers[watcherId];
+    return watcher ? this.snapshot.rooms[watcher.roomId] : undefined;
+  }
+
+  private hasActiveAuthenticationSession(snapshot: WorkspaceSnapshot = this.snapshot): boolean {
+    if (!this.isAuthenticationEnabled(snapshot)) {
+      return true;
+    }
+
+    return Object.values(snapshot.authSessions ?? {}).some((session) => {
+      const user = snapshot.users?.[session.userId];
+      const expiresAtMs = Date.parse(session.expiresAt);
+      return Boolean(user && !user.archivedAt && Number.isFinite(expiresAtMs) && expiresAtMs > Date.now());
+    });
+  }
+
+  async login(input: LoginInput): Promise<ReturnType<WorkspaceRuntime["buildAuthResponse"]>> {
+    const handle = normalizeUserHandle(input.handle ?? "");
+    const password = input.password?.trim() ?? "";
+
+    if (!handle) {
+      throw new Error("Handle is required.");
+    }
+    if (!password) {
+      throw new Error("Password is required.");
+    }
+
+    const previous = this.snapshot;
+    const next = cloneAuthCollections(previous);
+    const now = this.context.now();
+    const existingUser = Object.values(next.users ?? {})
+      .find((candidate) => !candidate.archivedAt && candidate.handle === handle);
+    let user: User;
+    let createdUser = false;
+
+    if (existingUser) {
+      if (!verifyPassword(existingUser, password)) {
+        throw new UnauthorizedRuntimeError("Invalid handle or password.");
+      }
+      user = existingUser;
+    } else {
+      const activeUserCount = Object.values(next.users ?? {}).filter((candidate) => !candidate.archivedAt).length;
+      const bootstrapAdmin = readBootstrapAdminConfig();
+      if (activeUserCount > 0) {
+        throw new UnauthorizedRuntimeError("Invalid handle or password.");
+      }
+      if (!bootstrapAdmin) {
+        throw new UnauthorizedRuntimeError(
+          `No users are provisioned. Configure ${BOOTSTRAP_ADMIN_PASSWORD_ENV_KEY} to initialize the first admin account.`,
+        );
+      }
+      if (handle !== bootstrapAdmin.handle || password !== bootstrapAdmin.password) {
+        throw new UnauthorizedRuntimeError(`Use the configured bootstrap admin account @${bootstrapAdmin.handle} to initialize access.`);
+      }
+
+      const userId = this.context.createId("user");
+      const passwordSalt = randomBytes(16).toString("hex");
+      user = {
+        id: userId,
+        handle,
+        displayName: normalizeUserDisplayName(input.displayName, bootstrapAdmin.displayName),
+        isAdmin: true,
+        passwordSalt,
+        passwordHash: createPasswordHash(password, passwordSalt),
+        createdAt: now,
+        updatedAt: now,
+      };
+      next.users![userId] = user;
+      next.userOrder = [...(next.userOrder ?? []), userId];
+      createdUser = true;
+    }
+
+    this.maybeBootstrapLegacyProjectOwnership(next, user.id, now);
+    this.syncUserProjection(next, user);
+
+    const sessionToken = createAuthSessionToken();
+    const sessionId = this.context.createId("session");
+    next.authSessions![sessionId] = {
+      id: sessionId,
+      userId: user.id,
+      tokenHash: hashAuthToken(sessionToken),
+      createdAt: now,
+      lastSeenAt: now,
+      expiresAt: buildAuthSessionExpiry(now),
+    };
+    next.authSessionOrder = [...(next.authSessionOrder ?? []), sessionId];
+
+    await this.applySnapshot(previous, next);
+
+    return this.buildAuthResponse(
+      {
+        session: this.snapshot.authSessions![sessionId],
+        user: this.snapshot.users![user.id],
+      },
+      sessionToken,
+      createdUser,
+    );
+  }
+
+  async logout(args: { sessionToken?: string }): Promise<{ authenticated: false }> {
+    const auth = await this.resolveAuthenticatedSession(args.sessionToken, { touch: false });
+    if (!auth) {
+      return { authenticated: false };
+    }
+
+    const previous = this.snapshot;
+    const next = cloneAuthCollections(previous);
+    delete next.authSessions?.[auth.session.id];
+    next.authSessionOrder = (next.authSessionOrder ?? []).filter((sessionId) => sessionId !== auth.session.id);
+    await this.applySnapshot(previous, next);
+    return { authenticated: false };
+  }
+
+  async restoreSession(args: { sessionToken?: string }): Promise<{ authenticated: false } | ReturnType<WorkspaceRuntime["buildAuthResponse"]>> {
+    const auth = await this.resolveAuthenticatedSession(args.sessionToken);
+    if (!auth) {
+      return { authenticated: false };
+    }
+
+    return this.buildAuthResponse(auth);
+  }
+
+  async getMe(args: { sessionToken?: string }): Promise<ReturnType<WorkspaceRuntime["buildAuthResponse"]>> {
+    const auth = await this.requireAuthenticatedSession(args.sessionToken);
+    return this.buildAuthResponse(auth);
+  }
+
+  async updateMe(args: { sessionToken?: string } & UpdateMeInput): Promise<ReturnType<WorkspaceRuntime["buildAuthResponse"]>> {
+    const auth = await this.requireAuthenticatedSession(args.sessionToken);
+    const nextHandle = args.handle === undefined ? auth.user.handle : normalizeUserHandle(args.handle);
+    const nextDisplayName = args.displayName === undefined
+      ? auth.user.displayName
+      : normalizeUserDisplayName(args.displayName, nextHandle);
+
+    if (!nextHandle) {
+      throw new Error("Handle is required.");
+    }
+    if (!nextDisplayName.trim()) {
+      throw new Error("Display name is required.");
+    }
+
+    const conflictingUser = Object.values(this.snapshot.users ?? {})
+      .find((candidate) => !candidate.archivedAt && candidate.id !== auth.user.id && candidate.handle === nextHandle);
+    if (conflictingUser) {
+      throw new Error(`Handle @${nextHandle} is already in use.`);
+    }
+
+    const previous = this.snapshot;
+    const next = cloneAuthCollections(previous);
+    const updatedUser: User = {
+      ...auth.user,
+      handle: nextHandle,
+      displayName: nextDisplayName,
+      updatedAt: this.context.now(),
+    };
+    next.users![updatedUser.id] = updatedUser;
+    this.syncUserProjection(next, updatedUser);
+    await this.applySnapshot(previous, next);
+
+    return this.buildAuthResponse({
+      session: this.snapshot.authSessions![auth.session.id],
+      user: this.snapshot.users![updatedUser.id],
+    });
+  }
+
+  async listMyProjectMemberships(args: { sessionToken?: string }): Promise<{
+    memberships: ReturnType<WorkspaceRuntime["buildMembershipViews"]>;
+  }> {
+    const auth = await this.requireAuthenticatedSession(args.sessionToken);
+    return {
+      memberships: this.buildMembershipViews(auth.user.id),
+    };
+  }
+
+  async getProjectMembers(args: { projectId: string; sessionToken?: string }): Promise<{
+    projectId: string;
+    members: ProjectMemberView[];
+  }> {
+    await this.requireProjectAccess(args.projectId, args.sessionToken);
+
+    return {
+      projectId: args.projectId,
+      members: this.buildProjectMemberViews(args.projectId),
+    };
+  }
+
+  async listManagedUsers(args: { sessionToken?: string }): Promise<{ users: ManagedUserView[] }> {
+    await this.requireWorkspaceAdmin(args.sessionToken);
+    return {
+      users: Object.values(this.snapshot.users ?? {})
+        .filter((user) => !user.archivedAt)
+        .sort((left, right) =>
+          Number(right.isAdmin === true) - Number(left.isAdmin === true)
+          || left.createdAt.localeCompare(right.createdAt)
+          || left.handle.localeCompare(right.handle),
+        )
+        .map((user) => this.buildManagedUserView(user)),
+    };
+  }
+
+  async createManagedUser(args: {
+    sessionToken?: string;
+    handle: string;
+    displayName: string;
+    password: string;
+    isAdmin?: boolean;
+  }): Promise<{ user: ManagedUserView }> {
+    await this.requireWorkspaceAdmin(args.sessionToken);
+    const handle = normalizeUserHandle(args.handle);
+    const password = args.password.trim();
+    const displayName = normalizeUserDisplayName(args.displayName, handle);
+
+    if (!handle) {
+      throw new Error("Handle is required.");
+    }
+    if (!password) {
+      throw new Error("Password is required.");
+    }
+    if (!displayName.trim()) {
+      throw new Error("Display name is required.");
+    }
+
+    const conflictingUser = Object.values(this.snapshot.users ?? {})
+      .find((candidate) => !candidate.archivedAt && candidate.handle === handle);
+    if (conflictingUser) {
+      throw new Error(`Handle @${handle} is already in use.`);
+    }
+
+    const previous = this.snapshot;
+    const next = cloneAuthCollections(previous);
+    const now = this.context.now();
+    const userId = this.context.createId("user");
+    const passwordSalt = randomBytes(16).toString("hex");
+
+    next.users![userId] = {
+      id: userId,
+      handle,
+      displayName,
+      isAdmin: args.isAdmin === true,
+      passwordSalt,
+      passwordHash: createPasswordHash(password, passwordSalt),
+      createdAt: now,
+      updatedAt: now,
+    };
+    next.userOrder = [...(next.userOrder ?? []), userId];
+
+    await this.applySnapshot(previous, next);
+
+    return {
+      user: this.buildManagedUserView(this.snapshot.users![userId]),
+    };
+  }
+
+  async updateManagedUser(args: {
+    sessionToken?: string;
+    userId: string;
+    handle?: string;
+    displayName?: string;
+    password?: string;
+    isAdmin?: boolean;
+  }): Promise<{ user: ManagedUserView }> {
+    await this.requireWorkspaceAdmin(args.sessionToken);
+    const existingUser = this.snapshot.users?.[args.userId];
+    if (!existingUser || existingUser.archivedAt) {
+      throw new Error(`Unknown user "${args.userId}"`);
+    }
+
+    const nextHandle = args.handle === undefined ? existingUser.handle : normalizeUserHandle(args.handle);
+    const nextDisplayName = args.displayName === undefined
+      ? existingUser.displayName
+      : normalizeUserDisplayName(args.displayName, nextHandle);
+    const nextIsAdmin = args.isAdmin === undefined ? existingUser.isAdmin === true : args.isAdmin === true;
+    const nextPassword = args.password?.trim();
+
+    if (!nextHandle) {
+      throw new Error("Handle is required.");
+    }
+    if (!nextDisplayName.trim()) {
+      throw new Error("Display name is required.");
+    }
+
+    const conflictingUser = Object.values(this.snapshot.users ?? {})
+      .find((candidate) => !candidate.archivedAt && candidate.id !== existingUser.id && candidate.handle === nextHandle);
+    if (conflictingUser) {
+      throw new Error(`Handle @${nextHandle} is already in use.`);
+    }
+    if (existingUser.isAdmin === true && !nextIsAdmin && countWorkspaceAdmins(this.snapshot) <= 1) {
+      throw new Error("At least one workspace admin must remain.");
+    }
+
+    const previous = this.snapshot;
+    const next = cloneAuthCollections(previous);
+    const updatedUser: User = {
+      ...existingUser,
+      handle: nextHandle,
+      displayName: nextDisplayName,
+      isAdmin: nextIsAdmin,
+      updatedAt: this.context.now(),
+    };
+    if (nextPassword) {
+      const passwordSalt = randomBytes(16).toString("hex");
+      updatedUser.passwordSalt = passwordSalt;
+      updatedUser.passwordHash = createPasswordHash(nextPassword, passwordSalt);
+    }
+
+    next.users![updatedUser.id] = updatedUser;
+    this.syncUserProjection(next, updatedUser);
+    await this.applySnapshot(previous, next);
+
+    return {
+      user: this.buildManagedUserView(this.snapshot.users![updatedUser.id]),
+    };
+  }
+
+  async setManagedProjectMembership(args: {
+    sessionToken?: string;
+    userId: string;
+    projectId: string;
+    role?: ProjectRole;
+    remove?: boolean;
+  }): Promise<{ user: ManagedUserView }> {
+    await this.requireWorkspaceAdmin(args.sessionToken);
+    const user = this.snapshot.users?.[args.userId];
+    if (!user || user.archivedAt) {
+      throw new Error(`Unknown user "${args.userId}"`);
+    }
+    if (!this.snapshot.projects[args.projectId]) {
+      throw new Error(`Unknown project "${args.projectId}"`);
+    }
+    if (!args.remove && !args.role) {
+      throw new Error("Role is required when granting project access.");
+    }
+
+    const previous = this.snapshot;
+    const next = cloneAuthCollections(previous);
+    const membershipId = getProjectMembershipId(args.projectId, args.userId);
+
+    if (args.remove || !args.role) {
+      delete next.projectMemberships?.[membershipId];
+    } else {
+      this.ensureProjectMembership(next, {
+        projectId: args.projectId,
+        userId: args.userId,
+        role: args.role,
+        now: this.context.now(),
+      });
+    }
+
+    await this.applySnapshot(previous, next);
+
+    return {
+      user: this.buildManagedUserView(this.snapshot.users![args.userId]),
+    };
+  }
+
   async getRoomMessageHistoryPage(input: {
     roomId: string;
     beforeMessageId?: string;
     limit?: number;
+    sessionToken?: string;
   }): Promise<RoomMessageHistoryPage> {
+    await this.requireRoomAccess(input.roomId, input.sessionToken);
     const room = this.snapshot.rooms[input.roomId];
     if (!room) {
       throw new Error(`Unknown room "${input.roomId}"`);
@@ -756,6 +2009,7 @@ export class WorkspaceRuntime {
 
   async getRoomTodoTrees(input: {
     roomId: string;
+    sessionToken?: string;
   }): Promise<{
     roomId: string;
     projectId: string;
@@ -765,6 +2019,7 @@ export class WorkspaceRuntime {
     providerAssociationNotice: string;
     files: Awaited<ReturnType<typeof listRoomTodoTreeFiles>>;
   }> {
+    await this.requireRoomAccess(input.roomId, input.sessionToken);
     const room = this.snapshot.rooms[input.roomId];
     if (!room) {
       throw new Error(`Unknown room "${input.roomId}"`);
@@ -818,15 +2073,28 @@ export class WorkspaceRuntime {
     return inspectProjectRoomContext(normalizedPath);
   }
 
+  async browseProjectDirectory(input: {
+    path?: string;
+  }): Promise<ProjectDirectoryBrowseResult> {
+    const normalizedPath = normalizeProjectPath(this.workspaceRoot, input.path) ?? this.workspaceRoot;
+
+    return browseProjectDirectories({
+      directoryPath: normalizedPath,
+      workspaceRoot: this.workspaceRoot,
+    });
+  }
+
   async writeRoomAsset(input: {
     roomId: string;
     fileName: string;
     contentType?: string;
     body: Buffer;
+    sessionToken?: string;
   }): Promise<{
     path: string;
     markdown: string;
   }> {
+    await this.requireRoomAccess(input.roomId, input.sessionToken);
     const room = this.snapshot.rooms[input.roomId];
     if (!room) {
       throw new Error(`Unknown room "${input.roomId}"`);
@@ -877,10 +2145,12 @@ export class WorkspaceRuntime {
   async readRoomAsset(input: {
     roomId: string;
     filePath: string;
+    sessionToken?: string;
   }): Promise<{
     body: Buffer;
     contentType: string;
   }> {
+    await this.requireRoomAccess(input.roomId, input.sessionToken);
     const room = this.snapshot.rooms[input.roomId];
     if (!room) {
       throw new Error(`Unknown room "${input.roomId}"`);
@@ -915,8 +2185,19 @@ export class WorkspaceRuntime {
     };
   }
 
-  async createProject(input: CreateProjectInput): Promise<{ snapshot: WorkspaceSnapshot; projectId: string; roomId: string }> {
+  async createProject(
+    input: CreateProjectInput,
+    auth: { sessionToken?: string } = {},
+  ): Promise<{ snapshot: WorkspaceSnapshot; projectId: string; roomId: string }> {
     const previous = this.snapshot;
+    if (this.isAuthenticationEnabled(previous)) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
+    const authenticated = this.isAuthenticationEnabled(previous)
+      ? await this.requireAuthenticatedSession(auth.sessionToken)
+      : (auth.sessionToken?.trim()
+          ? await this.requireAuthenticatedSession(auth.sessionToken)
+          : undefined);
     const normalizedProjectPath = normalizeProjectPath(this.workspaceRoot, input.path);
     const existingProjectId = normalizedProjectPath
       ? previous.projectOrder.find((projectId) => {
@@ -940,8 +2221,30 @@ export class WorkspaceRuntime {
 
       if (existingRoomId) {
         const existingRoom = previous.rooms[existingRoomId];
+        const existingMembership = authenticated
+          ? this.findProjectMembership(previous, authenticated.user.id, existingProject.id)
+          : undefined;
+        const projectHasMemberships = Object.values(previous.projectMemberships ?? {})
+          .some((membership) => !membership.archivedAt && membership.projectId === existingProject.id);
+
+        if (authenticated && !existingMembership && projectHasMemberships) {
+          throw new ForbiddenRuntimeError(`Project "${existingProject.name}" is not available to the current user.`);
+        }
+
+        const nextBase = authenticated && !existingMembership && !projectHasMemberships
+          ? (() => {
+              const seeded = cloneAuthCollections(previous);
+              this.ensureProjectMembership(seeded, {
+                projectId: existingProject.id,
+                userId: authenticated.user.id,
+                role: "owner",
+                now: this.context.now(),
+              });
+              return seeded;
+            })()
+          : previous;
         const next = {
-          ...previous,
+          ...nextBase,
           selection: {
             projectId: existingProject.id,
             roomId: existingRoomId,
@@ -962,7 +2265,7 @@ export class WorkspaceRuntime {
     const importableRoomContexts = normalizedProjectPath
       ? await loadProjectRoomContextSnapshots(normalizedProjectPath)
       : [];
-    const next = importableRoomContexts.length > 0
+    const createdSnapshot = importableRoomContexts.length > 0
       ? importProjectFromRoomContexts({
           current: previous,
           roomContexts: importableRoomContexts,
@@ -978,6 +2281,18 @@ export class WorkspaceRuntime {
           },
           this.context,
         );
+    const next = authenticated
+      ? (() => {
+          const seeded = cloneAuthCollections(createdSnapshot);
+          this.ensureProjectMembership(seeded, {
+            projectId: seeded.selection.projectId!,
+            userId: authenticated.user.id,
+            role: "owner",
+            now: this.context.now(),
+          });
+          return seeded;
+        })()
+      : createdSnapshot;
     this.activeRoomId = next.selection.roomId;
     await this.applySnapshot(previous, next);
     return {
@@ -987,7 +2302,11 @@ export class WorkspaceRuntime {
     };
   }
 
-  async createRoom(input: CreateRoomInput): Promise<{ snapshot: WorkspaceSnapshot; roomId: string }> {
+  async createRoom(
+    input: CreateRoomInput,
+    auth: { sessionToken?: string } = {},
+  ): Promise<{ snapshot: WorkspaceSnapshot; roomId: string }> {
+    await this.requireProjectAccess(input.projectId, auth.sessionToken, ["admin", "owner"]);
     const previous = this.snapshot;
     const next = createRoomInProject(previous, input, this.context);
     this.activeRoomId = next.selection.roomId;
@@ -998,16 +2317,43 @@ export class WorkspaceRuntime {
     };
   }
 
-  async deleteProject(projectId: string): Promise<WorkspaceSnapshot> {
+  async deleteProject(projectId: string, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    await this.requireProjectAccess(projectId, auth.sessionToken, ["owner"]);
     const previous = this.snapshot;
     const next = deleteProjectFromWorkspace(previous, projectId);
     await this.applySnapshot(previous, next);
     return this.snapshot;
   }
 
-  async deleteRoom(roomId: string): Promise<WorkspaceSnapshot> {
+  async deleteRoom(roomId: string, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    await this.requireRoomAccess(roomId, auth.sessionToken, ["admin", "owner"]);
     const previous = this.snapshot;
     const next = deleteRoomFromWorkspace(previous, roomId);
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
+  async createWorkspaceAccount(args: {
+    displayName: string;
+    handle?: string;
+    roomId?: string;
+    activate?: boolean;
+  }): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    const next = upsertWorkspaceAccount(previous, args, this.context);
+    if (args.roomId) {
+      this.activeRoomId = args.roomId;
+    }
+    await this.applySnapshot(previous, next);
+    return this.snapshot;
+  }
+
+  async setActiveAccount(args: { accountId: string; roomId?: string }): Promise<WorkspaceSnapshot> {
+    const previous = this.snapshot;
+    const next = setActiveAccountInWorkspace(previous, args.accountId, args.roomId);
+    if (args.roomId) {
+      this.activeRoomId = args.roomId;
+    }
     await this.applySnapshot(previous, next);
     return this.snapshot;
   }
@@ -1018,18 +2364,24 @@ export class WorkspaceRuntime {
     authorHumanId?: string;
     directMemberId?: string;
     directHumanId?: string;
+    sessionToken?: string;
   }): Promise<WorkspaceSnapshot> {
     const previous = this.snapshot;
+    const authenticated = await this.requireRoomAccess(args.roomId, args.sessionToken);
+    const prepared = authenticated ? cloneAuthCollections(previous) : previous;
+    const authorHumanId = authenticated
+      ? this.ensureUserProjection(prepared, args.roomId, authenticated.user)
+      : args.authorHumanId;
     this.activeRoomId = args.roomId;
     const next = postUserMessage(
-      previous,
+      prepared,
       {
         roomId: args.roomId,
         content: args.content,
-        authorHumanId: args.authorHumanId,
+        authorHumanId,
         directMemberId: args.directMemberId,
         directHumanId: args.directHumanId,
-        mentionedMemberIds: extractMentionMemberIds(previous, args.roomId, args.content),
+        mentionedMemberIds: extractMentionMemberIds(prepared, args.roomId, args.content),
       },
       this.context,
     );
@@ -1044,19 +2396,25 @@ export class WorkspaceRuntime {
       authorHumanId?: string;
       directMemberId?: string;
       directHumanId?: string;
+      sessionToken?: string;
     },
     callbacks: TaskStreamCallbacks,
   ): Promise<void> {
     const previous = this.snapshot;
+    const authenticated = await this.requireRoomAccess(args.roomId, args.sessionToken);
+    const prepared = authenticated ? cloneAuthCollections(previous) : previous;
+    const authorHumanId = authenticated
+      ? this.ensureUserProjection(prepared, args.roomId, authenticated.user)
+      : args.authorHumanId;
     const next = postUserMessage(
-      previous,
+      prepared,
       {
         roomId: args.roomId,
         content: args.content,
-        authorHumanId: args.authorHumanId,
+        authorHumanId,
         directMemberId: args.directMemberId,
         directHumanId: args.directHumanId,
-        mentionedMemberIds: extractMentionMemberIds(previous, args.roomId, args.content),
+        mentionedMemberIds: extractMentionMemberIds(prepared, args.roomId, args.content),
       },
       this.context,
     );
@@ -1177,7 +2535,8 @@ export class WorkspaceRuntime {
     };
   }
 
-  async acknowledgeRoom(roomId: string): Promise<WorkspaceSnapshot> {
+  async acknowledgeRoom(roomId: string, sessionToken?: string): Promise<WorkspaceSnapshot> {
+    await this.requireRoomAccess(roomId, sessionToken);
     const previous = this.snapshot;
     this.activeRoomId = roomId;
     const next = acknowledgeRoom(previous, roomId, this.context);
@@ -1185,14 +2544,22 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
-  async updatePrompt(memberId: string, prompt: string): Promise<WorkspaceSnapshot> {
+  async updatePrompt(memberId: string, prompt: string, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    const room = this.resolveRoomForMember(memberId);
+    if (room) {
+      await this.requireRoomAccess(room.id, auth.sessionToken, ["admin", "owner"]);
+    }
     const previous = this.snapshot;
     const next = updateMemberPrompt(previous, memberId, prompt);
     await this.applySnapshot(previous, next);
     return this.snapshot;
   }
 
-  async updateMemberConfig(input: UpdateMemberConfigInput): Promise<WorkspaceSnapshot> {
+  async updateMemberConfig(input: UpdateMemberConfigInput, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    const room = this.resolveRoomForMember(input.memberId);
+    if (room) {
+      await this.requireRoomAccess(room.id, auth.sessionToken, ["admin", "owner"]);
+    }
     const previous = this.snapshot;
     const next = updateMemberConfig(previous, input);
     const previousMember = previous.members[input.memberId];
@@ -1208,7 +2575,8 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
-  async updateRoomTeam(input: UpdateRoomTeamInput): Promise<WorkspaceSnapshot> {
+  async updateRoomTeam(input: UpdateRoomTeamInput, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    await this.requireRoomAccess(input.roomId, auth.sessionToken, ["admin", "owner"]);
     const previous = this.snapshot;
     const next = updateRoomTeamInWorkspace(previous, input, this.context);
 
@@ -1231,7 +2599,8 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
-  async updateRoomSettings(input: UpdateRoomSettingsInput): Promise<WorkspaceSnapshot> {
+  async updateRoomSettings(input: UpdateRoomSettingsInput, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    await this.requireRoomAccess(input.roomId, auth.sessionToken, ["admin", "owner"]);
     const previous = this.snapshot;
     const next = updateRoomSettingsInWorkspace(
       previous,
@@ -1243,7 +2612,10 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
-  async updateTemplate(input: UpdateTemplateInput): Promise<WorkspaceSnapshot> {
+  async updateTemplate(input: UpdateTemplateInput, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    if (this.isAuthenticationEnabled()) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
     const previous = this.snapshot;
     const next = updateTemplate(previous, input);
     await this.globalConfigManager.saveTemplates(
@@ -1253,7 +2625,10 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
-  async deleteTemplate(templateId: string): Promise<WorkspaceSnapshot> {
+  async deleteTemplate(templateId: string, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    if (this.isAuthenticationEnabled()) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
     const previous = this.snapshot;
     const next = deleteTemplateFromWorkspace(previous, templateId);
     await this.globalConfigManager.saveTemplates(
@@ -1263,7 +2638,10 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
-  async updateGlobalConfig(input: UpdateGlobalConfigInput): Promise<GlobalWorkspaceConfig> {
+  async updateGlobalConfig(input: UpdateGlobalConfigInput, auth: { sessionToken?: string } = {}): Promise<GlobalWorkspaceConfig> {
+    if (this.isAuthenticationEnabled()) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
     const nextConfig = await this.globalConfigManager.saveConfig(input);
     const changedProfileIds = findChangedModelProfileIds(this.globalConfig, nextConfig);
     this.globalConfig = nextConfig;
@@ -1309,7 +2687,10 @@ export class WorkspaceRuntime {
     messages: TemplateStudioChatMessage[];
     modelProfileId?: string;
     modelId?: string;
-  }): Promise<{ assistantMessage: string; snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; modelProfileId: string; modelId?: string }> {
+  }, auth: { sessionToken?: string } = {}): Promise<{ assistantMessage: string; snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; modelProfileId: string; modelId?: string }> {
+    if (this.isAuthenticationEnabled()) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
     const assistantReply = await this.templateStudioChatService.chat({
       configDirectory: this.globalConfigManager.directory,
       templateId: input.templateId,
@@ -1332,7 +2713,10 @@ export class WorkspaceRuntime {
 
   async getTemplateStudioModelCatalog(input: {
     modelProfileId?: string;
-  }): Promise<TemplateStudioModelCatalog> {
+  }, auth: { sessionToken?: string } = {}): Promise<TemplateStudioModelCatalog> {
+    if (this.isAuthenticationEnabled()) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
     return this.templateStudioChatService.getModelCatalog({
       configDirectory: this.globalConfigManager.directory,
       globalConfig: this.globalConfig,
@@ -1342,7 +2726,10 @@ export class WorkspaceRuntime {
 
   async getProviderProfileModelCatalog(input: {
     draft: ModelProfileDraft;
-  }): Promise<TemplateStudioModelCatalog> {
+  }, auth: { sessionToken?: string } = {}): Promise<TemplateStudioModelCatalog> {
+    if (this.isAuthenticationEnabled()) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
     return this.templateStudioChatService.getModelCatalogForProfile({
       configDirectory: this.globalConfigManager.directory,
       profile: buildProviderModelProfileFromDraft({
@@ -1355,7 +2742,10 @@ export class WorkspaceRuntime {
   async testProviderProfile(input: {
     draft: ModelProfileDraft;
     modelId?: string;
-  }): Promise<ProviderConnectionTestResult> {
+  }, auth: { sessionToken?: string } = {}): Promise<ProviderConnectionTestResult> {
+    if (this.isAuthenticationEnabled()) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
     return this.templateStudioChatService.testProfile({
       configDirectory: this.globalConfigManager.directory,
       profile: buildProviderModelProfileFromDraft({
@@ -1373,7 +2763,10 @@ export class WorkspaceRuntime {
     modelProfileId?: string;
     modelId?: string;
     abortSignal?: AbortSignal;
-  }): Promise<TemplateStudioChatStreamSession> {
+  }, auth: { sessionToken?: string } = {}): Promise<TemplateStudioChatStreamSession> {
+    if (this.isAuthenticationEnabled()) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
     const streamRun = await this.templateStudioChatService.stream({
       configDirectory: this.globalConfigManager.directory,
       templateId: input.templateId,
@@ -1405,28 +2798,41 @@ export class WorkspaceRuntime {
     };
   }
 
-  async setEntryMember(memberId: string): Promise<WorkspaceSnapshot> {
+  async setEntryMember(memberId: string, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    const room = this.resolveRoomForMember(memberId);
+    if (room) {
+      await this.requireRoomAccess(room.id, auth.sessionToken, ["admin", "owner"]);
+    }
     const previous = this.snapshot;
     const next = setEntryMember(previous, memberId);
     await this.applySnapshot(previous, next);
     return this.snapshot;
   }
 
-  async upsertWatcher(input: UpsertWatcherInput): Promise<WorkspaceSnapshot> {
+  async upsertWatcher(input: UpsertWatcherInput, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    const room = this.resolveRoomForMember(input.memberId);
+    if (room) {
+      await this.requireRoomAccess(room.id, auth.sessionToken, ["admin", "owner"]);
+    }
     const previous = this.snapshot;
     const next = upsertMemberWatcher(previous, input, this.context);
     await this.applySnapshot(previous, next);
     return this.snapshot;
   }
 
-  async toggleWatcher(watcherId: string): Promise<WorkspaceSnapshot> {
+  async toggleWatcher(watcherId: string, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    const room = this.resolveRoomForWatcher(watcherId);
+    if (room) {
+      await this.requireRoomAccess(room.id, auth.sessionToken, ["admin", "owner"]);
+    }
     const previous = this.snapshot;
     const next = toggleWatcher(previous, watcherId);
     await this.applySnapshot(previous, next);
     return this.snapshot;
   }
 
-  async toggleRoomWatcherSuspension(roomId: string): Promise<WorkspaceSnapshot> {
+  async toggleRoomWatcherSuspension(roomId: string, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    await this.requireRoomAccess(roomId, auth.sessionToken, ["admin", "owner"]);
     const previous = this.snapshot;
     if (!previous.rooms[roomId]) {
       throw new Error(`Unknown room "${roomId}"`);
@@ -1441,14 +2847,20 @@ export class WorkspaceRuntime {
     return this.snapshot;
   }
 
-  async pauseWatcherUntilActivity(watcherId: string): Promise<WorkspaceSnapshot> {
+  async pauseWatcherUntilActivity(watcherId: string, auth: { sessionToken?: string } = {}): Promise<WorkspaceSnapshot> {
+    const room = this.resolveRoomForWatcher(watcherId);
+    if (room) {
+      await this.requireRoomAccess(room.id, auth.sessionToken, ["admin", "owner"]);
+    }
     const previous = this.snapshot;
     const next = pauseWatcherUntilActivityInWorkspace(previous, watcherId);
     await this.applySnapshot(previous, next);
     return this.snapshot;
   }
 
-  async runWatcherNow(watcherId: string): Promise<{ snapshot: WorkspaceSnapshot; outcome: WatcherRunOutcome }> {
+  private async runWatcherNowCore(
+    watcherId: string,
+  ): Promise<{ snapshot: WorkspaceSnapshot; outcome: WatcherRunOutcome }> {
     const watcher = this.snapshot.watchers[watcherId];
     if (!watcher || !watcher.enabled) {
       this.pendingWatcherRuns.delete(watcherId);
@@ -1488,11 +2900,65 @@ export class WorkspaceRuntime {
     };
   }
 
+  private async runWatcherInBackground(
+    watcherId: string,
+  ): Promise<{ snapshot: WorkspaceSnapshot; outcome: WatcherRunOutcome }> {
+    const watcher = this.snapshot.watchers[watcherId];
+    if (!watcher || !watcher.enabled) {
+      this.pendingWatcherRuns.delete(watcherId);
+      return { snapshot: this.snapshot, outcome: "disabled" };
+    }
+
+    if (!this.hasActiveAuthenticationSession()) {
+      this.pendingWatcherRuns.add(watcherId);
+      return { snapshot: this.snapshot, outcome: "suspended" };
+    }
+
+    try {
+      return await this.runWatcherNowCore(watcherId);
+    } catch (error) {
+      if (error instanceof UnauthorizedRuntimeError || error instanceof ForbiddenRuntimeError) {
+        this.pendingWatcherRuns.add(watcherId);
+        this.logger?.warn("watcher-background-run-skipped", {
+          watcherId,
+          roomId: watcher.roomId,
+          memberId: watcher.memberId,
+          message: getErrorMessage(error),
+        });
+        return { snapshot: this.snapshot, outcome: "suspended" };
+      }
+
+      this.pendingWatcherRuns.delete(watcherId);
+      this.logger?.error("watcher-background-run-failed", {
+        watcherId,
+        roomId: watcher.roomId,
+        memberId: watcher.memberId,
+        message: getErrorMessage(error as RuntimeError),
+      });
+      return { snapshot: this.snapshot, outcome: "idle" };
+    }
+  }
+
+  async runWatcherNow(
+    watcherId: string,
+    auth: { sessionToken?: string } = {},
+  ): Promise<{ snapshot: WorkspaceSnapshot; outcome: WatcherRunOutcome }> {
+    const room = this.resolveRoomForWatcher(watcherId);
+    if (room) {
+      await this.requireRoomAccess(room.id, auth.sessionToken, ["admin", "owner"]);
+    }
+
+    return this.runWatcherNowCore(watcherId);
+  }
+
   async listSkillCatalog(): Promise<SkillCatalogEntry[]> {
     return loadSkillCatalog(this.workspaceRoot);
   }
 
-  async generateTemplate(brief: string): Promise<TeamTemplate> {
+  async generateTemplate(brief: string, auth: { sessionToken?: string } = {}): Promise<TeamTemplate> {
+    if (this.isAuthenticationEnabled()) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
     const nextTemplate = await this.templateGenerator(brief, {
       workspaceRoot: this.workspaceRoot,
       references: cloneTemplates(this.snapshot),
@@ -1838,6 +3304,20 @@ export class WorkspaceRuntime {
             ),
             retryAttempt,
             sessionContinuation: preparation?.sessionContinuation,
+          });
+          this.logger?.info("task-prompt-build", {
+            taskId,
+            roomId: room.id,
+            memberId: member.id,
+            memberHandle: member.handle,
+            providerKind: executionMember.provider.kind,
+            snapshotProviderSessionId: executionMember.providerSessionId ?? null,
+            providerSessionId: preparation?.providerSessionId ?? executionMember.providerSessionId ?? null,
+            persistedProviderSessionId:
+              preparation?.persistedProviderSessionId ?? executionMember.providerSessionId ?? null,
+            sessionContinuation: preparation?.sessionContinuation ?? null,
+            promptMode: promptPayload.promptMode,
+            retryAttempt,
           });
           const { taskSettled, promptVisible: attemptPromptVisible } = await this.executeTaskAttempt({
             taskId,
@@ -2576,24 +4056,36 @@ export class WorkspaceRuntime {
 
   private syncWatchers(): void {
     const activeWatcherIds = new Set(Object.keys(this.snapshot.watchers));
+    const canRunBackgroundWatchers = this.hasActiveAuthenticationSession();
 
     this.watcherTimers.forEach((entry, watcherId) => {
       const watcher = this.snapshot.watchers[watcherId];
       const intervalMs = watcher ? watcher.intervalMinutes * 60 * 1000 : undefined;
-      if (!watcher || !watcher.enabled || this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true || intervalMs !== entry.intervalMs) {
+      if (
+        !watcher
+        || !watcher.enabled
+        || this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true
+        || intervalMs !== entry.intervalMs
+        || !canRunBackgroundWatchers
+      ) {
         clearInterval(entry.timer);
         this.watcherTimers.delete(watcherId);
       }
     });
 
     Object.entries(this.snapshot.watchers).forEach(([watcherId, watcher]) => {
-      if (!watcher.enabled || this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true || this.watcherTimers.has(watcherId)) {
+      if (
+        !watcher.enabled
+        || this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true
+        || this.watcherTimers.has(watcherId)
+        || !canRunBackgroundWatchers
+      ) {
         return;
       }
 
       const intervalMs = watcher.intervalMinutes * 60 * 1000;
       const timer = setInterval(() => {
-        void this.runWatcherNow(watcherId);
+        void this.runWatcherInBackground(watcherId);
       }, intervalMs);
       this.watcherTimers.set(watcherId, {
         intervalMs,
@@ -2628,7 +4120,12 @@ export class WorkspaceRuntime {
 
   private canRunWatcherNow(watcherId: string): boolean {
     const watcher = this.snapshot.watchers[watcherId];
-    if (!watcher || !watcher.enabled || this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true) {
+    if (
+      !watcher
+      || !watcher.enabled
+      || this.snapshot.rooms[watcher.roomId]?.watchersSuspended === true
+      || !this.hasActiveAuthenticationSession()
+    ) {
       return false;
     }
 
@@ -2647,7 +4144,7 @@ export class WorkspaceRuntime {
           continue;
         }
 
-        await this.runWatcherNow(watcherId);
+        await this.runWatcherInBackground(watcherId);
       }
     } finally {
       this.flushingPendingWatchers = false;

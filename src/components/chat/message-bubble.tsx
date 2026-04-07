@@ -12,6 +12,7 @@ import { MemberIdentityChip } from "@/components/members/member-identity-chip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getMemberRoleLabel, getMemberRolePalette } from "@/lib/member-display";
+import { resolveChatAuthorActorKind } from "@/lib/chat-author";
 import { badgeToneProps, messageStatusBadgeProps, surfaceToneClass } from "@/lib/ui-tone";
 import { cn, formatTime } from "@/lib/utils";
 
@@ -28,6 +29,7 @@ export interface MessageBubbleProps {
 
 function MessageBubbleBadges(props: { message: ChatMessage; contextBadges: ContextBadge[] }) {
   const { message, contextBadges } = props;
+  const actorKind = resolveChatAuthorActorKind(message.author);
   const transportLabel =
     message.transport === "direct" ? "Direct" : message.transport === "watch-digest" ? "Watcher" : message.transport === "status" ? "Status" : "Room";
   const transportIcon =
@@ -44,6 +46,11 @@ function MessageBubbleBadges(props: { message: ChatMessage; contextBadges: Conte
         {transportIcon}
         {transportLabel}
       </Badge>
+      {actorKind === "human" ? (
+        <Badge variant="outline" className="px-2 py-0.5 text-[10px]">Human</Badge>
+      ) : actorKind === "bot" ? (
+        <Badge variant="outline" className="px-2 py-0.5 text-[10px]">Bot</Badge>
+      ) : null}
       {contextBadges.map((badge) => {
         const toneBadge = badgeToneProps(badge.tone);
 
@@ -64,11 +71,13 @@ function MessageBubbleBadges(props: { message: ChatMessage; contextBadges: Conte
 
 export function MessageBubbleMeta(props: MessageBubbleProps & { sticky?: boolean }) {
   const { message, authorMember, contextBadges = [], onAuthorClick, sticky = false } = props;
-  const isSystem = message.author.kind === "system";
-  const isUser = message.author.kind === "user";
-  const isCompactMember = message.author.kind === "member" && message.transport === "group";
+  const actorKind = resolveChatAuthorActorKind(message.author);
+  const isSystem = actorKind === "system";
+  const isUser = actorKind === "human";
+  const isCompactMember = actorKind === "bot" && message.transport === "group";
   const authorRoleLabel = authorMember ? getMemberRoleLabel(authorMember.handle) : message.author.label;
   const authorName = authorMember?.name;
+  const authorHandleLabel = message.author.handle ? `@${message.author.handle}` : undefined;
   const authorRolePalette = authorMember ? getMemberRolePalette(authorMember.handle) : undefined;
 
   if (isUser) {
@@ -79,6 +88,11 @@ export function MessageBubbleMeta(props: MessageBubbleProps & { sticky?: boolean
             <span className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-[color:var(--tone-blueprint-foreground)]">
               {authorRoleLabel}
             </span>
+            {authorHandleLabel ? (
+              <span className="truncate text-[11px] uppercase tracking-[0.16em] text-[color:var(--tone-blueprint-foreground)]/70">
+                {authorHandleLabel}
+              </span>
+            ) : null}
             <MessageBubbleBadges message={message} contextBadges={contextBadges} />
           </div>
           <p className="m-0 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{formatTime(message.createdAt)}</p>
@@ -149,9 +163,10 @@ function MessageBubbleComponent(props: MessageBubbleProps) {
     contextBadges = [],
     onAuthorClick,
   } = props;
-  const isSystem = message.author.kind === "system";
-  const isUser = message.author.kind === "user";
-  const isCompactMember = message.author.kind === "member" && message.transport === "group";
+  const actorKind = resolveChatAuthorActorKind(message.author);
+  const isSystem = actorKind === "system";
+  const isUser = actorKind === "human";
+  const isCompactMember = actorKind === "bot" && message.transport === "group";
   const usesCompactSurface = isUser || isCompactMember;
   const initialPreview = getCollapsedMessageContent(message.content);
   const [expanded, setExpanded] = useState(!initialPreview.collapsed);

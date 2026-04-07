@@ -13,7 +13,7 @@ export const enMessages = {
     runtimeOffline: "Runtime offline",
     loading: "Loading…",
     subtitle: "ACP multi-agent workspace.",
-    startRuntime: "Start the local runtime:",
+    startRuntime: "Start the local runtime (watch mode):",
     projects: "Projects",
   },
 } as const;

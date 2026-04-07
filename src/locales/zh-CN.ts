@@ -13,7 +13,7 @@ export const zhCNMessages = {
     runtimeOffline: "Runtime 离线",
     loading: "加载中…",
     subtitle: "ACP 多智能体工作区。",
-    startRuntime: "启动本地 runtime：",
+    startRuntime: "启动本地 runtime（推荐 watch 模式）：",
     projects: "项目",
   },
 } as const;

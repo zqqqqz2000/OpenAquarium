@@ -413,7 +413,11 @@ describe("AcpMemberExecutor", () => {
 
     const preparation = await executor.prepareExecution(toPreparationRequest(request));
 
-    expect(preparation).toEqual({ sessionContinuation: "fresh" });
+    expect(preparation).toMatchObject({
+      sessionContinuation: "fresh",
+      providerSessionId: "session_rotated",
+      persistedProviderSessionId: "session_stable",
+    });
     expect(persistMemberSession).not.toHaveBeenCalled();
 
     await executor.execute(request, {
@@ -480,7 +484,11 @@ describe("AcpMemberExecutor", () => {
       },
     };
     const preparation = await executor.prepareExecution(toPreparationRequest(nextRequest));
-    expect(preparation).toEqual({ sessionContinuation: "resumed" });
+    expect(preparation).toMatchObject({
+      sessionContinuation: "resumed",
+      providerSessionId: "session_stable",
+      persistedProviderSessionId: "session_stable",
+    });
 
     await executor.execute(nextRequest, {
       onDraft: () => Promise.resolve(),
@@ -554,7 +562,11 @@ describe("AcpMemberExecutor", () => {
     releaseFirstTurn?.();
     const preparation = await preparationPromise;
 
-    expect(preparation).toEqual({ sessionContinuation: "resumed" });
+    expect(preparation).toMatchObject({
+      sessionContinuation: "resumed",
+      providerSessionId: "session_fresh",
+      persistedProviderSessionId: "session_fresh",
+    });
 
     const secondComplete = vi.fn(() => Promise.resolve());
     const secondRun = executor.execute(

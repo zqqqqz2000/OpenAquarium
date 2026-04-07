@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { shallow } from "zustand/shallow";
 
 import type { Room, WorkspaceSnapshot } from "@/domain/model";
+import { WorkspaceAuthGate, WorkspaceAuthProfileControl } from "@/components/auth/workspace-auth-controls";
 import { ChatPane } from "@/components/chat/chat-pane";
 import { clampLeftPanelWidth, clampRightPanelWidth, getRoomGridColumns } from "@/lib/shell-panels";
 import { buildRoomWatcherPauseSummaryById, type RoomWatcherPauseSummary } from "@/lib/watcher-state";
@@ -166,10 +167,18 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const navigate = useNavigate();
   const snapshot = useWorkspaceStore((state) => state.snapshot);
   const {
+    auth,
     globalConfig,
     loading,
     connected,
     error,
+    login,
+    logout,
+    updateMe,
+    listManagedUsers,
+    createManagedUser,
+    updateManagedUser,
+    setManagedProjectMembership,
     deleteProject,
     deleteRoom,
     deleteTemplate,
@@ -188,10 +197,18 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     sendUserMessage,
   } = useWorkspaceStore(
     (state) => ({
+      auth: state.auth,
       globalConfig: state.globalConfig,
       loading: state.loading,
       connected: state.connected,
       error: state.error,
+      login: state.login,
+      logout: state.logout,
+      updateMe: state.updateMe,
+      listManagedUsers: state.listManagedUsers,
+      createManagedUser: state.createManagedUser,
+      updateManagedUser: state.updateManagedUser,
+      setManagedProjectMembership: state.setManagedProjectMembership,
       deleteProject: state.deleteProject,
       deleteRoom: state.deleteRoom,
       deleteTemplate: state.deleteTemplate,
@@ -230,6 +247,10 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     setRightWidth,
   } = useShellPanels();
   const deferredSnapshot = useDeferredValue(snapshot);
+  const canManageWorkspace = auth.authenticated && auth.user.isAdmin;
+  const projectRoleById = auth.authenticated
+    ? Object.fromEntries(auth.memberships.map((membership) => [membership.projectId, membership.role])) as Record<string, "owner" | "admin" | "member">
+    : {};
 
   useEffect(() => {
     if (projectId && roomId) {
@@ -242,6 +263,50 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
       selectMember(memberId);
     }
   }, [memberId, selectMember]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    if (!auth.authenticated) {
+      return;
+    }
+
+    if (auth.authenticated && !projectId && !roomId) {
+      const nextRoute = resolveFallbackRoomRoute(snapshot);
+      if (!nextRoute) {
+        return;
+      }
+
+      startTransition(() => {
+        void navigate({
+          to: "/projects/$projectId/rooms/$roomId",
+          params: nextRoute,
+        });
+      });
+      return;
+    }
+
+    if (currentRouteStillExists({ snapshot, projectId, roomId, memberId })) {
+      return;
+    }
+
+    const nextRoute = resolveFallbackRoomRoute(snapshot);
+    startTransition(() => {
+      if (nextRoute) {
+        void navigate({
+          to: "/projects/$projectId/rooms/$roomId",
+          params: nextRoute,
+        });
+        return;
+      }
+
+      void navigate({
+        to: "/",
+      });
+    });
+  }, [auth, loading, memberId, navigate, projectId, roomId, snapshot]);
 
   const selectedProjectId = projectId ?? snapshot.selection.projectId ?? snapshot.projectOrder[0];
   const roomIds = selectedProjectId ? snapshot.roomOrderByProject[selectedProjectId] ?? [] : [];
@@ -439,7 +504,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const isOverlayLayout = layoutMode === "overlay";
   const sidebarPanel = (
     <Sidebar
-      collapsed={isOverlayLayout ? leftCollapsed : false}
+      collapsed={leftCollapsed}
       overlay={isOverlayLayout}
       onToggleCollapsed={toggleLeftCollapsed}
       projects={sidebarData.projects}
@@ -455,6 +520,8 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
       activeRoomId={selectedRoomId}
       templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
       activeTemplateId={selectedTemplateId}
+      canManageWorkspace={canManageWorkspace}
+      projectRoleById={projectRoleById}
       connected={connected}
       error={error}
       loading={loading}
@@ -491,78 +558,113 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     "--oa-room-grid-columns": gridColumns.templateColumns,
   } as CSSProperties;
 
+  if (loading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background px-6 py-10">
+        <div className="text-sm text-muted-foreground">Restoring session…</div>
+      </main>
+    );
+  }
+
+  if (!auth.authenticated) {
+    return <WorkspaceAuthGate connected={connected} error={error} onLogin={(input) => login(input)} />;
+  }
+
+  const authProfileControl = (
+    <WorkspaceAuthProfileControl
+      auth={auth}
+      error={error}
+      availableProjects={snapshot.projectOrder.flatMap((projectEntryId) => {
+        const projectEntry = snapshot.projects[projectEntryId];
+        return projectEntry ? [projectEntry] : [];
+      })}
+      onLogout={() => logout()}
+      onUpdateMe={(input) => updateMe(input)}
+      onListManagedUsers={() => listManagedUsers()}
+      onCreateManagedUser={(input) => createManagedUser(input)}
+      onUpdateManagedUser={(input) => updateManagedUser(input)}
+      onSetManagedProjectMembership={(input) => setManagedProjectMembership(input)}
+    />
+  );
+
   return (
-    <>
-      <div className="room-grid" style={gridStyle} data-layout-mode={layoutMode}>
-        {isOverlayLayout && !leftCollapsed ? (
-          <button
-            aria-label="Close projects sidebar"
-            className="absolute inset-y-0 right-0 z-10 bg-background/48 backdrop-blur-sm left-[min(21rem,82vw)]"
-            type="button"
-            onClick={toggleLeftCollapsed}
+    <div className="flex min-h-screen flex-col bg-background">
+      <div className="min-h-0 flex-1">
+        <div className="room-grid" style={gridStyle} data-layout-mode={layoutMode}>
+          {isOverlayLayout && !leftCollapsed ? (
+            <button
+              aria-label="Close projects sidebar"
+              className="absolute inset-y-0 right-0 z-10 bg-background/48 backdrop-blur-sm left-[min(21rem,82vw)]"
+              type="button"
+              onClick={toggleLeftCollapsed}
+            />
+          ) : null}
+          {isOverlayLayout ? sidebarPanel : null}
+          <ChatPane
+            leftSidebarCollapsed={leftCollapsed}
+            leftSidebarWidth={leftWidth}
+            projectsPanelContent={!isOverlayLayout ? sidebarPanel : undefined}
+            rightSidebarCollapsed={rightCollapsed}
+            rightSidebarWidth={rightWidth}
+            showSidebarToggles={isOverlayLayout}
+            topBarSecondaryContent={authProfileControl}
+            snapshot={snapshot}
+            room={room}
+            roomTeam={roomTeam}
+            members={members}
+            selectedMemberId={selectedMemberId}
+            connected={connected}
+            error={error}
+            onOpenMember={openMemberStudio}
+            onOpenRoomTeam={room ? openRoomTeam : undefined}
+            onUpdateRoomSettings={(input) => void updateRoomSettings(input)}
+            onCreateWorkspaceAccount={undefined}
+            onSetActiveAccount={undefined}
+            onToggleLeftSidebar={toggleLeftCollapsed}
+            onToggleRightSidebar={toggleRightCollapsed}
+            onRightSidebarResizeStart={startRightSidebarResize}
           />
-        ) : null}
-        {isOverlayLayout ? sidebarPanel : null}
-        <ChatPane
-          leftSidebarCollapsed={leftCollapsed}
-          leftSidebarWidth={leftWidth}
-          projectsPanelContent={!isOverlayLayout ? sidebarPanel : undefined}
-          rightSidebarCollapsed={rightCollapsed}
-          rightSidebarWidth={rightWidth}
+        </div>
+        <MemberStudioDialog
           snapshot={snapshot}
+          globalConfig={globalConfig}
           room={room}
-          roomTeam={roomTeam}
-          members={members}
-          selectedMemberId={selectedMemberId}
+          member={routedMember}
           connected={connected}
           error={error}
-          onOpenMember={openMemberStudio}
-          onOpenRoomTeam={room ? openRoomTeam : undefined}
-          onUpdateRoomSettings={(input) => void updateRoomSettings(input)}
-          onToggleLeftSidebar={toggleLeftCollapsed}
-          onToggleRightSidebar={toggleRightCollapsed}
-          onRightSidebarResizeStart={startRightSidebarResize}
+          onClose={closeMemberStudio}
+          onSaveConfig={(input) => void updateMemberConfig(input)}
+          onSetEntryMember={(targetMemberId) => void setEntryMember(targetMemberId)}
+          onSaveWatcher={(input) => void upsertWatcher(input)}
+          onRunWatcher={(watcherId) => runWatcher(watcherId)}
+          onSendDirectMessage={(content, directMemberId) => void sendUserMessage(content, directMemberId)}
+        />
+        <TemplateStudioDialog
+          open={templateStudioOpen}
+          templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+          selectedTemplateId={selectedTemplateId}
+          globalConfig={globalConfig}
+          onClose={closeTemplateStudio}
+          deletingTemplateId={deletingTemplateId}
+          onDeleteTemplate={(templateIdToDelete) => handleDeleteTemplate(templateIdToDelete)}
+          onSaveConfig={(input) => void updateTemplate(input)}
+          onSaveGlobalConfig={(input) => void updateGlobalConfig(input)}
+          onApplyChatSync={(payload) =>
+            replaceRemoteState({
+              snapshot: payload.snapshot,
+              globalConfig: payload.globalConfig,
+            })}
+        />
+        <RoomTeamDialog
+          open={roomTeamOpen}
+          snapshot={snapshot}
+          room={room}
+          globalConfig={globalConfig}
+          onClose={closeRoomTeam}
+          onSave={handleSaveRoomTeam}
+          onSaveDefaultTemplate={(input) => void updateTemplate(input)}
         />
       </div>
-      <MemberStudioDialog
-        snapshot={snapshot}
-        globalConfig={globalConfig}
-        room={room}
-        member={routedMember}
-        connected={connected}
-        error={error}
-        onClose={closeMemberStudio}
-        onSaveConfig={(input) => void updateMemberConfig(input)}
-        onSetEntryMember={(targetMemberId) => void setEntryMember(targetMemberId)}
-        onSaveWatcher={(input) => void upsertWatcher(input)}
-        onRunWatcher={(watcherId) => runWatcher(watcherId)}
-        onSendDirectMessage={(content, directMemberId) => void sendUserMessage(content, directMemberId)}
-      />
-      <TemplateStudioDialog
-        open={templateStudioOpen}
-        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
-        selectedTemplateId={selectedTemplateId}
-        globalConfig={globalConfig}
-        onClose={closeTemplateStudio}
-        deletingTemplateId={deletingTemplateId}
-        onDeleteTemplate={(templateIdToDelete) => handleDeleteTemplate(templateIdToDelete)}
-        onSaveConfig={(input) => void updateTemplate(input)}
-        onSaveGlobalConfig={(input) => void updateGlobalConfig(input)}
-        onApplyChatSync={(payload) =>
-          replaceRemoteState({
-            snapshot: payload.snapshot,
-            globalConfig: payload.globalConfig,
-          })}
-      />
-      <RoomTeamDialog
-        open={roomTeamOpen}
-        snapshot={snapshot}
-        room={room}
-        globalConfig={globalConfig}
-        onClose={closeRoomTeam}
-        onSave={handleSaveRoomTeam}
-        onSaveDefaultTemplate={(input) => void updateTemplate(input)}
-      />
-    </>
+    </div>
   );
 }

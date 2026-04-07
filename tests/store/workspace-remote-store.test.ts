@@ -5,16 +5,30 @@ import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import { createWorkspaceRemoteStore, type WorkspaceRemoteClient } from "@/store/workspace-remote-store";
+import type { WorkspaceAuthState } from "@/lib/runtime-client";
 
-function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
+function createClient(snapshot: WorkspaceSnapshot, auth: WorkspaceAuthState = { required: false, authenticated: false }): WorkspaceRemoteClient {
   return {
-    getState: () => Promise.resolve({ snapshot, globalConfig: createDefaultGlobalWorkspaceConfig() }),
-    pickProjectPath: () => Promise.reject(new Error("not implemented")),
+    getState: vi.fn(() => Promise.resolve({ snapshot, globalConfig: createDefaultGlobalWorkspaceConfig(), auth })),
+    getSessionToken: vi.fn(() => (auth.authenticated ? auth.sessionToken : undefined)),
+    login: vi.fn(() => Promise.reject(new Error("not implemented"))),
+    logout: vi.fn(() => Promise.reject(new Error("not implemented"))),
+    restoreSession: vi.fn(() => Promise.resolve(auth)),
+    getMe: vi.fn(() => Promise.resolve(auth)),
+    updateMe: vi.fn(() => Promise.reject(new Error("not implemented"))),
+    listMyProjectMemberships: vi.fn(() => Promise.resolve({ memberships: auth.authenticated ? auth.memberships : [] })),
+    listManagedUsers: vi.fn(() => Promise.resolve({ users: [] })),
+    createManagedUser: vi.fn(() => Promise.reject(new Error("not implemented"))),
+    updateManagedUser: vi.fn(() => Promise.reject(new Error("not implemented"))),
+    setManagedProjectMembership: vi.fn(() => Promise.reject(new Error("not implemented"))),
+    browseProjectDirectory: () => Promise.reject(new Error("not implemented")),
     inspectProjectPath: () => Promise.reject(new Error("not implemented")),
     createProject: () => Promise.reject(new Error("not implemented")),
     createRoom: () => Promise.reject(new Error("not implemented")),
     deleteProject: () => Promise.reject(new Error("not implemented")),
     deleteRoom: () => Promise.reject(new Error("not implemented")),
+    createWorkspaceAccount: () => Promise.reject(new Error("not implemented")),
+    setActiveAccount: () => Promise.reject(new Error("not implemented")),
     acknowledgeRoom: () => Promise.reject(new Error("not implemented")),
     sendUserMessage: () => Promise.reject(new Error("not implemented")),
     updatePrompt: () => Promise.reject(new Error("not implemented")),
@@ -45,6 +59,34 @@ function createClient(snapshot: WorkspaceSnapshot): WorkspaceRemoteClient {
 }
 
 describe("workspace remote store", () => {
+
+  it("rehydrates authenticated state through session, me, and memberships", async () => {
+    const snapshot = createSeedWorkspace();
+    const auth = {
+      required: true,
+      authenticated: true as const,
+      createdUser: false,
+      sessionToken: "session-token",
+      session: { id: "session_1", expiresAt: "2026-01-01T00:00:00.000Z", lastSeenAt: "2026-01-01T00:00:00.000Z" },
+      user: { id: "user_1", handle: "alice", displayName: "Alice", isAdmin: false, createdAt: "2026-01-01T00:00:00.000Z" },
+      memberships: [{
+        id: "membership_1",
+        projectId: snapshot.projectOrder[0]!,
+        projectName: snapshot.projects[snapshot.projectOrder[0]!]!.name,
+        role: "owner" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }],
+    };
+    const client = createClient(snapshot, auth);
+    const store = createWorkspaceRemoteStore(client);
+
+    await store.getState().hydrate();
+
+    expect(store.getState().auth).toEqual(auth);
+    expect(client.restoreSession).toHaveBeenCalledTimes(1);
+    expect(client.getMe).toHaveBeenCalledTimes(1);
+    expect(client.listMyProjectMemberships).toHaveBeenCalledTimes(1);
+  });
   it("starts from an empty workspace shell before runtime hydration", () => {
     const store = createWorkspaceRemoteStore(createClient(createSeedWorkspace()));
 
@@ -131,7 +173,14 @@ describe("workspace remote store", () => {
     store.getState().replaceSnapshot(initialSnapshot);
     const previousSnapshot = store.getState().snapshot;
     const targetRoomId = previousSnapshot.selection.roomId!;
-    const targetMemberId = previousSnapshot.rooms[targetRoomId]!.memberIds[0]!;
+    const targetRoom = previousSnapshot.rooms[targetRoomId];
+    if (!targetRoom) {
+      throw new Error("Expected target room");
+    }
+    const targetMemberId = targetRoom.memberIds[0];
+    if (!targetMemberId) {
+      throw new Error("Expected target member id");
+    }
     const nextSnapshot = structuredClone(initialSnapshot);
     nextSnapshot.members[targetMemberId] = {
       ...nextSnapshot.members[targetMemberId],
@@ -145,13 +194,40 @@ describe("workspace remote store", () => {
     expect(store.getState().snapshot.members[targetMemberId]).not.toBe(previousSnapshot.members[targetMemberId]);
   });
 
+  it("delegates project directory browsing to the runtime client", async () => {
+    const snapshot = createSeedWorkspace();
+    const client = createClient(snapshot);
+    client.browseProjectDirectory = vi.fn((input?: { path?: string }) => Promise.resolve({
+      path: input?.path ?? "/tmp/workspace-root",
+      parentPath: "/tmp",
+      isWorkspaceRoot: !input?.path,
+      entries: [],
+      inspection: {
+        path: input?.path ?? "/tmp/workspace-root",
+        projectName: "Workspace Root",
+        projectInteractiveDirectory: `${input?.path ?? "/tmp/workspace-root"}/.openaquarium/interactive`,
+        hasOpenAquariumDirectory: false,
+        canImport: false,
+        roomCount: 0,
+        rooms: [],
+      },
+    }));
+    const store = createWorkspaceRemoteStore(client);
+
+    await expect(store.getState().browseProjectDirectory({ path: "/tmp/workspace-root" })).resolves.toMatchObject({
+      path: "/tmp/workspace-root",
+      parentPath: "/tmp",
+    });
+    expect(client.browseProjectDirectory).toHaveBeenCalledWith({ path: "/tmp/workspace-root" });
+  });
+
   it("delegates manual project path inspection to the runtime client", async () => {
     const snapshot = createSeedWorkspace();
     const client = createClient(snapshot);
-    client.inspectProjectPath = vi.fn(async ({ path }) => ({
-      path,
+    client.inspectProjectPath = vi.fn((input: { path: string }) => Promise.resolve({
+      path: input.path,
       projectName: "Manual Project",
-      projectInteractiveDirectory: `${path}/.openaquarium/interactive`,
+      projectInteractiveDirectory: `${input.path}/.openaquarium/interactive`,
       hasOpenAquariumDirectory: false,
       canImport: false,
       roomCount: 0,
@@ -169,7 +245,7 @@ describe("workspace remote store", () => {
   it("forwards authorHumanId and directHumanId through the sendUserMessage facade", async () => {
     const snapshot = createSeedWorkspace();
     const client = createClient(snapshot);
-    client.sendUserMessage = vi.fn(async () => snapshot);
+    client.sendUserMessage = vi.fn(() => Promise.resolve(snapshot));
     const store = createWorkspaceRemoteStore(client);
 
     store.setState({

@@ -3,7 +3,7 @@ import { useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, CirclePause, FolderKanban, LoaderCircle, PanelLeftOpen, Pause, Play, Settings2, Trash2, Waves, X } from "lucide-react";
 
-import type { Project, Room, TeamTemplate } from "@/domain/model";
+import type { Project, ProjectRole, Room, TeamTemplate } from "@/domain/model";
 import { RunningMembersHoverCard, type RunningMemberPreview } from "@/components/members/running-members-hover-card";
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog";
 import { CreateRoomDialog } from "@/components/projects/create-room-dialog";
@@ -12,6 +12,7 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
+import { RECOMMENDED_DEV_RUNTIME_COMMAND } from "@/lib/runtime-dev";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RoomWatcherPauseSummary } from "@/lib/watcher-state";
 import { badgeToneProps, compactBadgeClassName } from "@/lib/ui-tone";
@@ -26,6 +27,21 @@ function ActivityTimestamp(props: { updatedAt: string }) {
       Updated {formatRelativeActivityShort(updatedAt)}
     </p>
   );
+}
+
+function projectRoleRank(role: ProjectRole): number {
+  switch (role) {
+    case "owner":
+      return 3;
+    case "admin":
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+function hasProjectRole(role: ProjectRole | undefined, minimum: ProjectRole): boolean {
+  return Boolean(role && projectRoleRank(role) >= projectRoleRank(minimum));
 }
 
 function UnreadCountBadge(props: { count: number }) {
@@ -180,6 +196,9 @@ function ProjectRow(props: {
   activeRoomId?: string;
   expanded: boolean;
   actionsDisabled: boolean;
+  canCreateRoom: boolean;
+  canDeleteProject: boolean;
+  canManageRooms: boolean;
   templates: TeamTemplate[];
   deletingProjectId?: string;
   deletingRoomId?: string;
@@ -207,6 +226,9 @@ function ProjectRow(props: {
     activeRoomId,
     expanded,
     actionsDisabled,
+    canCreateRoom,
+    canDeleteProject,
+    canManageRooms,
     templates,
     deletingProjectId,
     deletingRoomId,
@@ -250,7 +272,7 @@ function ProjectRow(props: {
           <CreateRoomDialog
             project={project}
             templates={templates}
-            disabled={actionsDisabled}
+            disabled={actionsDisabled || !canCreateRoom}
             triggerMode="icon"
             triggerClassName="size-7"
           />
@@ -264,7 +286,7 @@ function ProjectRow(props: {
                 variant="destructive"
                 size="icon-xs"
                 aria-label={`Delete ${project.name}`}
-                disabled={actionsDisabled || deletingProjectId === project.id}
+                disabled={actionsDisabled || !canDeleteProject || deletingProjectId === project.id}
                 onClick={() => {
                   onClearPendingDelete();
                   onDeleteProject(project.id);
@@ -279,7 +301,7 @@ function ProjectRow(props: {
               variant="ghost"
               size="icon-xs"
               aria-label={`Delete ${project.name}`}
-              disabled={actionsDisabled}
+              disabled={actionsDisabled || !canDeleteProject}
               onClick={() => onSetPendingDelete({ kind: "project", id: project.id })}
             >
               <Trash2 size={14} />
@@ -359,7 +381,7 @@ function ProjectRow(props: {
                       />
                       <RoomWatcherSuspensionButton
                         room={room}
-                        disabled={actionsDisabled}
+                        disabled={actionsDisabled || !canManageRooms}
                         pending={togglingRoomWatcherSuspensionRoomId === room.id}
                         onToggle={onToggleRoomWatcherSuspension}
                       />
@@ -375,7 +397,7 @@ function ProjectRow(props: {
                         variant="destructive"
                         size="icon-xs"
                         aria-label={`Delete ${room.name}`}
-                        disabled={actionsDisabled || deletingRoomId === room.id}
+                        disabled={actionsDisabled || !canManageRooms || deletingRoomId === room.id}
                         onClick={() => {
                           onClearPendingDelete();
                           onDeleteRoom(room.id);
@@ -390,7 +412,7 @@ function ProjectRow(props: {
                       variant="ghost"
                       size="icon-xs"
                       aria-label={`Delete ${room.name}`}
-                      disabled={actionsDisabled}
+                      disabled={actionsDisabled || !canManageRooms}
                       onClick={() => onSetPendingDelete({ kind: "room", id: room.id })}
                     >
                       <Trash2 size={14} />
@@ -425,6 +447,8 @@ export function Sidebar(props: {
   activeRoomId?: string;
   templates: TeamTemplate[];
   activeTemplateId?: string;
+  canManageWorkspace?: boolean;
+  projectRoleById?: Partial<Record<string, ProjectRole>>;
   connected: boolean;
   error?: string;
   loading: boolean;
@@ -458,6 +482,8 @@ export function Sidebar(props: {
     activeRoomId,
     templates,
     activeTemplateId,
+    canManageWorkspace = true,
+    projectRoleById = {},
     connected,
     error,
     loading,
@@ -548,7 +574,7 @@ export function Sidebar(props: {
         </div>
         {!connected ? (
           <p className="m-0 text-xs leading-5 text-muted-foreground">
-            {t("sidebar.startRuntime")} <span className="font-mono">bun run server</span>
+            {t("sidebar.startRuntime")} <span className="font-mono">{RECOMMENDED_DEV_RUNTIME_COMMAND}</span>
           </p>
         ) : null}
         {error ? <p className="m-0 text-xs leading-5 text-destructive">{error}</p> : null}
@@ -562,7 +588,7 @@ export function Sidebar(props: {
               <p className="m-0 text-lg font-semibold tracking-tight">{t("sidebar.projects")}</p>
               <Badge variant="outline">{projects.length}</Badge>
             </div>
-            <CreateProjectDialog templates={templates} triggerMode="icon" disabled={actionsDisabled} />
+            <CreateProjectDialog templates={templates} triggerMode="icon" disabled={actionsDisabled || !canManageWorkspace} />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             <div className="flex flex-col gap-2">
@@ -582,6 +608,9 @@ export function Sidebar(props: {
                   activeRoomId={activeRoomId}
                   expanded={expandedProjectIds[project.id]}
                   actionsDisabled={actionsDisabled}
+                  canCreateRoom={canManageWorkspace || hasProjectRole(projectRoleById[project.id], "admin")}
+                  canDeleteProject={canManageWorkspace || hasProjectRole(projectRoleById[project.id], "owner")}
+                  canManageRooms={canManageWorkspace || hasProjectRole(projectRoleById[project.id], "admin")}
                   templates={templates}
                   deletingProjectId={deletingProjectId}
                   deletingRoomId={deletingRoomId}
@@ -621,7 +650,7 @@ export function Sidebar(props: {
               <Badge variant="outline">{templates.length}</Badge>
               {templatesExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
             </button>
-            <Button variant="ghost" size="icon-sm" aria-label="Open team template studio" onClick={onOpenTemplateStudio}>
+            <Button variant="ghost" size="icon-sm" aria-label="Open team template studio" disabled={!canManageWorkspace} onClick={onOpenTemplateStudio}>
               <Settings2 size={16} />
             </Button>
           </div>
@@ -643,8 +672,12 @@ export function Sidebar(props: {
                       <div className="flex items-start gap-2">
                         <button
                           type="button"
+                          disabled={!canManageWorkspace}
                           className="min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-left"
                           onClick={() => {
+                            if (!canManageWorkspace) {
+                              return;
+                            }
                             setPendingDelete(undefined);
                             onOpenTemplate(template.id);
                           }}
@@ -669,7 +702,7 @@ export function Sidebar(props: {
                               variant="destructive"
                               size="icon-xs"
                               aria-label={`Delete ${template.name}`}
-                              disabled={actionsDisabled || deletingTemplateId === template.id}
+                              disabled={actionsDisabled || !canManageWorkspace || deletingTemplateId === template.id}
                               onClick={() => {
                                 setPendingDelete(undefined);
                                 onDeleteTemplate(template.id);
@@ -684,7 +717,7 @@ export function Sidebar(props: {
                             variant="ghost"
                             size="icon-xs"
                             aria-label={`Delete ${template.name}`}
-                            disabled={actionsDisabled}
+                            disabled={actionsDisabled || !canManageWorkspace}
                             onClick={() => setPendingDelete({ kind: "template", id: template.id })}
                           >
                             <Trash2 size={14} />

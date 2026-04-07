@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceSnapshot } from "@/domain/model";
+import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { CODEX_ACP_DEFAULT_MODE, CODEX_ACP_MODE_ENV_KEY, CODEX_ACP_NPX_ARGS, CODEX_ACP_NPX_COMMAND } from "@/lib/acp";
 import { WorkspacePersistence } from "@/server/persistence";
 
@@ -705,5 +706,174 @@ describe("workspace persistence state normalization", () => {
     const loaded = await persistence.load();
 
     expect(loaded?.members.member_a.openAICompatibleConversation).toBeUndefined();
+  });
+
+  it("backfills empty auth foundation collections for legacy snapshots", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-persistence-auth-legacy-"));
+    const filePath = path.join(directory, "state.json");
+
+    const snapshot = createSeedWorkspace();
+
+    await writeFile(filePath, JSON.stringify({ savedAt: "2026-03-10T10:00:04.000Z", snapshot }, null, 2), "utf8");
+
+    const persistence = new WorkspacePersistence(filePath);
+    const loaded = await persistence.load();
+
+    expect(loaded?.users).toEqual({});
+    expect(loaded?.userOrder).toEqual([]);
+    expect(loaded?.authSessions).toEqual({});
+    expect(loaded?.authSessionOrder).toEqual([]);
+    expect(loaded?.projectMemberships).toEqual({});
+  });
+
+  it("normalizes persisted auth users, sessions, and project memberships on load", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oa-persistence-auth-normalize-"));
+    const filePath = path.join(directory, "state.json");
+
+    const seedSnapshot = createSeedWorkspace();
+    const projectId = seedSnapshot.projectOrder[0]!;
+    const snapshot = {
+      ...seedSnapshot,
+      users: {
+        user_alice: {
+          id: "user_alice",
+          handle: "@Alice",
+          displayName: "   ",
+          passwordSalt: " salt-alice ",
+          passwordHash: " hash-alice ",
+          createdAt: "2026-03-10T10:00:00.000Z",
+        },
+        user_broken: {
+          id: "user_broken",
+          handle: "bob",
+          displayName: "Bob",
+          passwordSalt: "",
+          passwordHash: "hash-bob",
+          createdAt: "2026-03-10T10:00:00.000Z",
+        },
+        user_archived: {
+          id: "user_archived",
+          handle: "carol",
+          displayName: "Carol",
+          passwordSalt: "salt-carol",
+          passwordHash: "hash-carol",
+          createdAt: "2026-03-10T10:00:00.000Z",
+          archivedAt: "2026-03-11T10:00:00.000Z",
+        },
+      },
+      userOrder: ["user_broken", "user_alice", "user_archived", "user_alice"],
+      authSessions: {
+        session_active: {
+          id: "session_active",
+          userId: "user_alice",
+          tokenHash: " token-active ",
+          createdAt: "2026-03-10T10:10:00.000Z",
+          expiresAt: "2099-03-10T10:10:00.000Z",
+        },
+        session_expired: {
+          id: "session_expired",
+          userId: "user_alice",
+          tokenHash: " token-expired ",
+          createdAt: "2026-03-10T10:10:00.000Z",
+          lastSeenAt: "2026-03-10T10:20:00.000Z",
+          expiresAt: "2026-03-10T10:30:00.000Z",
+        },
+        session_unknown_user: {
+          id: "session_unknown_user",
+          userId: "user_missing",
+          tokenHash: " token-ghost ",
+          createdAt: "2026-03-10T10:10:00.000Z",
+          lastSeenAt: "2026-03-10T10:20:00.000Z",
+          expiresAt: "2099-03-10T10:30:00.000Z",
+        },
+      },
+      authSessionOrder: ["session_unknown_user", "session_active", "session_expired", "session_active"],
+      projectMemberships: {
+        membership_owner: {
+          id: "membership_owner",
+          projectId,
+          userId: "user_alice",
+          role: "owner",
+          createdAt: "2026-03-10T11:00:00.000Z",
+        },
+        membership_legacy_role: {
+          id: "membership_legacy_role",
+          projectId,
+          userId: "user_alice",
+          role: "viewer",
+          createdAt: "2026-03-10T11:05:00.000Z",
+        },
+        membership_missing_user: {
+          id: "membership_missing_user",
+          projectId,
+          userId: "user_missing",
+          role: "member",
+          createdAt: "2026-03-10T11:10:00.000Z",
+        },
+        membership_missing_project: {
+          id: "membership_missing_project",
+          projectId: "project_missing",
+          userId: "user_alice",
+          role: "admin",
+          createdAt: "2026-03-10T11:15:00.000Z",
+        },
+        membership_archived: {
+          id: "membership_archived",
+          projectId,
+          userId: "user_alice",
+          role: "admin",
+          createdAt: "2026-03-10T11:20:00.000Z",
+          archivedAt: "2026-03-10T11:25:00.000Z",
+        },
+      },
+    } as unknown as WorkspaceSnapshot;
+
+    await writeFile(filePath, JSON.stringify({ savedAt: "2026-03-10T10:00:04.000Z", snapshot }, null, 2), "utf8");
+
+    const persistence = new WorkspacePersistence(filePath);
+    const loaded = await persistence.load();
+
+    expect(loaded?.users).toEqual({
+      user_alice: {
+        id: "user_alice",
+        handle: "alice",
+        displayName: "alice",
+        isAdmin: true,
+        passwordSalt: "salt-alice",
+        passwordHash: "hash-alice",
+        createdAt: "2026-03-10T10:00:00.000Z",
+        updatedAt: "2026-03-10T10:00:00.000Z",
+      },
+    });
+    expect(loaded?.userOrder).toEqual(["user_alice"]);
+    expect(loaded?.authSessions).toEqual({
+      session_active: {
+        id: "session_active",
+        userId: "user_alice",
+        tokenHash: "token-active",
+        createdAt: "2026-03-10T10:10:00.000Z",
+        lastSeenAt: "2026-03-10T10:10:00.000Z",
+        expiresAt: "2099-03-10T10:10:00.000Z",
+      },
+    });
+    expect(loaded?.authSessionOrder).toEqual(["session_active"]);
+    expect(loaded?.projectMemberships).toEqual({
+      membership_owner: {
+        id: "membership_owner",
+        projectId,
+        userId: "user_alice",
+        role: "owner",
+        createdAt: "2026-03-10T11:00:00.000Z",
+        updatedAt: "2026-03-10T11:00:00.000Z",
+      },
+      membership_legacy_role: {
+        id: "membership_legacy_role",
+        projectId,
+        userId: "user_alice",
+        role: "member",
+        createdAt: "2026-03-10T11:05:00.000Z",
+        updatedAt: "2026-03-10T11:05:00.000Z",
+      },
+    });
   });
 });

@@ -59,27 +59,27 @@ export function useShellPanels() {
     rightCollapsed: resolvedPanels.rightCollapsed,
     rightWidth: resolvedPanels.rightWidth,
     toggleLeftCollapsed: () =>
-      setPanels((current) => ({
-        ...current,
-        ...(layoutMode === "overlay"
-          ? {
-              overlayLeftCollapsed: !resolveShellPanelsState(current, layoutMode).leftCollapsed,
-            }
-          : {
-              desktopLeftCollapsed: !resolveShellPanelsState(current, layoutMode).leftCollapsed,
-            }),
-      })),
+      setPanels((current) => {
+        if (layoutMode !== "overlay") {
+          return current;
+        }
+
+        return {
+          ...current,
+          overlayLeftCollapsed: !resolveShellPanelsState(current, layoutMode).leftCollapsed,
+        };
+      }),
     toggleRightCollapsed: () =>
-      setPanels((current) => ({
-        ...current,
-        ...(layoutMode === "overlay"
-          ? {
-              overlayRightCollapsed: !resolveShellPanelsState(current, layoutMode).rightCollapsed,
-            }
-          : {
-              desktopRightCollapsed: !resolveShellPanelsState(current, layoutMode).rightCollapsed,
-            }),
-      })),
+      setPanels((current) => {
+        if (layoutMode !== "overlay") {
+          return current;
+        }
+
+        return {
+          ...current,
+          overlayRightCollapsed: !resolveShellPanelsState(current, layoutMode).rightCollapsed,
+        };
+      }),
     setLeftWidth: (leftWidth: number) =>
       setPanels((current) => ({
         ...current,

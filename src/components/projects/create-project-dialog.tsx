@@ -1,6 +1,6 @@
-import { startTransition, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 
-import { FolderSearch, Plus } from "lucide-react";
+import { ChevronLeft, Folder, FolderOpen, Plus, RefreshCcw } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
 import type { TeamTemplate } from "@/domain/model";
@@ -16,6 +16,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -23,11 +24,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { ProjectPathInspectionPayload } from "@/lib/runtime-client";
+import type {
+  ProjectDirectoryBrowsePayload,
+  ProjectPathInspectionPayload,
+} from "@/lib/runtime-client";
 import { badgeToneProps } from "@/lib/ui-tone";
 import { useWorkspaceStore } from "@/store/workspace-store-context";
 
-type ProjectSource = "workspace" | "path";
+type SelectedProjectDirectory = {
+  inspection?: ProjectPathInspectionPayload;
+  path: string;
+  usesWorkspaceRoot: boolean;
+};
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function shouldAdoptInspectionProjectName(inspection: ProjectPathInspectionPayload): boolean {
+  return inspection.canImport && inspection.projectName.trim().length > 0;
+}
 
 export function CreateProjectDialog(props: {
   templates: TeamTemplate[];
@@ -38,71 +54,151 @@ export function CreateProjectDialog(props: {
   const { templates, triggerClassName, triggerMode = "default", disabled = false } = props;
   const navigate = useNavigate();
   const createProject = useWorkspaceStore((state) => state.createProject);
+  const browseProjectDirectory = useWorkspaceStore((state) => state.browseProjectDirectory);
   const inspectProjectPath = useWorkspaceStore((state) => state.inspectProjectPath);
-  const pickProjectPath = useWorkspaceStore((state) => state.pickProjectPath);
   const [open, setOpen] = useState(false);
   const [projectName, setProjectName] = useState("Untitled Project");
-  const [projectSource, setProjectSource] = useState<ProjectSource>("workspace");
-  const [projectPath, setProjectPath] = useState("");
-  const [projectPathInspection, setProjectPathInspection] = useState<ProjectPathInspectionPayload | undefined>();
+  const [directoryBrowser, setDirectoryBrowser] = useState<ProjectDirectoryBrowsePayload | undefined>();
+  const [selectedProjectDirectory, setSelectedProjectDirectory] = useState<SelectedProjectDirectory | undefined>();
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [actionError, setActionError] = useState<string | undefined>();
-  const [inspectingPath, setInspectingPath] = useState(false);
-  const [pickingPath, setPickingPath] = useState(false);
+  const [browsingDirectory, setBrowsingDirectory] = useState(false);
+  const [inspectingSelection, setInspectingSelection] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
+  const browseRequestIdRef = useRef(0);
+  const inspectRequestIdRef = useRef(0);
   const creatingProjectRef = useRef(false);
   const resolvedTemplateId = templates.some((template) => template.id === templateId) ? templateId : (templates[0]?.id ?? "");
   const selectedTemplate = templates.find((template) => template.id === resolvedTemplateId);
   const selectedTemplateMemberCount = selectedTemplate?.members.length ?? 0;
-  const effectiveProjectPath = projectSource === "path" ? projectPath.trim() : "";
-  const canInspectProjectPath = projectSource === "path" && effectiveProjectPath.length > 0;
-  const importingExistingProject = effectiveProjectPath.length > 0 && projectPathInspection?.canImport === true;
+  const selectedProjectInspection = selectedProjectDirectory?.inspection;
+  const selectedProjectPath = selectedProjectDirectory?.path ?? "";
+  const importingExistingProject = selectedProjectInspection?.canImport === true;
+  const currentFolderSelected = Boolean(directoryBrowser && selectedProjectDirectory?.path === directoryBrowser.path);
 
-  const handleInspectProjectPath = async (pathValue: string): Promise<ProjectPathInspectionPayload | undefined> => {
-    const trimmedPath = pathValue.trim();
-    if (trimmedPath.length === 0) {
-      setProjectPathInspection(undefined);
-      return undefined;
+  const syncProjectNameFromInspection = useCallback((inspection: ProjectPathInspectionPayload): void => {
+    if (shouldAdoptInspectionProjectName(inspection)) {
+      setProjectName(inspection.projectName.trim());
     }
+  }, []);
+
+  const loadDirectory = useCallback(async (
+    pathValue?: string,
+    replaceSelection = false,
+  ): Promise<ProjectDirectoryBrowsePayload | undefined> => {
+    const requestId = browseRequestIdRef.current + 1;
+    browseRequestIdRef.current = requestId;
 
     try {
       setActionError(undefined);
-      setInspectingPath(true);
-      const inspection = await inspectProjectPath({ path: trimmedPath });
-      setProjectPathInspection(inspection);
-      if (inspection.projectName.trim()) {
-        setProjectName(inspection.projectName.trim());
+      setBrowsingDirectory(true);
+      const nextDirectory = await browseProjectDirectory(pathValue ? { path: pathValue } : {});
+      if (browseRequestIdRef.current !== requestId) {
+        return undefined;
       }
-      return inspection;
+
+      setDirectoryBrowser(nextDirectory);
+      if (replaceSelection) {
+        const nextSelection: SelectedProjectDirectory = {
+          path: nextDirectory.path,
+          usesWorkspaceRoot: nextDirectory.isWorkspaceRoot,
+          inspection: nextDirectory.inspection,
+        };
+        setSelectedProjectDirectory(nextSelection);
+        syncProjectNameFromInspection(nextDirectory.inspection);
+      } else {
+        setSelectedProjectDirectory((current) => {
+          if (current) {
+            return current;
+          }
+
+          const nextSelection: SelectedProjectDirectory = {
+            path: nextDirectory.path,
+            usesWorkspaceRoot: nextDirectory.isWorkspaceRoot,
+            inspection: nextDirectory.inspection,
+          };
+          syncProjectNameFromInspection(nextDirectory.inspection);
+          return nextSelection;
+        });
+      }
+      return nextDirectory;
     } catch (error) {
-      setProjectPathInspection(undefined);
-      setActionError(error instanceof Error ? error.message : String(error));
+      if (browseRequestIdRef.current === requestId) {
+        setActionError(getErrorMessage(error));
+      }
       return undefined;
     } finally {
-      setInspectingPath(false);
+      if (browseRequestIdRef.current === requestId) {
+        setBrowsingDirectory(false);
+      }
+    }
+  }, [browseProjectDirectory, syncProjectNameFromInspection]);
+
+  const refreshSelectedProjectInspection = async (
+    selection: SelectedProjectDirectory | undefined,
+  ): Promise<ProjectPathInspectionPayload | undefined> => {
+    if (!selection || selection.path.trim().length === 0) {
+      setSelectedProjectDirectory(undefined);
+      return undefined;
+    }
+
+    const requestId = inspectRequestIdRef.current + 1;
+    inspectRequestIdRef.current = requestId;
+
+    try {
+      setActionError(undefined);
+      setInspectingSelection(true);
+      const inspection = await inspectProjectPath({ path: selection.path });
+      if (inspectRequestIdRef.current !== requestId) {
+        return undefined;
+      }
+
+      setSelectedProjectDirectory((current) => {
+        if (!current || current.path !== selection.path) {
+          return current;
+        }
+
+        return {
+          ...current,
+          inspection,
+        };
+      });
+      syncProjectNameFromInspection(inspection);
+      return inspection;
+    } catch (error) {
+      if (inspectRequestIdRef.current === requestId) {
+        setSelectedProjectDirectory((current) => {
+          if (!current || current.path !== selection.path) {
+            return current;
+          }
+
+          return {
+            ...current,
+            inspection: undefined,
+          };
+        });
+        setActionError(getErrorMessage(error));
+      }
+      return undefined;
+    } finally {
+      if (inspectRequestIdRef.current === requestId) {
+        setInspectingSelection(false);
+      }
     }
   };
 
-  const handlePickProjectPath = (): void => {
-    void (async () => {
-      try {
-        setActionError(undefined);
-        setPickingPath(true);
-        setProjectSource("path");
-        const selection = await pickProjectPath();
-        if (typeof selection.path === "string" && selection.path.trim().length > 0) {
-          setProjectPath(selection.path);
-          setProjectPathInspection(selection.inspection);
-          if (selection.inspection?.projectName.trim()) {
-            setProjectName(selection.inspection.projectName.trim());
-          }
-        }
-      } catch (error) {
-        setActionError(error instanceof Error ? error.message : String(error));
-      } finally {
-        setPickingPath(false);
-      }
-    })();
+  const handleSelectCurrentDirectory = (): void => {
+    if (!directoryBrowser) {
+      return;
+    }
+
+    setActionError(undefined);
+    setSelectedProjectDirectory({
+      path: directoryBrowser.path,
+      usesWorkspaceRoot: directoryBrowser.isWorkspaceRoot,
+      inspection: directoryBrowser.inspection,
+    });
+    syncProjectNameFromInspection(directoryBrowser.inspection);
   };
 
   const handleCreateProject = (): void => {
@@ -115,14 +211,22 @@ export function CreateProjectDialog(props: {
     void (async () => {
       try {
         setActionError(undefined);
-        const resolvedInspection = effectiveProjectPath.length > 0
-          ? await handleInspectProjectPath(effectiveProjectPath)
-          : undefined;
-        const canImportExistingProject = resolvedInspection?.canImport === true;
-
-        if (projectSource === "path" && effectiveProjectPath.length === 0) {
-          throw new Error("Project path is required when using a custom path source.");
+        if (!selectedProjectDirectory || selectedProjectDirectory.path.trim().length === 0) {
+          throw new Error("Select a folder in the web file manager before creating the project.");
         }
+
+        const resolvedInspection = await refreshSelectedProjectInspection(selectedProjectDirectory);
+        if (!resolvedInspection) {
+          return;
+        }
+
+        const canImportExistingProject = resolvedInspection?.canImport === true;
+        const requestedProjectPath = canImportExistingProject
+          ? selectedProjectDirectory.path
+          : selectedProjectDirectory.usesWorkspaceRoot
+            ? undefined
+            : selectedProjectDirectory.path;
+
         if (!canImportExistingProject && resolvedTemplateId.length === 0) {
           throw new Error("Team template is required when creating a new project.");
         }
@@ -130,7 +234,7 @@ export function CreateProjectDialog(props: {
         const next = await createProject({
           projectName,
           templateId: canImportExistingProject ? undefined : resolvedTemplateId,
-          path: effectiveProjectPath || undefined,
+          path: requestedProjectPath,
         });
         startTransition(() => {
           void navigate({
@@ -142,17 +246,29 @@ export function CreateProjectDialog(props: {
           });
         });
         setOpen(false);
-        setProjectSource("workspace");
-        setProjectPath("");
-        setProjectPathInspection(undefined);
+        setDirectoryBrowser(undefined);
+        setSelectedProjectDirectory(undefined);
       } catch (error) {
-        setActionError(error instanceof Error ? error.message : String(error));
+        setActionError(getErrorMessage(error));
       } finally {
         creatingProjectRef.current = false;
         setCreatingProject(false);
       }
     })();
   };
+
+  useEffect(() => {
+    if (!open) {
+      setActionError(undefined);
+      setDirectoryBrowser(undefined);
+      setSelectedProjectDirectory(undefined);
+      setBrowsingDirectory(false);
+      setInspectingSelection(false);
+      return;
+    }
+
+    void loadDirectory(undefined, true);
+  }, [loadDirectory, open]);
 
   return (
     <Dialog
@@ -176,96 +292,132 @@ export function CreateProjectDialog(props: {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="w-[min(92vw,720px)] max-w-[720px] sm:max-w-[720px]">
+      <DialogContent className="flex max-h-[min(90vh,48rem)] w-[min(92vw,760px)] max-w-[760px] flex-col overflow-hidden sm:max-w-[760px]">
         <DialogHeader>
           <DialogTitle className="text-2xl font-semibold tracking-tight">Create project</DialogTitle>
           <DialogDescription className="sr-only">
-            Create a new project or reopen one from an existing OpenAquarium directory, then optionally set the default ACP working directory.
+            Create a new project or reopen one from an existing OpenAquarium directory using the in-browser folder manager.
           </DialogDescription>
         </DialogHeader>
-        <Card className="border border-transparent shadow-none">
-          <CardContent className="flex flex-col gap-4">
+        <Card className="flex min-h-0 flex-col border border-transparent shadow-none">
+          <CardContent className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1">
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">Project name</span>
               <Input value={projectName} onChange={(event) => setProjectName(event.currentTarget.value)} />
             </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium">Project source</span>
-              <Select value={projectSource} onValueChange={(value) => setProjectSource(value as ProjectSource)}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a source" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="workspace">OpenAquarium workspace</SelectItem>
-                  <SelectItem value="path">Custom filesystem path</SelectItem>
-                </SelectContent>
-              </Select>
-              <span className="text-xs leading-5 text-muted-foreground">
-                默认直接在当前 OpenAquarium 工作区创建；切到自定义路径时可在网页内输入或浏览目录。
-              </span>
-            </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium">Project path</span>
-              <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  value={projectPath}
-                  onChange={(event) => {
-                    setProjectPath(event.currentTarget.value);
-                    setProjectPathInspection(undefined);
-                    setActionError(undefined);
-                  }}
-                  onBlur={() => {
-                    if (projectSource !== "path") {
-                      return;
-                    }
-                    void handleInspectProjectPath(projectPath);
-                  }}
-                  placeholder={projectSource === "path" ? "输入项目绝对路径或相对路径" : "使用当前 OpenAquarium workspace"}
-                  className="flex-1"
-                  disabled={disabled || creatingProject || projectSource !== "path"}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  aria-label="Inspect path"
-                  onClick={() => {
-                    void handleInspectProjectPath(projectPath);
-                  }}
-                  disabled={disabled || !canInspectProjectPath || pickingPath || inspectingPath || creatingProject}
-                >
-                  {inspectingPath ? "Inspecting…" : "Inspect path"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handlePickProjectPath}
-                  disabled={disabled || pickingPath || inspectingPath || creatingProject || projectSource !== "path"}
-                >
-                  <FolderSearch size={16} />
-                  {pickingPath ? "选择中…" : "选择文件夹"}
-                </Button>
-                {projectPath.trim().length > 0 ? (
+
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="m-0 text-sm font-medium">Folder manager</p>
+                  <p className="m-0 text-xs leading-5 text-muted-foreground">
+                    Web-only directory browsing. Navigate folders here, then select the current folder as the project root.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline">web-only</Badge>
+                  <Badge variant="outline">in-browser folder manager</Badge>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-border/70 bg-muted/35 p-4">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="outline"
                     onClick={() => {
-                      setProjectPath("");
-                      setProjectPathInspection(undefined);
+                      if (directoryBrowser?.parentPath) {
+                        void loadDirectory(directoryBrowser.parentPath, false);
+                      }
                     }}
-                    disabled={disabled || pickingPath || creatingProject}
+                    disabled={disabled || browsingDirectory || creatingProject || !directoryBrowser?.parentPath}
                   >
-                    清空
+                    <ChevronLeft size={16} />
+                    Parent folder
                   </Button>
-                ) : null}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      void loadDirectory(undefined, false);
+                    }}
+                    disabled={disabled || browsingDirectory || creatingProject}
+                  >
+                    <FolderOpen size={16} />
+                    Workspace root
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      if (directoryBrowser?.path) {
+                        void loadDirectory(directoryBrowser.path, false);
+                      }
+                    }}
+                    disabled={disabled || browsingDirectory || creatingProject || !directoryBrowser?.path}
+                  >
+                    <RefreshCcw size={16} />
+                    Refresh
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleSelectCurrentDirectory}
+                    disabled={disabled || browsingDirectory || creatingProject || !directoryBrowser || currentFolderSelected}
+                  >
+                    <Folder size={16} />
+                    {currentFolderSelected ? "Current folder selected" : "Select current folder"}
+                  </Button>
+                </div>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.9fr)]">
+                  <div className="min-w-0 rounded-xl border border-border/60 bg-background/80 p-3">
+                    <p className="m-0 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Current folder</p>
+                    <p className="mt-2 mb-0 break-all font-mono text-xs leading-6">{directoryBrowser?.path ?? "Loading folder browser…"}</p>
+                    <ScrollArea className="mt-3 h-52 rounded-lg border border-border/50 bg-muted/20">
+                      <div className="flex flex-col gap-1 p-2">
+                        {directoryBrowser?.entries.length ? (
+                          directoryBrowser.entries.map((entry) => (
+                            <Button
+                              key={entry.path}
+                              type="button"
+                              variant="ghost"
+                              className="h-auto justify-start gap-2 rounded-lg px-3 py-2 text-left"
+                              onClick={() => {
+                                void loadDirectory(entry.path, false);
+                              }}
+                              disabled={disabled || browsingDirectory || creatingProject}
+                            >
+                              <Folder size={16} className="shrink-0" />
+                              <span className="min-w-0 truncate">{entry.name}</span>
+                            </Button>
+                          ))
+                        ) : (
+                          <p className="m-0 px-3 py-2 text-sm text-muted-foreground">
+                            {browsingDirectory ? "Loading folders…" : "No subfolders in this directory."}
+                          </p>
+                        )}
+                      </div>
+                    </ScrollArea>
+                  </div>
+
+                  <div className="min-w-0 rounded-xl border border-border/60 bg-background/80 p-3">
+                    <p className="m-0 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Selected folder</p>
+                    <p className="mt-2 mb-0 break-all font-mono text-xs leading-6">{selectedProjectPath || "Select a folder to continue."}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {selectedProjectDirectory?.usesWorkspaceRoot ? (
+                        <Badge variant="outline">OA workspace root</Badge>
+                      ) : null}
+                      {currentFolderSelected ? <Badge variant="outline">current folder</Badge> : null}
+                      {inspectingSelection ? <Badge variant="outline">checking…</Badge> : null}
+                    </div>
+                    <p className="mt-3 mb-0 text-xs leading-5 text-muted-foreground">
+                      Browse with the left list, then use “Select current folder” to make the current directory the project root.
+                    </p>
+                  </div>
+                </div>
               </div>
-              <span className="text-xs leading-5 text-muted-foreground">
-                {projectSource === "path"
-                  ? inspectingPath
-                    ? "正在检查这个路径是否已有 OpenAquarium room context…"
-                    : "输入路径后会在提交前自动检查；如路径内已有 room context，将切到导入流程。"
-                  : "保持为空时，ACP session 默认从当前 OpenAquarium workspace 启动。"}
-              </span>
-            </label>
+            </div>
+
             {!importingExistingProject ? (
               <label className="flex flex-col gap-2">
                 <span className="text-sm font-medium">Team template</span>
@@ -283,35 +435,39 @@ export function CreateProjectDialog(props: {
                 </Select>
               </label>
             ) : null}
+
             {actionError ? <p className="m-0 text-sm text-destructive">{actionError}</p> : null}
+
             <div className="rounded-2xl border border-border/70 bg-muted/35 p-4">
-              {importingExistingProject ? (
+              {importingExistingProject && selectedProjectInspection ? (
                 <>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <p className="m-0 text-sm font-medium">Reuse existing room context</p>
                       <p className="m-0 text-xs leading-5 text-muted-foreground">
-                        已检测到 {projectPathInspection.roomCount} 个 room。history、room、members、todo tree 会直接从 project 内恢复。
+                        已检测到 {selectedProjectInspection.roomCount} 个 room。history、room、members、todo tree 会直接从 project 内恢复。
                       </p>
                     </div>
-                    <Badge variant="outline">{projectPathInspection.roomCount} rooms</Badge>
+                    <Badge variant="outline">{selectedProjectInspection.roomCount} rooms</Badge>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge variant="outline">{effectiveProjectPath.length > 0 ? "ACP cwd follows project path" : "ACP cwd uses OA workspace"}</Badge>
+                    <Badge variant="outline">{selectedProjectDirectory?.usesWorkspaceRoot ? "ACP cwd uses OA workspace" : "ACP cwd follows selected folder"}</Badge>
                     <Badge variant="outline">team restored from room state</Badge>
                   </div>
-                  <div className="mt-3 flex flex-col gap-2">
-                    {projectPathInspection.rooms.map((room) => (
-                      <div key={room.roomId} className="rounded-xl border border-border/60 bg-background/70 px-3 py-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="m-0 truncate text-sm font-medium">{room.roomName}</p>
-                            <p className="m-0 text-xs leading-5 text-muted-foreground">{room.teamName}</p>
+                  <div className="mt-3 max-h-72 overflow-y-auto pr-1">
+                    <div className="flex flex-col gap-2">
+                      {selectedProjectInspection.rooms.map((room) => (
+                        <div key={room.roomId} className="rounded-xl border border-border/60 bg-background/70 px-3 py-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="m-0 truncate text-sm font-medium">{room.roomName}</p>
+                              <p className="m-0 text-xs leading-5 text-muted-foreground">{room.teamName}</p>
+                            </div>
+                            <Badge variant="outline">{room.memberCount} members</Badge>
                           </div>
-                          <Badge variant="outline">{room.memberCount} members</Badge>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </>
               ) : (
@@ -326,10 +482,10 @@ export function CreateProjectDialog(props: {
                     <Badge variant="outline">{selectedTemplateMemberCount} members</Badge>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge variant="outline">{effectiveProjectPath.length > 0 ? "ACP cwd follows project path" : "ACP cwd uses OA workspace"}</Badge>
+                    <Badge variant="outline">{selectedProjectDirectory?.usesWorkspaceRoot ? "ACP cwd uses OA workspace" : "ACP cwd follows selected folder"}</Badge>
                     <Badge variant="outline">{selectedTemplate?.accentTone ?? "paper"}</Badge>
                   </div>
-                  {projectPathInspection?.hasOpenAquariumDirectory ? (
+                  {selectedProjectInspection?.hasOpenAquariumDirectory ? (
                     <p className="mt-3 mb-0 text-xs leading-5 text-muted-foreground">
                       检测到现有 `.openaquarium`，但没有可复用的 room state，仍需选择 team template。
                     </p>
@@ -337,6 +493,7 @@ export function CreateProjectDialog(props: {
                 </>
               )}
             </div>
+
             {!importingExistingProject ? (
               <div className="flex flex-wrap gap-2">
                 {selectedTemplate?.members.map((member) => {
@@ -350,15 +507,18 @@ export function CreateProjectDialog(props: {
                 })}
               </div>
             ) : null}
+
             <div className="flex justify-end">
               <Button
                 type="button"
                 onClick={handleCreateProject}
                 disabled={
                   disabled
+                  || browsingDirectory
+                  || inspectingSelection
                   || creatingProject
                   || projectName.trim().length === 0
-                  || (projectSource === "path" && effectiveProjectPath.length === 0)
+                  || selectedProjectPath.length === 0
                   || (!importingExistingProject && resolvedTemplateId.length === 0)
                 }
               >

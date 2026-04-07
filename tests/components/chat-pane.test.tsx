@@ -7,21 +7,21 @@ import "../helpers/mock-streamdown-plugins";
 
 vi.mock("@/components/chat/workspace-flex-layout", async () => {
   const React = await import("react");
-  type WorkspacePanelId = "chat" | "members" | "todo" | "dashboard";
+  type WorkspacePanelId = "projects" | "chat" | "members" | "todo" | "dashboard";
 
   return {
     WorkspaceFlexLayout(props: {
-      collapsed: boolean;
+      leftCollapsed?: boolean;
       panels: Record<
         WorkspacePanelId,
         { content: ReactNode; title: string }
       >;
     }) {
-      const { collapsed, panels } = props;
+      const { leftCollapsed, panels } = props;
       const [activePanelId, setActivePanelId] = React.useState<WorkspacePanelId>("members");
       const activePanel = panels[activePanelId] ?? panels.members;
 
-      if (collapsed) {
+      if (leftCollapsed) {
         return <div data-testid="workspace-flex-layout-mock-collapsed">{panels.chat.content}</div>;
       }
 
@@ -79,6 +79,7 @@ import { createRuntimeContext } from "@/domain/identity";
 import { postMemberMessage, postUserMessage } from "@/domain/workspace";
 import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
 import { resolveRoomTeamSummary } from "@/lib/room-team";
+import { RECOMMENDED_DEV_RUNTIME_COMMAND } from "@/lib/runtime-dev";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 
 type ScrollCall = ScrollToOptions | [number, number];
@@ -193,8 +194,91 @@ function installTranscriptMetrics(
 }
 
 describe("ChatPane", () => {
-  it("shows highlighted mentions, member actions, and shell toggles for room messages", async () => {
+  it("recommends the watch runtime command before any room is selected", () => {
+    const snapshot = createSeedWorkspace();
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={true}
+          snapshot={{
+            ...snapshot,
+            selection: {},
+          }}
+          room={undefined}
+          roomTeam={undefined}
+          members={[]}
+          selectedMemberId={undefined}
+          connected={false}
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText(RECOMMENDED_DEV_RUNTIME_COMMAND)).toBeInTheDocument();
+  });
+
+  it("recommends the watch runtime command in the room offline banner", () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={resolveRoomTeamSummary(snapshot, room)}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected={false}
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText(RECOMMENDED_DEV_RUNTIME_COMMAND)).toBeInTheDocument();
+  });
+
+  it("keeps the desktop projects panel reachable from the empty workspace state", async () => {
     const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const onCreateProject = vi.fn();
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          leftSidebarWidth={304}
+          projectsPanelContent={<button type="button" onClick={onCreateProject}>Create Project</button>}
+          rightSidebarCollapsed={true}
+          snapshot={snapshot}
+          members={[]}
+          connected
+          onOpenMember={vi.fn()}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const createProjectButton = screen.getByRole("button", { name: "Create Project" });
+    expect(createProjectButton).toBeInTheDocument();
+
+    await user.click(createProjectButton);
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows highlighted mentions and member actions for room messages without desktop sidebar toggles", () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const roomTeam = resolveRoomTeamSummary(snapshot, room);
@@ -268,6 +352,46 @@ describe("ChatPane", () => {
       "compact",
     );
     expect(compactMemberMessages.length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: "Hide projects sidebar" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Hide members sidebar" }),
+    ).not.toBeInTheDocument();
+    expect(onToggleLeftSidebar).not.toHaveBeenCalled();
+    expect(onToggleRightSidebar).not.toHaveBeenCalled();
+  });
+
+  it("keeps mobile sidebar toggles available when the overlay layout is active", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
+    const onToggleLeftSidebar = vi.fn();
+    const onToggleRightSidebar = vi.fn();
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          showSidebarToggles
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={onToggleLeftSidebar}
+          onToggleRightSidebar={onToggleRightSidebar}
+        />
+      </TooltipProvider>,
+    );
 
     await user.click(
       screen.getByRole("button", { name: "Hide projects sidebar" }),
@@ -1317,7 +1441,7 @@ describe("ChatPane", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByText("Project path supported")).toBeInTheDocument();
+    expect(screen.getByText("Web folder manager ready")).toBeInTheDocument();
     expect(screen.getByText("新建 project")).toBeInTheDocument();
     expect(screen.getByText("Ready State")).toBeInTheDocument();
   });
@@ -1425,7 +1549,7 @@ describe("ChatPane", () => {
       name: new RegExp(`Edit ${roomTeam?.name ?? "Room team"}`),
     });
     const badgeGroup = teamTrigger.closest(
-      "div.flex.max-w-full.shrink-0.flex-nowrap.items-center.gap-1\\.5",
+      "div.flex.max-w-full.shrink-0.flex-wrap.items-center.gap-1\\.5",
     );
 
     expect(titleBlock).toBeTruthy();

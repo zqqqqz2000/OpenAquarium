@@ -86,6 +86,19 @@ export interface ProjectPathInspectionResult {
   rooms: ProjectPathInspectionRoom[];
 }
 
+export interface ProjectDirectoryBrowseEntryResult {
+  name: string;
+  path: string;
+}
+
+export interface ProjectDirectoryBrowseResult {
+  path: string;
+  parentPath?: string;
+  isWorkspaceRoot: boolean;
+  entries: ProjectDirectoryBrowseEntryResult[];
+  inspection: ProjectPathInspectionResult;
+}
+
 function getProjectStorageRoot(workspaceRoot: string, project?: Pick<Project, "path">): string {
   return resolveProjectWorkingDirectory(project ?? {}, workspaceRoot);
 }
@@ -515,8 +528,21 @@ export async function loadProjectRoomContextSnapshots(projectRoot: string): Prom
   });
 }
 
+async function assertProjectDirectoryExists(projectRoot: string): Promise<void> {
+  const projectRootMetadata = await stat(projectRoot).catch(() => undefined);
+
+  if (!projectRootMetadata) {
+    throw new Error("Project directory does not exist.");
+  }
+
+  if (!projectRootMetadata.isDirectory()) {
+    throw new Error("Project path must point to a directory.");
+  }
+}
+
 export async function inspectProjectRoomContext(projectRoot: string): Promise<ProjectPathInspectionResult> {
   const normalizedProjectRoot = path.normalize(projectRoot);
+  await assertProjectDirectoryExists(normalizedProjectRoot);
   const openAquariumDirectoryPath = path.join(normalizedProjectRoot, OPEN_AQUARIUM_DIRECTORY_NAME);
   const hasOpenAquariumDirectory = await stat(openAquariumDirectoryPath)
     .then((metadata) => metadata.isDirectory())
@@ -537,5 +563,30 @@ export async function inspectProjectRoomContext(projectRoot: string): Promise<Pr
       memberCount: snapshot.members.length,
       updatedAt: snapshot.room.updatedAt ?? snapshot.room.createdAt,
     })),
+  };
+}
+
+export async function browseProjectDirectories(args: {
+  directoryPath: string;
+  workspaceRoot: string;
+}): Promise<ProjectDirectoryBrowseResult> {
+  const normalizedDirectoryPath = path.normalize(args.directoryPath);
+  await assertProjectDirectoryExists(normalizedDirectoryPath);
+
+  const entries = await readdir(normalizedDirectoryPath, { withFileTypes: true });
+  const parentPath = path.dirname(normalizedDirectoryPath);
+
+  return {
+    path: normalizedDirectoryPath,
+    parentPath: parentPath === normalizedDirectoryPath ? undefined : parentPath,
+    isWorkspaceRoot: path.normalize(args.workspaceRoot) === normalizedDirectoryPath,
+    entries: entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({
+        name: entry.name,
+        path: path.join(normalizedDirectoryPath, entry.name),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" })),
+    inspection: await inspectProjectRoomContext(normalizedDirectoryPath),
   };
 }

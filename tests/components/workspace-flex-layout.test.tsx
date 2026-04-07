@@ -96,7 +96,7 @@ describe("WorkspaceFlexLayout", () => {
     expect(primaryTab?.name).toBe("Workspace Chat");
   });
 
-  it("renders desktop layout with project, chat, and right-side tabsets", async () => {
+  it("keeps the full desktop flexlayout visible even if collapsed flags are set", async () => {
     const getBoundingClientRectSpy = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
       .mockImplementation(() => createMockDomRect(1024, 768));
@@ -104,9 +104,9 @@ describe("WorkspaceFlexLayout", () => {
     const { container } = render(
       <WorkspaceFlexLayout
         layoutKey="room-a"
-        leftCollapsed={false}
+        leftCollapsed
         leftPanelWidth={304}
-        rightCollapsed={false}
+        rightCollapsed
         rightPanelWidth={420}
         panels={{
           projects: {

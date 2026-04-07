@@ -74,6 +74,40 @@ describe("ChatComposer", () => {
     expect(onSend).toHaveBeenCalledWith("只发给当前 member。", lead.id);
   });
 
+  it("includes the active human id when sending from a room with multiple humans", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const members = room.memberIds.map((memberId) => snapshot.members[memberId]);
+    const onSend = vi.fn();
+
+    render(
+      <ChatComposer
+        connected
+        error={undefined}
+        members={members}
+        onSend={onSend}
+        humanOptions={[
+          {
+            accountId: "account_alice",
+            humanId: "human_room_1_account_alice",
+            label: "Alice",
+            handle: "alice",
+          },
+        ]}
+        activeHumanAccountId="account_alice"
+      />,
+    );
+
+    await user.type(screen.getByRole("textbox"), "@alice 帮我看一下这段实现。?");
+    await user.click(screen.getByRole("button", { name: /Send/i }));
+
+    expect(onSend).toHaveBeenCalledWith("@alice 帮我看一下这段实现。?", {
+      authorHumanId: "human_room_1_account_alice",
+      directMemberId: undefined,
+    });
+  });
+
   it("keeps the draft and shows an error when sending fails", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();

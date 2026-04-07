@@ -95,7 +95,10 @@ export function getMessageRecipientHandles(
 ): string[] {
   if (message.transport === "direct" || message.transport === "watch-digest") {
     if (message.recipientUser) {
-      return [snapshot.currentUserName];
+      const activeHumanHandle = snapshot.currentAccountId
+        ? Object.values(snapshot.humans ?? {}).find((human) => human.accountId === snapshot.currentAccountId && !human.archivedAt)?.handle
+        : undefined;
+      return [activeHumanHandle && activeHumanHandle !== "default" ? activeHumanHandle : snapshot.currentUserName];
     }
 
     return uniqueHandles(

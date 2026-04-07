@@ -20,6 +20,10 @@ import { syncRoomContextFiles } from "@/server/room-context-files";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
 import type { ExecutorCallbacks, ExecutionRequest, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 
+const ORIGINAL_BOOTSTRAP_ADMIN_HANDLE = process.env.OA_BOOTSTRAP_ADMIN_HANDLE;
+const ORIGINAL_BOOTSTRAP_ADMIN_PASSWORD = process.env.OA_BOOTSTRAP_ADMIN_PASSWORD;
+const ORIGINAL_BOOTSTRAP_ADMIN_DISPLAY_NAME = process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME;
+
 class EchoExecutor implements MemberExecutor {
   async execute(request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
     await callbacks.onComplete(`${request.member.handle} handled`, "end_turn");
@@ -62,15 +66,37 @@ async function reservePort(): Promise<number> {
   return port;
 }
 
+function configureBootstrapAdmin(args: { handle: string; password: string; displayName: string }): void {
+  process.env.OA_BOOTSTRAP_ADMIN_HANDLE = args.handle;
+  process.env.OA_BOOTSTRAP_ADMIN_PASSWORD = args.password;
+  process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME = args.displayName;
+}
+
 describe("workspace http api routing", () => {
   const runtimes: WorkspaceRuntime[] = [];
 
   afterEach(async () => {
     await Promise.all(runtimes.map((runtime) => runtime.dispose()));
     runtimes.length = 0;
+    if (ORIGINAL_BOOTSTRAP_ADMIN_HANDLE === undefined) {
+      delete process.env.OA_BOOTSTRAP_ADMIN_HANDLE;
+    } else {
+      process.env.OA_BOOTSTRAP_ADMIN_HANDLE = ORIGINAL_BOOTSTRAP_ADMIN_HANDLE;
+    }
+    if (ORIGINAL_BOOTSTRAP_ADMIN_PASSWORD === undefined) {
+      delete process.env.OA_BOOTSTRAP_ADMIN_PASSWORD;
+    } else {
+      process.env.OA_BOOTSTRAP_ADMIN_PASSWORD = ORIGINAL_BOOTSTRAP_ADMIN_PASSWORD;
+    }
+    if (ORIGINAL_BOOTSTRAP_ADMIN_DISPLAY_NAME === undefined) {
+      delete process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME;
+    } else {
+      process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME = ORIGINAL_BOOTSTRAP_ADMIN_DISPLAY_NAME;
+    }
   });
 
   it("serves state and accepts member/message configuration mutations", async () => {
+    configureBootstrapAdmin({ handle: "alice", password: "secret-pass", displayName: "Alice" });
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-"));
     const configDirPath = path.join(workspaceRoot, ".config");
     const globalConfigManager = new OpenAquariumGlobalConfigManager(configDirPath);
@@ -181,11 +207,20 @@ describe("workspace http api routing", () => {
       projectName: "HTTP Check",
       templateId: "template-product-pod",
     });
+    const login = await runtime.login({
+      handle: "alice",
+      password: "secret-pass",
+      displayName: "Alice",
+    });
+    const authHeaders = {
+      authorization: `Bearer ${login.sessionToken}`,
+    };
 
     const stateResult = await handleWorkspaceJsonApiRequest({
       runtime,
       method: "GET",
       pathname: "/api/state",
+      headers: authHeaders,
     });
     const statePayload = stateResult?.payload as {
       snapshot: {
@@ -223,6 +258,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: `/api/members/${builderId}/config`,
+      headers: authHeaders,
       body: {
         summary: "Builder v2",
         prompt: "新的 builder prompt",
@@ -252,6 +288,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: `/api/members/${builderId}/entry`,
+      headers: authHeaders,
     });
     const entryPayload = entryResult?.payload as { snapshot: { rooms: Record<string, { entryMemberId: string }> } };
     expect(entryPayload.snapshot.rooms[roomId].entryMemberId).toBe(builderId);
@@ -260,6 +297,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: `/api/members/${builderId}/watcher`,
+      headers: authHeaders,
       body: {
         enabled: true,
         intervalMinutes: 6,
@@ -292,6 +330,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: `/api/rooms/${roomId}/read`,
+      headers: authHeaders,
     });
     expect(roomReadResult?.statusCode).toBe(200);
     const roomReadPayload = roomReadResult?.payload as {
@@ -303,6 +342,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: `/api/rooms/${roomId}/watcher-suspension/toggle`,
+      headers: authHeaders,
     });
     expect(roomWatcherSuspensionResult?.statusCode).toBe(200);
     const roomWatcherSuspensionPayload = roomWatcherSuspensionResult?.payload as {
@@ -314,6 +354,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: `/api/rooms/${roomId}/team`,
+      headers: authHeaders,
       body: {
         teamName: "HTTP Room Team",
         teamDescription: "只对当前 room 生效",
@@ -382,6 +423,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: "/api/internal/member-message",
+      headers: authHeaders,
       body: {
         roomId,
         memberId,
@@ -397,6 +439,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: "/api/templates/generate",
+      headers: authHeaders,
       body: {
         brief: "生成一个新的协作模板",
       },
@@ -410,6 +453,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: `/api/templates/${existingTemplate.id}/config`,
+      headers: authHeaders,
       body: {
         name: "Product Pod v2",
         description: "新的模板描述",
@@ -437,6 +481,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: `/api/projects/${projectId}/rooms`,
+      headers: authHeaders,
       body: {
         templateId: "template-product-pod",
       },
@@ -449,6 +494,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: "/api/config",
+      headers: authHeaders,
       body: {
         modelProfiles: loadedGlobalConfig.config.modelProfiles,
         templateChatModelProfileId: loadedGlobalConfig.config.templateChatModelProfileId,
@@ -463,6 +509,7 @@ describe("workspace http api routing", () => {
       runtime,
       method: "POST",
       pathname: "/api/template-studio/chat",
+      headers: authHeaders,
       body: {
         templateId: existingTemplate.id,
         messages: [{ role: "user", content: "Update the template with chat." }],
@@ -638,6 +685,210 @@ describe("workspace http api routing", () => {
     }
   });
 
+  it("returns credentialed CORS headers for localhost split-origin auth, room read, and assets requests", async () => {
+    configureBootstrapAdmin({ handle: "alice-cors", password: "secret-pass", displayName: "Alice CORS" });
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-cors-auth-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createSeedWorkspace(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const server = await startWorkspaceHttpServer({
+      runtime,
+      host: "127.0.0.1",
+      port: await reservePort(),
+    });
+
+    const frontendOrigin = "http://localhost:5173";
+    const roomId = runtime.getSnapshot().selection.roomId;
+    if (!roomId) {
+      throw new Error("Expected seed room");
+    }
+
+    try {
+      const loginPreflight = await fetch(`http://127.0.0.1:${server.port}/api/auth/login`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: frontendOrigin,
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "content-type",
+        },
+      });
+
+      expect(loginPreflight.status).toBe(204);
+      expect(loginPreflight.headers.get("access-control-allow-origin")).toBe(frontendOrigin);
+      expect(loginPreflight.headers.get("access-control-allow-credentials")).toBe("true");
+      expect(loginPreflight.headers.get("access-control-allow-methods")).toContain("POST");
+      expect(loginPreflight.headers.get("vary")).toContain("Origin");
+
+      const loginResponse = await fetch(`http://127.0.0.1:${server.port}/api/auth/login`, {
+        method: "POST",
+        headers: {
+          Origin: frontendOrigin,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          handle: "alice-cors",
+          password: "secret-pass",
+          displayName: "Alice CORS",
+        }),
+      });
+
+      expect(loginResponse.status).toBe(200);
+      expect(loginResponse.headers.get("access-control-allow-origin")).toBe(frontendOrigin);
+      expect(loginResponse.headers.get("access-control-allow-credentials")).toBe("true");
+      const loginPayload = await loginResponse.json() as { authenticated: boolean; sessionToken?: string };
+      expect(loginPayload.authenticated).toBe(true);
+      expect(loginPayload.sessionToken).toBeTruthy();
+      const sessionToken = loginPayload.sessionToken;
+      if (!sessionToken) {
+        throw new Error("Expected session token");
+      }
+
+      const sessionPreflight = await fetch(`http://127.0.0.1:${server.port}/api/auth/session`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: frontendOrigin,
+          "Access-Control-Request-Method": "GET",
+          "Access-Control-Request-Headers": "x-openaquarium-session",
+        },
+      });
+
+      expect(sessionPreflight.status).toBe(204);
+      expect(sessionPreflight.headers.get("access-control-allow-origin")).toBe(frontendOrigin);
+      expect(sessionPreflight.headers.get("access-control-allow-headers")).toContain("x-openaquarium-session");
+
+      const sessionResponse = await fetch(`http://127.0.0.1:${server.port}/api/auth/session`, {
+        headers: {
+          Origin: frontendOrigin,
+          "x-openaquarium-session": sessionToken,
+        },
+      });
+      expect(sessionResponse.status).toBe(200);
+      expect(sessionResponse.headers.get("access-control-allow-origin")).toBe(frontendOrigin);
+
+      const membershipsResponse = await fetch(`http://127.0.0.1:${server.port}/api/me/projects`, {
+        headers: {
+          Origin: frontendOrigin,
+          "x-openaquarium-session": sessionToken,
+        },
+      });
+      expect(membershipsResponse.status).toBe(200);
+      expect(membershipsResponse.headers.get("access-control-allow-origin")).toBe(frontendOrigin);
+
+      const roomReadPreflight = await fetch(`http://127.0.0.1:${server.port}/api/rooms/${roomId}/read`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: frontendOrigin,
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "content-type,x-openaquarium-session",
+        },
+      });
+      expect(roomReadPreflight.status).toBe(204);
+      expect(roomReadPreflight.headers.get("access-control-allow-origin")).toBe(frontendOrigin);
+      expect(roomReadPreflight.headers.get("access-control-allow-credentials")).toBe("true");
+
+      const roomReadResponse = await fetch(`http://127.0.0.1:${server.port}/api/rooms/${roomId}/read`, {
+        method: "POST",
+        headers: {
+          Origin: frontendOrigin,
+          "content-type": "application/json",
+          "x-openaquarium-session": sessionToken,
+        },
+        body: JSON.stringify({}),
+      });
+      expect(roomReadResponse.status).toBe(200);
+      expect(roomReadResponse.headers.get("access-control-allow-origin")).toBe(frontendOrigin);
+      expect(roomReadResponse.headers.get("access-control-allow-credentials")).toBe("true");
+
+      const assetsPreflight = await fetch(
+        `http://127.0.0.1:${server.port}/api/rooms/${roomId}/assets?fileName=${encodeURIComponent("cors-proof.png")}`,
+        {
+          method: "OPTIONS",
+          headers: {
+            Origin: frontendOrigin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-openaquarium-session",
+          },
+        },
+      );
+      expect(assetsPreflight.status).toBe(204);
+      expect(assetsPreflight.headers.get("access-control-allow-origin")).toBe(frontendOrigin);
+      expect(assetsPreflight.headers.get("access-control-allow-credentials")).toBe("true");
+
+      const assetResponse = await fetch(
+        `http://127.0.0.1:${server.port}/api/rooms/${roomId}/assets?fileName=${encodeURIComponent("cors-proof.png")}`,
+        {
+          method: "POST",
+          headers: {
+            Origin: frontendOrigin,
+            "content-type": "image/png",
+            "x-openaquarium-session": sessionToken,
+          },
+          body: Buffer.from("iVBORw0KGgo=", "base64"),
+        },
+      );
+      expect(assetResponse.status).toBe(200);
+      expect(assetResponse.headers.get("access-control-allow-origin")).toBe(frontendOrigin);
+      expect(assetResponse.headers.get("access-control-allow-credentials")).toBe("true");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects unconfigured non-loopback origins before auth mutations run", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-cors-blocked-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const server = await startWorkspaceHttpServer({
+      runtime,
+      host: "127.0.0.1",
+      port: await reservePort(),
+    });
+
+    try {
+      const blockedOrigin = "https://example.com";
+      const preflight = await fetch(`http://127.0.0.1:${server.port}/api/auth/login`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: blockedOrigin,
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "content-type",
+        },
+      });
+
+      expect(preflight.status).toBe(403);
+      expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+
+      const loginResponse = await fetch(`http://127.0.0.1:${server.port}/api/auth/login`, {
+        method: "POST",
+        headers: {
+          Origin: blockedOrigin,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          handle: "mallory",
+          password: "malicious-pass",
+          displayName: "Mallory",
+        }),
+      });
+
+      expect(loginResponse.status).toBe(403);
+      expect(await loginResponse.json()).toEqual({ error: "Origin not allowed" });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("returns model catalogs and test results for provider profile drafts", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-provider-test-"));
     const configDirPath = path.join(workspaceRoot, ".config");
@@ -801,18 +1052,53 @@ describe("workspace http api routing", () => {
       },
     });
 
-    expect(result).toEqual({
-      statusCode: 200,
-      payload: expect.objectContaining({
-        path: projectRoot,
-        projectName: "manual-project",
-        canImport: false,
-        roomCount: 0,
-      }),
-    });
+    expect(result?.statusCode).toBe(200);
+    if (!result || typeof result.payload !== "object" || result.payload === null) {
+      throw new Error("Expected inspection payload");
+    }
+
+    const payload = result.payload as Record<string, unknown>;
+    expect(payload.path).toBe(projectRoot);
+    expect(payload.projectName).toBe("manual-project");
+    expect(payload.canImport).toBe(false);
+    expect(payload.roomCount).toBe(0);
   });
 
-  it("treats /api/system/project-path with a body path as manual inspect instead of opening the picker", async () => {
+  it("returns an error when inspecting a missing project path through the HTTP API", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-inspect-missing-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+    const server = await startWorkspaceHttpServer({
+      runtime,
+      host: "127.0.0.1",
+      port: await reservePort(),
+    });
+    const missingPath = path.join(workspaceRoot, "missing-project");
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/system/project-path/inspect`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ path: missingPath }),
+      });
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        error: "Project directory does not exist.",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("browses project directories through the JSON API", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-project-path-"));
     const projectRoot = path.join(workspaceRoot, "manual-project");
     await mkdir(projectRoot, { recursive: true });
@@ -827,24 +1113,39 @@ describe("workspace http api routing", () => {
     const result = await handleWorkspaceJsonApiRequest({
       runtime,
       method: "POST",
-      pathname: "/api/system/project-path",
+      pathname: "/api/system/project-path/browse",
       body: {
-        path: projectRoot,
+        path: workspaceRoot,
       },
     });
 
-    expect(result).toEqual({
-      statusCode: 200,
-      payload: {
-        path: projectRoot,
-        inspection: expect.objectContaining({
-          path: projectRoot,
-          projectName: "manual-project",
-          canImport: false,
-          roomCount: 0,
-        }),
-      },
-    });
+    expect(result?.statusCode).toBe(200);
+    if (!result || typeof result.payload !== "object" || result.payload === null) {
+      throw new Error("Expected browse payload");
+    }
+
+    const payload = result.payload as Record<string, unknown>;
+    expect(payload.path).toBe(workspaceRoot);
+    expect(payload.parentPath).toBe(path.dirname(workspaceRoot));
+    expect(payload.isWorkspaceRoot).toBe(true);
+
+    const entries = payload.entries;
+    if (!Array.isArray(entries)) {
+      throw new Error("Expected browse entries");
+    }
+    expect(entries).toContainEqual(expect.objectContaining({
+      name: "manual-project",
+      path: projectRoot,
+    }));
+
+    const inspection = payload.inspection;
+    if (typeof inspection !== "object" || inspection === null) {
+      throw new Error("Expected browse inspection payload");
+    }
+    expect((inspection as Record<string, unknown>).path).toBe(workspaceRoot);
+    expect((inspection as Record<string, unknown>).projectName).toBe(path.basename(workspaceRoot));
+    expect((inspection as Record<string, unknown>).canImport).toBe(false);
+    expect((inspection as Record<string, unknown>).roomCount).toBe(0);
   });
 
   it("returns cursor-paged room history through the JSON API", async () => {

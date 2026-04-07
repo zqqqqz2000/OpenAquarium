@@ -88,10 +88,19 @@ export function resolveShellPanelsState(
   persistedState: PersistedShellPanelsState,
   layoutMode: ShellPanelsLayoutMode,
 ): ShellPanelsState {
+  if (layoutMode === "desktop") {
+    return {
+      leftCollapsed: false,
+      leftWidth: persistedState.leftWidth,
+      rightCollapsed: false,
+      rightWidth: persistedState.rightWidth,
+    };
+  }
+
   return {
-    leftCollapsed: layoutMode === "overlay" ? persistedState.overlayLeftCollapsed : persistedState.desktopLeftCollapsed,
+    leftCollapsed: persistedState.overlayLeftCollapsed,
     leftWidth: persistedState.leftWidth,
-    rightCollapsed: layoutMode === "overlay" ? persistedState.overlayRightCollapsed : persistedState.desktopRightCollapsed,
+    rightCollapsed: persistedState.overlayRightCollapsed,
     rightWidth: persistedState.rightWidth,
   };
 }

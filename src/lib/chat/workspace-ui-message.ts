@@ -17,8 +17,10 @@ export interface WorkspaceMessageMetadata {
   roomId: string;
   domainMessageId?: string;
   authorKind: ChatMessage["author"]["kind"];
+  authorActorKind?: ChatMessage["author"]["actorKind"];
   authorId: string;
   authorLabel: string;
+  authorHandle?: string;
   memberId?: string;
   createdAt?: string;
   transport?: ChatMessage["transport"];
@@ -80,8 +82,10 @@ export function mapDomainMessageToUIMessage(snapshot: WorkspaceSnapshot, room: R
       roomId: room.id,
       domainMessageId: message.id,
       authorKind: message.author.kind,
+      authorActorKind: message.author.actorKind,
       authorId: message.author.id,
       authorLabel: message.author.label,
+      authorHandle: message.author.handle,
       memberId: resolveChatAuthorMemberId(message.author),
       createdAt: message.createdAt,
       transport: message.transport,

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import {
+  browseProjectDirectories,
   getDefaultRoomTodoTreeFilePath,
   getRoomStateFilePath,
   inspectProjectRoomContext,
@@ -109,5 +110,26 @@ describe("room context files", () => {
     expect(inspection.roomCount).toBe(1);
     expect(inspection.rooms[0]?.roomName).toBe(room.name);
     expect(roomContexts[0]?.room.id).toBe(room.id);
+  });
+
+  it("lists subdirectories for the in-browser project folder manager", async () => {
+    const workspaceRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-room-context-browse-workspace-"),
+    );
+    const childDirectory = path.join(workspaceRoot, "child-project");
+    await mkdir(childDirectory, { recursive: true });
+
+    const result = await browseProjectDirectories({
+      directoryPath: workspaceRoot,
+      workspaceRoot,
+    });
+
+    expect(result.path).toBe(workspaceRoot);
+    expect(result.isWorkspaceRoot).toBe(true);
+    expect(result.parentPath).toBe(path.dirname(workspaceRoot));
+    expect(result.entries).toContainEqual({
+      name: "child-project",
+      path: childDirectory,
+    });
   });
 });

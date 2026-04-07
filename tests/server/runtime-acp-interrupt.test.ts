@@ -148,6 +148,7 @@ vi.mock("ai", async (importOriginal) => {
 });
 
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
+import type { DiagnosticsLogger } from "@/server/diagnostics";
 import { OpenAquariumGlobalConfigManager } from "@/server/global-config";
 import { WorkspacePersistence } from "@/server/persistence";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
@@ -194,6 +195,12 @@ describe("WorkspaceRuntime ACP interrupt integration", () => {
   });
 
   it("keeps interrupted @> follow-ups on delta prompts within the same acp session", async () => {
+    const logger: DiagnosticsLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      shouldLog: vi.fn(() => true),
+    };
     let releaseFirstTurn: (() => void) | undefined;
     const firstTurn = new Promise<void>((resolve) => {
       releaseFirstTurn = resolve;
@@ -229,6 +236,7 @@ describe("WorkspaceRuntime ACP interrupt integration", () => {
       globalConfig: createDefaultGlobalWorkspaceConfig(configDir),
       workspaceRoot,
       taskExecutionInactivityTimeoutMs: 0,
+      logger,
     });
     runtimes.push(runtime);
 
@@ -265,5 +273,41 @@ describe("WorkspaceRuntime ACP interrupt integration", () => {
       expect.anything(),
     );
     expect(createACPProviderMock).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(
+      "task-prompt-build",
+      expect.objectContaining({
+        taskId: expect.any(String),
+        memberHandle: "lead",
+        providerKind: "codex-acp",
+        snapshotProviderSessionId: null,
+        providerSessionId: "session_1",
+        persistedProviderSessionId: null,
+        sessionContinuation: "fresh",
+        promptMode: "full",
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "task-prompt-build",
+      expect.objectContaining({
+        taskId: expect.any(String),
+        memberHandle: "lead",
+        providerKind: "codex-acp",
+        snapshotProviderSessionId: null,
+        providerSessionId: "session_1",
+        persistedProviderSessionId: "session_1",
+        sessionContinuation: "resumed",
+        promptMode: "delta",
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "acp-cancel-complete",
+      expect.objectContaining({
+        memberHandle: "lead",
+        providerSessionId: "session_1",
+        persistedProviderSessionId: "session_1",
+        usedProtocolCancel: true,
+        fallbackAbortSignal: false,
+      }),
+    );
   });
 });

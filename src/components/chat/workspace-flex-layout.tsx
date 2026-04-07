@@ -171,33 +171,29 @@ export function updateWorkspaceFlexLayoutModelJsonPresentation(args: {
 
 function createWorkspaceDesktopModel(args: {
   activePanelId: WorkspacePanelId;
-  leftCollapsed: boolean;
   leftPanelWidth: number;
   modelJson?: IJsonModel;
   primaryTabTitle: string;
-  rightCollapsed: boolean;
   rightPanelWidth: number;
 }): Model {
   const {
     activePanelId,
-    leftCollapsed,
     leftPanelWidth,
     modelJson,
     primaryTabTitle,
-    rightCollapsed,
     rightPanelWidth,
   } = args;
   const nextModelJson = sanitizeWorkspaceFlexLayoutModelJson({
     modelJson: modelJson ?? buildWorkspaceFlexLayoutModelJson({
       defaultActivePanelId: activePanelId,
-      includeProjectsPanel: !leftCollapsed,
-      includeRightPanel: !rightCollapsed,
+      includeProjectsPanel: true,
+      includeRightPanel: true,
       leftTabsetWidth: leftPanelWidth,
       primaryTabTitle,
       rightTabsetWidth: rightPanelWidth,
     }),
-    includeProjectsPanel: !leftCollapsed,
-    includeRightPanel: !rightCollapsed,
+    includeProjectsPanel: true,
+    includeRightPanel: true,
     leftTabsetWidth: leftPanelWidth,
     primaryTabTitle,
     rightTabsetWidth: rightPanelWidth,
@@ -217,7 +213,6 @@ export function WorkspaceFlexLayout(props: {
 }) {
   const {
     layoutKey,
-    leftCollapsed,
     leftPanelWidth = 304,
     onRightResizeStart,
     panels,
@@ -225,35 +220,21 @@ export function WorkspaceFlexLayout(props: {
     rightPanelWidth = 372,
   } = props;
   const isMobile = useMediaQuery("(max-width: 1023px)");
+  const storedActivePanelId = workspaceActivePanelIdByKey.get(layoutKey) ?? "chat";
   const [activePanelId, setActivePanelId] = useState<WorkspacePanelId>(
-    () => workspaceActivePanelIdByKey.get(layoutKey) ?? "chat",
+    storedActivePanelId,
   );
-  const [model, setModel] = useState<Model>(() =>
+  const model = useMemo(
+    () =>
     createWorkspaceDesktopModel({
-      activePanelId: workspaceActivePanelIdByKey.get(layoutKey) ?? "chat",
-      leftCollapsed,
+      activePanelId: storedActivePanelId,
       leftPanelWidth,
       modelJson: workspaceDesktopModelJsonByKey.get(layoutKey),
       primaryTabTitle: panels.chat.title,
-      rightCollapsed,
       rightPanelWidth,
     }),
+    [layoutKey, leftPanelWidth, panels.chat.title, rightPanelWidth, storedActivePanelId],
   );
-
-  useEffect(() => {
-    setActivePanelId(workspaceActivePanelIdByKey.get(layoutKey) ?? "chat");
-    setModel(
-      createWorkspaceDesktopModel({
-        activePanelId: workspaceActivePanelIdByKey.get(layoutKey) ?? "chat",
-        leftCollapsed,
-        leftPanelWidth,
-        modelJson: workspaceDesktopModelJsonByKey.get(layoutKey),
-        primaryTabTitle: panels.chat.title,
-        rightCollapsed,
-        rightPanelWidth,
-      }),
-    );
-  }, [layoutKey, leftCollapsed, leftPanelWidth, panels.chat.title, rightCollapsed, rightPanelWidth]);
 
   useEffect(() => {
     workspaceActivePanelIdByKey.set(layoutKey, activePanelId);
@@ -263,12 +244,9 @@ export function WorkspaceFlexLayout(props: {
     () => (rightCollapsed ? (["chat"] satisfies WorkspacePanelId[]) : (["chat", ...workspaceFlexLayoutRightPanelOrder] satisfies WorkspacePanelId[])),
     [rightCollapsed],
   );
-
-  useEffect(() => {
-    if (!orderedMobilePanels.includes(activePanelId)) {
-      setActivePanelId(orderedMobilePanels[0] ?? "chat");
-    }
-  }, [activePanelId, orderedMobilePanels]);
+  const mobileActivePanelId = orderedMobilePanels.includes(activePanelId)
+    ? activePanelId
+    : (orderedMobilePanels[0] ?? "chat");
 
   const factory = useMemo(
     () =>
@@ -332,7 +310,7 @@ export function WorkspaceFlexLayout(props: {
   };
 
   if (isMobile) {
-    const activePanel = panels[activePanelId];
+    const activePanel = panels[mobileActivePanelId];
 
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
@@ -340,7 +318,7 @@ export function WorkspaceFlexLayout(props: {
           {orderedMobilePanels.map((panelId) => {
             const panel = panels[panelId];
             const Icon = panel.icon;
-            const selected = panelId === activePanelId;
+            const selected = panelId === mobileActivePanelId;
             const isFirstTab = panelId === orderedMobilePanels[0];
 
             return (
@@ -379,17 +357,6 @@ export function WorkspaceFlexLayout(props: {
     );
   }
 
-  if (leftCollapsed && rightCollapsed) {
-    return (
-      <section
-        data-workspace-panel-id={panels.chat.id}
-        className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm"
-      >
-        <div className="min-h-0 flex-1 overflow-hidden p-3">{panels.chat.content}</div>
-      </section>
-    );
-  }
-
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 gap-3 overflow-hidden">
       <div
@@ -406,15 +373,13 @@ export function WorkspaceFlexLayout(props: {
           onModelChange={handleModelChange}
         />
       </div>
-      {!rightCollapsed ? (
-        <div
-          aria-hidden
-          className="hidden w-4 shrink-0 cursor-col-resize xl:block"
-          onPointerDown={onRightResizeStart}
-        >
-          <div className="h-full w-px rounded-full bg-border/80" />
-        </div>
-      ) : null}
+      <div
+        aria-hidden
+        className="hidden w-4 shrink-0 cursor-col-resize xl:block"
+        onPointerDown={onRightResizeStart}
+      >
+        <div className="h-full w-px rounded-full bg-border/80" />
+      </div>
     </div>
   );
 }

@@ -13,9 +13,14 @@ const DEFAULT_HISTORY_PAGE_LIMIT = 80;
 const MAX_HISTORY_PAGE_LIMIT = 200;
 
 const chatAuthorSchema = z.object({
-  kind: z.enum(["user", "member", "system"]),
+  kind: z.enum(["user", "member", "system", "human", "bot"]),
   id: z.string(),
   label: z.string(),
+  actorKind: z.enum(["human", "bot", "system"]).optional(),
+  handle: z.string().optional(),
+  humanId: z.string().optional(),
+  memberId: z.string().optional(),
+  accountId: z.string().optional(),
 });
 
 const chatMessageSchema = z.object({
@@ -28,8 +33,10 @@ const chatMessageSchema = z.object({
   status: z.enum(["sent", "streaming", "completed", "interrupted"]),
   visibility: z.enum(["public", "internal"]).optional(),
   mentionedMemberIds: z.array(z.string()),
+  mentionedHumanIds: z.array(z.string()).optional(),
   quotedMemberIds: z.array(z.string()).optional(),
   recipientMemberIds: z.array(z.string()),
+  recipientHumanIds: z.array(z.string()).optional(),
   recipientUser: z.boolean().optional(),
   taskId: z.string().optional(),
 });
@@ -55,6 +62,24 @@ function buildHistorySignature(message: ChatMessage): string {
   ].join("\u0001");
 }
 
+function parseTranscriptAuthorLabel(raw: string): { label: string; handle?: string; actorKind?: "human" | "bot" | "system" } {
+  const match = /^(.*?)?(?:\s+@([^\s]+))?(?:\s+\[(human|bot|system)\])?$/u.exec(raw.trim());
+  if (!match) {
+    return { label: raw.trim() };
+  }
+
+  const label = match[1]?.trim() || raw.trim();
+  const handle = match[2]?.trim();
+  const actorKind = match[3] as "human" | "bot" | "system" | undefined;
+  return { label, handle, actorKind };
+}
+
+function resolveHumanIdByHandle(snapshot: WorkspaceSnapshot, room: Room, handle: string): string | undefined {
+  const normalized = handle.replace(/^@/u, "").trim().toLowerCase();
+  return (snapshot.humanOrderByRoom?.[room.id] ?? [])
+    .find((humanId) => snapshot.humans?.[humanId]?.handle.toLowerCase() === normalized && snapshot.humans?.[humanId]?.roomId === room.id);
+}
+
 function resolveMemberIdByHandleOrName(snapshot: WorkspaceSnapshot, room: Room, value: string): string | undefined {
   const normalized = value.replace(/^@>?/u, "").trim();
 
@@ -74,26 +99,50 @@ function resolveMemberIdByHandleOrName(snapshot: WorkspaceSnapshot, room: Room, 
   });
 }
 
-function resolveTranscriptAuthor(snapshot: WorkspaceSnapshot, room: Room, label: string): ChatAuthor {
-  if (label === snapshot.currentUserName) {
+function resolveTranscriptAuthor(snapshot: WorkspaceSnapshot, room: Room, rawLabel: string): ChatAuthor {
+  const parsed = parseTranscriptAuthorLabel(rawLabel);
+  const label = parsed.label;
+
+  if (parsed.actorKind === "human" && parsed.handle) {
+    const humanId = resolveHumanIdByHandle(snapshot, room, parsed.handle);
+    const human = humanId ? snapshot.humans?.[humanId] : undefined;
     return {
       kind: "user",
-      id: "user",
+      actorKind: "human",
+      id: humanId ?? parsed.handle,
       label,
+      handle: parsed.handle,
+      humanId,
+      accountId: human?.accountId,
     };
   }
 
-  const memberId = resolveMemberIdByHandleOrName(snapshot, room, label);
+  if (label === snapshot.currentUserName) {
+    return {
+      kind: "user",
+      actorKind: "human",
+      id: "user",
+      label,
+      handle: parsed.handle,
+    };
+  }
+
+  const memberId = resolveMemberIdByHandleOrName(snapshot, room, parsed.handle ?? label);
   if (memberId) {
+    const member = snapshot.members[memberId];
     return {
       kind: "member",
+      actorKind: "bot",
       id: memberId,
       label,
+      handle: member?.handle ?? parsed.handle,
+      memberId,
     };
   }
 
   return {
     kind: "system",
+    actorKind: parsed.actorKind ?? "system",
     id: `system:${label}`,
     label,
   };
@@ -132,7 +181,9 @@ function parseTranscriptEntry(args: {
 
   const contentLines: string[] = [];
   const mentionedMemberIds: string[] = [];
+  const mentionedHumanIds: string[] = [];
   const quotedMemberIds: string[] = [];
+  const recipientHumanIds: string[] = [];
   let messageId: MessageId | undefined;
 
   restLines.forEach((line) => {
@@ -167,6 +218,30 @@ function parseTranscriptEntry(args: {
       return;
     }
 
+    if (body.startsWith("mentions: ")) {
+      parseHandleTokens(body.slice("mentions: ".length)).forEach((handle) => {
+        const humanId = resolveHumanIdByHandle(snapshot, room, handle);
+        if (humanId) {
+          mentionedHumanIds.push(humanId);
+        }
+      });
+      return;
+    }
+
+    if (body.startsWith("recipients: ")) {
+      const recipientBody = body.slice("recipients: ".length);
+      if (recipientBody.startsWith("@user")) {
+        return;
+      }
+      parseHandleTokens(recipientBody).forEach((handle) => {
+        const humanId = resolveHumanIdByHandle(snapshot, room, handle);
+        if (humanId) {
+          recipientHumanIds.push(humanId);
+        }
+      });
+      return;
+    }
+
     contentLines.push(body);
   });
 
@@ -180,8 +255,10 @@ function parseTranscriptEntry(args: {
     status: status as ChatMessage["status"],
     visibility: "public",
     mentionedMemberIds,
+    mentionedHumanIds,
     quotedMemberIds,
     recipientMemberIds: [],
+    recipientHumanIds,
   };
 }
 

@@ -1,4 +1,4 @@
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useShellPanels } from "@/components/layout/use-shell-panels";
@@ -48,5 +48,24 @@ describe("useShellPanels", () => {
 
     expect(result.current.layoutMode).toBe("desktop");
     expect(result.current.leftCollapsed).toBe(false);
+  });
+
+  it("ignores collapse toggles in desktop mode", () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+      writable: true,
+    });
+
+    const { result } = renderHook(() => useShellPanels());
+
+    act(() => {
+      result.current.toggleLeftCollapsed();
+      result.current.toggleRightCollapsed();
+    });
+
+    expect(result.current.layoutMode).toBe("desktop");
+    expect(result.current.leftCollapsed).toBe(false);
+    expect(result.current.rightCollapsed).toBe(false);
   });
 });

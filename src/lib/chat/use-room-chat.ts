@@ -2,14 +2,18 @@ import { Chat } from "@ai-sdk/react";
 import { DefaultChatTransport, type ChatStatus } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { Room, TeamMember, WorkspaceSnapshot } from "@/domain/model";
+import type { PostUserMessageInput, Room, TeamMember, WorkspaceSnapshot } from "@/domain/model";
 import { extractAddressedMemberIds } from "@/domain/workspace";
 import {
   mapRoomMessagesToUIMessages,
   type WorkspaceMessageDataParts,
   type WorkspaceUIMessage,
 } from "@/lib/chat/workspace-ui-message";
-import { resolveWorkspaceRuntimeBaseUrl } from "@/lib/runtime-client";
+import {
+  resolveWorkspaceRuntimeBaseUrl,
+  resolveWorkspaceRuntimeRequestCredentials,
+  resolveWorkspaceRuntimeRequestHeaders,
+} from "@/lib/runtime-client";
 
 export interface RoomChatStatus {
   roomId: string;
@@ -31,8 +35,18 @@ interface MemberChatController {
   dispose(): void;
 }
 
+type RoomChatSendTarget = Pick<PostUserMessageInput, "authorHumanId" | "directMemberId" | "directHumanId">;
+
 function isBusyStatus(status: ChatStatus): boolean {
   return status === "submitted" || status === "streaming";
+}
+
+export function normalizeRoomChatTarget(target?: string | RoomChatSendTarget): RoomChatSendTarget {
+  if (typeof target === "string") {
+    return { directMemberId: target };
+  }
+
+  return target ?? {};
 }
 
 export function resolvePrimaryMemberId(args: {
@@ -89,6 +103,8 @@ export function useRoomChat(args: {
     () =>
       new DefaultChatTransport<WorkspaceUIMessage>({
         api: `${resolveWorkspaceRuntimeBaseUrl()}/api/chat`,
+        credentials: resolveWorkspaceRuntimeRequestCredentials(),
+        headers: () => resolveWorkspaceRuntimeRequestHeaders(),
       }),
     [],
   );
@@ -263,17 +279,19 @@ export function useRoomChat(args: {
     messages: seedMessages,
     roomStatus: activeRoutes[0],
     activeStreamSummary,
-    sendMessage: async (content: string, directMemberId?: string): Promise<void> => {
+    sendMessage: async (content: string, target?: string | RoomChatSendTarget): Promise<void> => {
       if (!room) {
         throw new Error("No room selected");
       }
+
+      const normalizedTarget = normalizeRoomChatTarget(target);
 
       const targetMemberId = resolvePrimaryMemberId({
         snapshot,
         room,
         membersById: activeMembersById,
         content,
-        directMemberId,
+        directMemberId: normalizedTarget.directMemberId,
       });
 
       if (!targetMemberId) {
@@ -299,7 +317,9 @@ export function useRoomChat(args: {
         {
           body: {
             roomId: room.id,
-            directMemberId,
+            authorHumanId: normalizedTarget.authorHumanId,
+            directMemberId: normalizedTarget.directMemberId,
+            directHumanId: normalizedTarget.directHumanId,
           },
         },
       );

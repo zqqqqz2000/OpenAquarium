@@ -12,13 +12,18 @@ import { resolveDirectTarget } from "@/lib/direct-target";
 import type { TemplateStudioUIMessage } from "@/lib/template-studio-ui-message";
 import type { DiagnosticsLogger } from "./diagnostics";
 import { summarizeWorkspaceSnapshot } from "./diagnostics";
-import { DirectorySelectionCancelledError, selectProjectDirectory } from "./directory-picker";
-import type { WorkspaceRuntime } from "./runtime";
+import { ForbiddenRuntimeError, UnauthorizedRuntimeError, type WorkspaceRuntime } from "./runtime";
 import { getErrorMessage, type RuntimeError } from "./error-utils";
 import { buildTransportSnapshot } from "./transport-snapshot";
 
 type JsonPayload = object | string | number | boolean | null;
-type ProjectPathRequestPayload = { source?: "picker"; path?: string };
+type ProjectDirectoryBrowsePayload = { path?: string };
+type JsonApiResponse = { statusCode: number; payload: JsonPayload; headers?: Record<string, string> };
+const SESSION_COOKIE_NAME = "oa_session";
+const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const CORS_ALLOWED_HEADERS = "content-type, authorization, x-openaquarium-session";
+const CORS_ALLOWED_METHODS = "GET,POST,DELETE,OPTIONS";
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 function containsLegacyFirstPrompt(payload: JsonPayload | undefined): boolean {
   return typeof payload === "object" && payload !== null && Object.prototype.hasOwnProperty.call(payload, "firstPrompt");
@@ -58,44 +63,192 @@ async function readRequestBodyBuffer(request: IncomingMessage): Promise<Buffer> 
   return Buffer.concat(chunks);
 }
 
-function sendJson(response: ServerResponse, statusCode: number, payload: JsonPayload): void {
-  response.statusCode = statusCode;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("access-control-allow-origin", "*");
-  response.setHeader("access-control-allow-headers", "content-type");
-  response.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
-  response.end(JSON.stringify(payload));
+function parseCookies(cookieHeader: string | undefined): Record<string, string> {
+  if (!cookieHeader?.trim()) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    cookieHeader
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const separator = part.indexOf("=");
+        if (separator === -1) {
+          return [part, ""];
+        }
+        return [part.slice(0, separator), decodeURIComponent(part.slice(separator + 1))];
+      }),
+  );
 }
 
-async function resolveProjectPathRequest(runtime: WorkspaceRuntime, payload: ProjectPathRequestPayload | undefined): Promise<{
-  path?: string;
-  inspection?: Awaited<ReturnType<WorkspaceRuntime["inspectProjectPath"]>>;
-}> {
-  const requestedPath = payload?.path?.trim();
-  if (requestedPath) {
-    return {
-      path: requestedPath,
-      inspection: await runtime.inspectProjectPath({ path: requestedPath }),
-    };
+function getFirstHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
   }
 
-  if (payload?.source === "picker") {
-    try {
-      const selectedPath = await selectProjectDirectory();
-      return {
-        path: selectedPath,
-        inspection: await runtime.inspectProjectPath({ path: selectedPath }),
-      };
-    } catch (error) {
-      if (error instanceof DirectorySelectionCancelledError) {
-        return { path: undefined };
-      }
+  return value;
+}
 
-      throw error;
-    }
+function resolveSessionToken(headers?: Record<string, string | string[] | undefined>): string | undefined {
+  if (!headers) {
+    return undefined;
   }
 
-  return { path: undefined };
+  const authorization = getFirstHeaderValue(headers.authorization ?? headers.Authorization);
+  if (authorization?.startsWith("Bearer ")) {
+    return authorization.slice("Bearer ".length).trim() || undefined;
+  }
+
+  const directHeader = getFirstHeaderValue(headers["x-openaquarium-session"] ?? headers["X-OpenAquarium-Session"]);
+  if (directHeader?.trim()) {
+    return directHeader.trim();
+  }
+
+  return parseCookies(getFirstHeaderValue(headers.cookie ?? headers.Cookie))[SESSION_COOKIE_NAME];
+}
+
+function normalizeOrigin(origin: string | undefined): string | undefined {
+  if (!origin?.trim()) {
+    return undefined;
+  }
+
+  try {
+    const normalized = new URL(origin).origin;
+    return normalized === "null" ? undefined : normalized;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveRequestOrigin(request: IncomingMessage): string | undefined {
+  const host = request.headers.host?.trim();
+  if (!host) {
+    return undefined;
+  }
+
+  const forwardedProto = getFirstHeaderValue(request.headers["x-forwarded-proto"])
+    ?.split(",")[0]
+    ?.trim()
+    .toLowerCase();
+  const protocol = forwardedProto === "https" ? "https" : "http";
+  return normalizeOrigin(`${protocol}://${host}`);
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    return LOOPBACK_HOSTNAMES.has(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function readConfiguredCorsOrigins(): Set<string> {
+  return new Set(
+    (process.env.OA_CORS_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((value) => normalizeOrigin(value.trim()))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function isLoopbackSplitOrigin(request: IncomingMessage, origin: string): boolean {
+  const requestOrigin = resolveRequestOrigin(request);
+  return Boolean(requestOrigin && isLoopbackOrigin(requestOrigin) && isLoopbackOrigin(origin));
+}
+
+function resolveAllowedCorsOrigin(request: IncomingMessage): string | undefined {
+  const origin = normalizeOrigin(getFirstHeaderValue(request.headers.origin));
+  if (!origin) {
+    return undefined;
+  }
+
+  if (origin === resolveRequestOrigin(request)) {
+    return origin;
+  }
+
+  if (isLoopbackSplitOrigin(request, origin)) {
+    return origin;
+  }
+
+  return readConfiguredCorsOrigins().has(origin) ? origin : undefined;
+}
+
+function appendVaryHeader(response: ServerResponse, value: string): void {
+  const currentValue = response.getHeader("vary");
+  const existingValues = `${currentValue ?? ""}`
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  if (!existingValues.includes(value)) {
+    existingValues.push(value);
+  }
+
+  if (existingValues.length > 0) {
+    response.setHeader("vary", existingValues.join(", "));
+  }
+}
+
+function applyCorsHeaders(response: ServerResponse, request: IncomingMessage, allowedOrigin: string | undefined): void {
+  response.setHeader("access-control-allow-headers", CORS_ALLOWED_HEADERS);
+  response.setHeader("access-control-allow-methods", CORS_ALLOWED_METHODS);
+
+  const privateNetworkRequest = getFirstHeaderValue(request.headers["access-control-request-private-network"])
+    ?.trim()
+    .toLowerCase();
+  if (privateNetworkRequest === "true") {
+    response.setHeader("access-control-allow-private-network", "true");
+  }
+
+  if (allowedOrigin) {
+    response.setHeader("access-control-allow-origin", allowedOrigin);
+    response.setHeader("access-control-allow-credentials", "true");
+    appendVaryHeader(response, "Origin");
+    return;
+  }
+
+  if (!getFirstHeaderValue(request.headers.origin)) {
+    response.setHeader("access-control-allow-origin", "*");
+  }
+}
+
+function buildSessionCookie(sessionToken: string): string {
+  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`;
+}
+
+function buildClearedSessionCookie(): string {
+  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+function isMyProjectMembershipsPath(pathname: string): boolean {
+  return pathname === "/api/me/projects" || pathname === "/api/me/project-members";
+}
+
+function getStatusCodeForError(error: unknown): number {
+  if (error instanceof UnauthorizedRuntimeError) {
+    return 401;
+  }
+  if (error instanceof ForbiddenRuntimeError) {
+    return 403;
+  }
+
+  return 500;
+}
+
+function sendJson(
+  response: ServerResponse,
+  statusCode: number,
+  payload: JsonPayload,
+  headers: Record<string, string> = {},
+): void {
+  response.statusCode = statusCode;
+  response.setHeader("content-type", "application/json; charset=utf-8");
+  Object.entries(headers).forEach(([key, value]) => {
+    response.setHeader(key, value);
+  });
+  response.end(JSON.stringify(payload));
 }
 
 export async function handleWorkspaceJsonApiRequest(args: {
@@ -104,15 +257,125 @@ export async function handleWorkspaceJsonApiRequest(args: {
   pathname: string;
   body?: JsonPayload;
   searchParams?: URLSearchParams;
-}): Promise<{ statusCode: number; payload: JsonPayload } | undefined> {
-  const { runtime, method, pathname, body, searchParams } = args;
+  headers?: Record<string, string | undefined>;
+}): Promise<JsonApiResponse | undefined> {
+  const { runtime, method, pathname, body, searchParams, headers } = args;
+  const sessionToken = resolveSessionToken(headers);
 
-  if (method === "GET" && pathname === "/api/state") {
-    return {
-      statusCode: 200,
-      payload: { snapshot: runtime.getSnapshot(), globalConfig: runtime.getGlobalConfig() },
-    };
-  }
+  try {
+
+    if (method === "POST" && pathname === "/api/auth/login") {
+      const result = await runtime.login(body as { handle: string; password: string; displayName?: string });
+      return {
+        statusCode: 200,
+        payload: result,
+        headers: result.sessionToken ? { "set-cookie": buildSessionCookie(result.sessionToken) } : undefined,
+      };
+    }
+
+    if (method === "POST" && pathname === "/api/auth/logout") {
+      const result = await runtime.logout({
+        sessionToken: sessionToken ?? (body as { sessionToken?: string } | undefined)?.sessionToken,
+      });
+      return {
+        statusCode: 200,
+        payload: result,
+        headers: { "set-cookie": buildClearedSessionCookie() },
+      };
+    }
+
+    if (method === "GET" && pathname === "/api/auth/session") {
+      return {
+        statusCode: 200,
+        payload: await runtime.restoreSession({ sessionToken }),
+      };
+    }
+
+    if (method === "GET" && pathname === "/api/me") {
+      return {
+        statusCode: 200,
+        payload: await runtime.getMe({ sessionToken }),
+      };
+    }
+
+    if (method === "POST" && pathname === "/api/me") {
+      return {
+        statusCode: 200,
+        payload: await runtime.updateMe({
+          sessionToken,
+          ...((body as { handle?: string; displayName?: string } | undefined) ?? {}),
+        }),
+      };
+    }
+
+    if (method === "GET" && isMyProjectMembershipsPath(pathname)) {
+      return {
+        statusCode: 200,
+        payload: await runtime.listMyProjectMemberships({ sessionToken }),
+      };
+    }
+
+    if (method === "GET" && pathname === "/api/admin/users") {
+      return {
+        statusCode: 200,
+        payload: await runtime.listManagedUsers({ sessionToken }),
+      };
+    }
+
+    if (method === "POST" && pathname === "/api/admin/users") {
+      return {
+        statusCode: 200,
+        payload: await runtime.createManagedUser({
+          sessionToken,
+          ...((body as { handle: string; displayName: string; password: string; isAdmin?: boolean } | undefined) ?? {
+            handle: "",
+            displayName: "",
+            password: "",
+          }),
+        }),
+      };
+    }
+
+    const adminUserMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/u);
+    if (method === "POST" && adminUserMatch) {
+      const [, userId] = adminUserMatch;
+      if (!userId) {
+        return {
+          statusCode: 400,
+          payload: { error: "Missing user id" },
+        };
+      }
+
+      return {
+        statusCode: 200,
+        payload: await runtime.updateManagedUser({
+          sessionToken,
+          userId,
+          ...((body as { handle?: string; displayName?: string; password?: string; isAdmin?: boolean } | undefined) ?? {}),
+        }),
+      };
+    }
+
+    if (method === "POST" && pathname === "/api/admin/project-memberships") {
+      return {
+        statusCode: 200,
+        payload: await runtime.setManagedProjectMembership({
+          sessionToken,
+          ...((body as { userId: string; projectId: string; role?: "owner" | "admin" | "member"; remove?: boolean } | undefined) ?? {
+            userId: "",
+            projectId: "",
+          }),
+        }),
+      };
+    }
+
+    if (method === "GET" && pathname === "/api/state") {
+      const state = await runtime.getClientState({ sessionToken });
+      return {
+        statusCode: 200,
+        payload: { snapshot: state.snapshot, globalConfig: runtime.getGlobalConfig(), auth: state.auth },
+      };
+    }
 
   if (method === "GET" && pathname === "/api/config") {
     return {
@@ -124,21 +387,21 @@ export async function handleWorkspaceJsonApiRequest(args: {
   if (method === "GET" && pathname === "/api/template-studio/models") {
     return {
       statusCode: 200,
-      payload: await runtime.getTemplateStudioModelCatalog((body as { modelProfileId?: string } | undefined) ?? {}),
+      payload: await runtime.getTemplateStudioModelCatalog((body as { modelProfileId?: string } | undefined) ?? {}, { sessionToken }),
     };
   }
 
   if (method === "POST" && pathname === "/api/provider-profiles/model-catalog") {
     return {
       statusCode: 200,
-      payload: await runtime.getProviderProfileModelCatalog(body as { draft: ModelProfileDraft }),
+      payload: await runtime.getProviderProfileModelCatalog(body as { draft: ModelProfileDraft }, { sessionToken }),
     };
   }
 
   if (method === "POST" && pathname === "/api/provider-profiles/test") {
     return {
       statusCode: 200,
-      payload: await runtime.testProviderProfile(body as { draft: ModelProfileDraft; modelId?: string }),
+      payload: await runtime.testProviderProfile(body as { draft: ModelProfileDraft; modelId?: string }, { sessionToken }),
     };
   }
 
@@ -169,6 +432,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         roomId,
         beforeMessageId,
         limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
+        sessionToken,
       }),
     };
   }
@@ -187,14 +451,15 @@ export async function handleWorkspaceJsonApiRequest(args: {
       statusCode: 200,
       payload: await runtime.getRoomTodoTrees({
         roomId,
+        sessionToken,
       }),
     };
   }
 
-  if (method === "POST" && pathname === "/api/system/project-path") {
+  if (method === "POST" && pathname === "/api/system/project-path/browse") {
     return {
       statusCode: 200,
-      payload: await resolveProjectPathRequest(runtime, (body as ProjectPathRequestPayload | undefined) ?? undefined),
+      payload: await runtime.browseProjectDirectory((body as ProjectDirectoryBrowsePayload | undefined) ?? {}),
     };
   }
 
@@ -212,7 +477,10 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "firstPrompt is no longer supported. Create the room first, then send the first message." },
       };
     }
-    const created = await runtime.createProject(body as { projectName: string; templateId?: string; path?: string });
+    const created = await runtime.createProject(
+      body as { projectName: string; templateId?: string; path?: string },
+      { sessionToken },
+    );
     return {
       statusCode: 200,
       payload: created,
@@ -238,15 +506,31 @@ export async function handleWorkspaceJsonApiRequest(args: {
     const created = await runtime.createRoom({
       projectId,
       templateId: (body as { templateId: string }).templateId,
-    });
+    }, { sessionToken });
     return {
       statusCode: 200,
       payload: created,
     };
   }
 
+  const projectMembersMatch = pathname.match(/^\/api\/projects\/([^/]+)\/members$/u);
+  if (method === "GET" && projectMembersMatch) {
+    const [, projectId] = projectMembersMatch;
+    if (!projectId) {
+      return {
+        statusCode: 400,
+        payload: { error: "Missing project id" },
+      };
+    }
+
+    return {
+      statusCode: 200,
+      payload: await runtime.getProjectMembers({ projectId, sessionToken }),
+    };
+  }
+
   if (method === "POST" && pathname === "/api/templates/generate") {
-    const template = await runtime.generateTemplate((body as { brief: string }).brief);
+    const template = await runtime.generateTemplate((body as { brief: string }).brief, { sessionToken });
     return {
       statusCode: 200,
       payload: { template, snapshot: runtime.getSnapshot() },
@@ -262,7 +546,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
       }>;
       modelProfileId?: string;
       modelId?: string;
-    });
+    }, { sessionToken });
     return {
       statusCode: 200,
       payload: result,
@@ -310,7 +594,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
           };
         }>;
       }),
-    });
+    }, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -326,7 +610,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing template id" },
       };
     }
-    const snapshot = await runtime.deleteTemplate(templateId);
+    const snapshot = await runtime.deleteTemplate(templateId, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -334,7 +618,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
   }
 
   if (method === "POST" && pathname === "/api/config") {
-    const globalConfig = await runtime.updateGlobalConfig(body as UpdateGlobalConfigInput);
+    const globalConfig = await runtime.updateGlobalConfig(body as UpdateGlobalConfigInput, { sessionToken });
     return {
       statusCode: 200,
       payload: { globalConfig, snapshot: runtime.getSnapshot() },
@@ -356,6 +640,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
       authorHumanId: (body as { authorHumanId?: string }).authorHumanId,
       directMemberId: (body as { directMemberId?: string }).directMemberId,
       directHumanId: (body as { directHumanId?: string }).directHumanId,
+      sessionToken,
     });
     return {
       statusCode: 200,
@@ -372,7 +657,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing room id" },
       };
     }
-    const snapshot = await runtime.deleteRoom(roomId);
+    const snapshot = await runtime.deleteRoom(roomId, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -388,7 +673,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing room id" },
       };
     }
-    const snapshot = await runtime.acknowledgeRoom(roomId);
+    const snapshot = await runtime.acknowledgeRoom(roomId, sessionToken);
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -409,7 +694,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
       ...(body as {
         visibleMemberIds: string[];
       }),
-    });
+    }, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -425,7 +710,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing room id" },
       };
     }
-    const snapshot = await runtime.toggleRoomWatcherSuspension(roomId);
+    const snapshot = await runtime.toggleRoomWatcherSuspension(roomId, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -473,7 +758,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
           };
         }>;
       }),
-    });
+    }, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -489,7 +774,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing project id" },
       };
     }
-    const snapshot = await runtime.deleteProject(projectId);
+    const snapshot = await runtime.deleteProject(projectId, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -537,7 +822,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing member id" },
       };
     }
-    const snapshot = await runtime.updatePrompt(memberId, (body as { prompt: string }).prompt);
+    const snapshot = await runtime.updatePrompt(memberId, (body as { prompt: string }).prompt, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -573,7 +858,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
           capabilities: string[];
         };
       }),
-    });
+    }, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -589,7 +874,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing member id" },
       };
     }
-    const snapshot = await runtime.setEntryMember(memberId);
+    const snapshot = await runtime.setEntryMember(memberId, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -611,7 +896,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
       intervalMinutes: (body as { intervalMinutes: number }).intervalMinutes,
       persistent: (body as { persistent?: boolean }).persistent ?? false,
       prompt: (body as { prompt?: string }).prompt,
-    });
+    }, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -627,7 +912,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing watcher id" },
       };
     }
-    const snapshot = await runtime.toggleWatcher(watcherId);
+    const snapshot = await runtime.toggleWatcher(watcherId, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -643,7 +928,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing watcher id" },
       };
     }
-    const snapshot = await runtime.pauseWatcherUntilActivity(watcherId);
+    const snapshot = await runtime.pauseWatcherUntilActivity(watcherId, { sessionToken });
     return {
       statusCode: 200,
       payload: { snapshot },
@@ -659,14 +944,20 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: { error: "Missing watcher id" },
       };
     }
-    const result = await runtime.runWatcherNow(watcherId);
+    const result = await runtime.runWatcherNow(watcherId, { sessionToken });
     return {
       statusCode: 200,
       payload: result,
     };
   }
 
-  return undefined;
+    return undefined;
+  } catch (error) {
+    return {
+      statusCode: getStatusCodeForError(error),
+      payload: { error: getErrorMessage(error as RuntimeError) },
+    };
+  }
 }
 
 export async function startWorkspaceHttpServer(args: {
@@ -676,28 +967,35 @@ export async function startWorkspaceHttpServer(args: {
   logger?: DiagnosticsLogger;
 }): Promise<{ port: number; close(): Promise<void> }> {
   const handleRequest = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    const allowedOrigin = resolveAllowedCorsOrigin(request);
+    applyCorsHeaders(response, request, allowedOrigin);
+
     if (!request.url || !request.method) {
       sendJson(response, 400, { error: "Missing request URL" });
       return;
     }
 
     const url = new URL(request.url, `http://${request.headers.host ?? "127.0.0.1"}`);
+    const sessionToken = resolveSessionToken(request.headers);
 
     try {
-      response.setHeader("access-control-allow-origin", "*");
-      response.setHeader("access-control-allow-headers", "content-type");
-      response.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
-
       if (request.method === "OPTIONS") {
-        response.statusCode = 204;
+        response.statusCode = getFirstHeaderValue(request.headers.origin) && !allowedOrigin ? 403 : 204;
         response.end();
         return;
       }
 
+      if (getFirstHeaderValue(request.headers.origin) && !allowedOrigin) {
+        sendJson(response, 403, { error: "Origin not allowed" });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/state") {
+        const state = await args.runtime.getClientState({ sessionToken });
         const payload = {
-          snapshot: buildTransportSnapshot(args.runtime.getSnapshot()),
+          snapshot: buildTransportSnapshot(state.snapshot),
           globalConfig: args.runtime.getGlobalConfig(),
+          auth: state.auth,
         };
         if (args.logger?.shouldLog("api-state", 1_000) ?? false) {
           args.logger?.info("api-state", {
@@ -717,24 +1015,94 @@ export async function startWorkspaceHttpServer(args: {
       if (request.method === "GET" && url.pathname === "/api/template-studio/models") {
         sendJson(response, 200, await args.runtime.getTemplateStudioModelCatalog({
           modelProfileId: url.searchParams.get("modelProfileId") ?? undefined,
-        }));
+        }, { sessionToken }));
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/provider-profiles/model-catalog") {
         const body = await readJson<{ draft: ModelProfileDraft }>(request);
-        sendJson(response, 200, await args.runtime.getProviderProfileModelCatalog(body));
+        sendJson(response, 200, await args.runtime.getProviderProfileModelCatalog(body, { sessionToken }));
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/provider-profiles/test") {
         const body = await readJson<{ draft: ModelProfileDraft; modelId?: string }>(request);
-        sendJson(response, 200, await args.runtime.testProviderProfile(body));
+        sendJson(response, 200, await args.runtime.testProviderProfile(body, { sessionToken }));
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/skills") {
         sendJson(response, 200, { skills: await args.runtime.listSkillCatalog() });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/login") {
+        const body = await readJson<{ handle: string; password: string; displayName?: string }>(request);
+        const result = await args.runtime.login(body);
+        sendJson(
+          response,
+          200,
+          result,
+          result.sessionToken ? { "set-cookie": buildSessionCookie(result.sessionToken) } : {},
+        );
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/logout") {
+        const body = await readJson<{ sessionToken?: string }>(request);
+        const result = await args.runtime.logout({ sessionToken: sessionToken ?? body.sessionToken });
+        sendJson(response, 200, result, { "set-cookie": buildClearedSessionCookie() });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/auth/session") {
+        sendJson(response, 200, await args.runtime.restoreSession({ sessionToken }));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/me") {
+        sendJson(response, 200, await args.runtime.getMe({ sessionToken }));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/me") {
+        const body = await readJson<{ handle?: string; displayName?: string }>(request);
+        sendJson(response, 200, await args.runtime.updateMe({ sessionToken, ...body }));
+        return;
+      }
+
+      if (request.method === "GET" && isMyProjectMembershipsPath(url.pathname)) {
+        sendJson(response, 200, await args.runtime.listMyProjectMemberships({ sessionToken }));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/admin/users") {
+        sendJson(response, 200, await args.runtime.listManagedUsers({ sessionToken }));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/admin/users") {
+        const body = await readJson<{ handle: string; displayName: string; password: string; isAdmin?: boolean }>(request);
+        sendJson(response, 200, await args.runtime.createManagedUser({ sessionToken, ...body }));
+        return;
+      }
+
+      const adminUserMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/u);
+      if (request.method === "POST" && adminUserMatch) {
+        const [, userId] = adminUserMatch;
+        if (!userId) {
+          sendJson(response, 400, { error: "Missing user id" });
+          return;
+        }
+
+        const body = await readJson<{ handle?: string; displayName?: string; password?: string; isAdmin?: boolean }>(request);
+        sendJson(response, 200, await args.runtime.updateManagedUser({ sessionToken, userId, ...body }));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/admin/project-memberships") {
+        const body = await readJson<{ userId: string; projectId: string; role?: "owner" | "admin" | "member"; remove?: boolean }>(request);
+        sendJson(response, 200, await args.runtime.setManagedProjectMembership({ sessionToken, ...body }));
         return;
       }
 
@@ -756,6 +1124,7 @@ export async function startWorkspaceHttpServer(args: {
             roomId,
             beforeMessageId,
             limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
+            sessionToken,
           }),
         );
         return;
@@ -774,6 +1143,7 @@ export async function startWorkspaceHttpServer(args: {
           200,
           await args.runtime.getRoomTodoTrees({
             roomId,
+            sessionToken,
           }),
         );
         return;
@@ -795,16 +1165,20 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
 
+        const requestContentTypeHeader = request.headers["content-type"] as string | string[] | undefined;
+        const requestContentType: string | undefined = Array.isArray(requestContentTypeHeader)
+          ? requestContentTypeHeader[0]
+          : requestContentTypeHeader;
+
         sendJson(
           response,
           200,
           await args.runtime.writeRoomAsset({
             roomId,
             fileName,
-            contentType: Array.isArray(request.headers["content-type"])
-              ? request.headers["content-type"][0]
-              : request.headers["content-type"],
+            contentType: requestContentType,
             body,
+            sessionToken,
           }),
         );
         return;
@@ -821,18 +1195,18 @@ export async function startWorkspaceHttpServer(args: {
         const asset = await args.runtime.readRoomAsset({
           roomId,
           filePath,
+          sessionToken,
         });
         response.statusCode = 200;
         response.setHeader("content-type", asset.contentType);
         response.setHeader("cache-control", "no-store");
-        response.setHeader("access-control-allow-origin", "*");
         response.end(asset.body);
         return;
       }
 
-      if (request.method === "POST" && url.pathname === "/api/system/project-path") {
-        const body = await readJson<ProjectPathRequestPayload>(request);
-        sendJson(response, 200, await resolveProjectPathRequest(args.runtime, body));
+      if (request.method === "POST" && url.pathname === "/api/system/project-path/browse") {
+        const body = await readJson<ProjectDirectoryBrowsePayload>(request);
+        sendJson(response, 200, await args.runtime.browseProjectDirectory(body));
         return;
       }
 
@@ -850,11 +1224,29 @@ export async function startWorkspaceHttpServer(args: {
           });
           return;
         }
-        const created = await args.runtime.createProject(body);
+        const created = await args.runtime.createProject(body, { sessionToken });
         sendJson(response, 200, {
           ...created,
           snapshot: buildTransportSnapshot(created.snapshot),
         });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/accounts") {
+        const body = await readJson<{ displayName: string; handle?: string; roomId?: string; activate?: boolean }>(request);
+        const snapshot = await args.runtime.createWorkspaceAccount(body);
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/accounts/active") {
+        const body = await readJson<{ accountId: string; roomId?: string }>(request);
+        if (!body.accountId) {
+          sendJson(response, 400, { error: "Missing account id" });
+          return;
+        }
+        const snapshot = await args.runtime.setActiveAccount(body);
+        sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
@@ -875,7 +1267,7 @@ export async function startWorkspaceHttpServer(args: {
         const created = await args.runtime.createRoom({
           projectId,
           templateId: body.templateId,
-        });
+        }, { sessionToken });
         sendJson(response, 200, {
           ...created,
           snapshot: buildTransportSnapshot(created.snapshot),
@@ -883,9 +1275,21 @@ export async function startWorkspaceHttpServer(args: {
         return;
       }
 
+      const projectMembersMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/members$/u);
+      if (request.method === "GET" && projectMembersMatch) {
+        const [, projectId] = projectMembersMatch;
+        if (!projectId) {
+          sendJson(response, 400, { error: "Missing project id" });
+          return;
+        }
+
+        sendJson(response, 200, await args.runtime.getProjectMembers({ projectId, sessionToken }));
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/templates/generate") {
         const body = await readJson<{ brief: string }>(request);
-        const template = await args.runtime.generateTemplate(body.brief);
+        const template = await args.runtime.generateTemplate(body.brief, { sessionToken });
         sendJson(response, 200, { template, snapshot: buildTransportSnapshot(args.runtime.getSnapshot()) });
         return;
       }
@@ -929,7 +1333,7 @@ export async function startWorkspaceHttpServer(args: {
               modelProfileId: body.modelProfileId,
               modelId: body.modelId,
               abortSignal: abortController.signal,
-            });
+            }, { sessionToken });
 
             try {
               writer.merge(
@@ -974,7 +1378,7 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing template id" });
           return;
         }
-        const snapshot = await args.runtime.deleteTemplate(templateId);
+        const snapshot = await args.runtime.deleteTemplate(templateId, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1025,14 +1429,14 @@ export async function startWorkspaceHttpServer(args: {
         const snapshot = await args.runtime.updateTemplate({
           templateId,
           ...body,
-        });
+        }, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/config") {
         const body = await readJson<UpdateGlobalConfigInput>(request);
-        const globalConfig = await args.runtime.updateGlobalConfig(body);
+        const globalConfig = await args.runtime.updateGlobalConfig(body, { sessionToken });
         sendJson(response, 200, {
           globalConfig,
           snapshot: buildTransportSnapshot(args.runtime.getSnapshot()),
@@ -1072,6 +1476,7 @@ export async function startWorkspaceHttpServer(args: {
                 authorHumanId: body.authorHumanId,
                 directMemberId: body.directMemberId,
                 directHumanId: body.directHumanId,
+                sessionToken,
               },
               {
                 onTaskAccepted(route) {
@@ -1154,6 +1559,7 @@ export async function startWorkspaceHttpServer(args: {
           authorHumanId: body.authorHumanId,
           directMemberId: body.directMemberId,
           directHumanId: body.directHumanId,
+          sessionToken,
         });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
@@ -1166,7 +1572,7 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing room id" });
           return;
         }
-        const snapshot = await args.runtime.deleteRoom(roomId);
+        const snapshot = await args.runtime.deleteRoom(roomId, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1178,7 +1584,7 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing room id" });
           return;
         }
-        const snapshot = await args.runtime.acknowledgeRoom(roomId);
+        const snapshot = await args.runtime.acknowledgeRoom(roomId, sessionToken);
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1194,7 +1600,7 @@ export async function startWorkspaceHttpServer(args: {
         const snapshot = await args.runtime.updateRoomSettings({
           roomId,
           visibleMemberIds: body.visibleMemberIds,
-        });
+        }, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1206,7 +1612,7 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing room id" });
           return;
         }
-        const snapshot = await args.runtime.toggleRoomWatcherSuspension(roomId);
+        const snapshot = await args.runtime.toggleRoomWatcherSuspension(roomId, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1251,7 +1657,7 @@ export async function startWorkspaceHttpServer(args: {
         const snapshot = await args.runtime.updateRoomTeam({
           roomId,
           ...body,
-        });
+        }, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1263,7 +1669,7 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing project id" });
           return;
         }
-        const snapshot = await args.runtime.deleteProject(projectId);
+        const snapshot = await args.runtime.deleteProject(projectId, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1306,7 +1712,7 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
         const body = await readJson<{ prompt: string }>(request);
-        const snapshot = await args.runtime.updatePrompt(memberId, body.prompt);
+        const snapshot = await args.runtime.updatePrompt(memberId, body.prompt, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1339,7 +1745,7 @@ export async function startWorkspaceHttpServer(args: {
         const snapshot = await args.runtime.updateMemberConfig({
           memberId,
           ...body,
-        });
+        }, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1351,7 +1757,7 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing member id" });
           return;
         }
-        const snapshot = await args.runtime.setEntryMember(memberId);
+        const snapshot = await args.runtime.setEntryMember(memberId, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1365,12 +1771,12 @@ export async function startWorkspaceHttpServer(args: {
         }
       const body = await readJson<{ enabled: boolean; intervalMinutes: number; persistent?: boolean; prompt?: string }>(request);
         const snapshot = await args.runtime.upsertWatcher({
-        memberId,
-        enabled: body.enabled,
-        intervalMinutes: body.intervalMinutes,
-        persistent: body.persistent ?? false,
-        prompt: body.prompt,
-      });
+          memberId,
+          enabled: body.enabled,
+          intervalMinutes: body.intervalMinutes,
+          persistent: body.persistent ?? false,
+          prompt: body.prompt,
+        }, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1382,7 +1788,7 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing watcher id" });
           return;
         }
-        const snapshot = await args.runtime.toggleWatcher(watcherId);
+        const snapshot = await args.runtime.toggleWatcher(watcherId, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1394,7 +1800,7 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing watcher id" });
           return;
         }
-        const snapshot = await args.runtime.pauseWatcherUntilActivity(watcherId);
+        const snapshot = await args.runtime.pauseWatcherUntilActivity(watcherId, { sessionToken });
         sendJson(response, 200, { snapshot: buildTransportSnapshot(snapshot) });
         return;
       }
@@ -1406,7 +1812,7 @@ export async function startWorkspaceHttpServer(args: {
           sendJson(response, 400, { error: "Missing watcher id" });
           return;
         }
-        const result = await args.runtime.runWatcherNow(watcherId);
+        const result = await args.runtime.runWatcherNow(watcherId, { sessionToken });
         sendJson(response, 200, {
           snapshot: buildTransportSnapshot(result.snapshot),
           outcome: result.outcome,
@@ -1416,7 +1822,7 @@ export async function startWorkspaceHttpServer(args: {
 
       sendJson(response, 404, { error: "Not found" });
     } catch (error) {
-      sendJson(response, 500, {
+      sendJson(response, getStatusCodeForError(error), {
         error: getErrorMessage(error as RuntimeError),
       });
     }
@@ -1431,26 +1837,38 @@ export async function startWorkspaceHttpServer(args: {
   });
   let pendingSnapshot = args.runtime.getSnapshot();
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
-  const broadcastSnapshot = (snapshot: typeof pendingSnapshot): void => {
+  const clientSessionTokens = new WeakMap<object, string | undefined>();
+
+  const sendClientSnapshot = async (client: { readyState: number; OPEN: number; send(payload: string): void }, sessionToken?: string): Promise<void> => {
+    if (client.readyState !== client.OPEN) {
+      return;
+    }
+
+    const state = await args.runtime.getClientState({ sessionToken });
+    client.send(
+      JSON.stringify({
+        type: "snapshot",
+        snapshot: buildTransportSnapshot(state.snapshot),
+        auth: state.auth,
+      }),
+    );
+  };
+
+  const broadcastSnapshot = async (snapshot: typeof pendingSnapshot): Promise<void> => {
     const clientCount = [...socketServer.clients].filter((client) => client.readyState === client.OPEN).length;
     if (clientCount === 0) {
       return;
     }
 
-    const transportSnapshot = buildTransportSnapshot(snapshot);
-    const payload = JSON.stringify({
-      type: "snapshot",
-      snapshot: transportSnapshot,
-    });
-
-    socketServer.clients.forEach((client) => {
-      if (client.readyState === client.OPEN) {
-        client.send(payload);
-      }
-    });
+    await Promise.all(
+      [...socketServer.clients].map((client) =>
+        sendClientSnapshot(client, clientSessionTokens.get(client)),
+      ),
+    );
     if (args.logger?.shouldLog("ws-broadcast", 2000) ?? false) {
+      const transportSnapshot = buildTransportSnapshot(snapshot);
       args.logger?.info("ws-broadcast", {
-        bytes: payload.length,
+        bytes: Buffer.byteLength(JSON.stringify(transportSnapshot), "utf8"),
         clients: clientCount,
         ...summarizeWorkspaceSnapshot(transportSnapshot),
       });
@@ -1464,21 +1882,18 @@ export async function startWorkspaceHttpServer(args: {
 
     pendingBroadcastTimer = setTimeout(() => {
       pendingBroadcastTimer = undefined;
-      broadcastSnapshot(pendingSnapshot);
+      void broadcastSnapshot(pendingSnapshot);
     }, 250);
   };
   const unsubscribe = args.runtime.subscribe((snapshot) => {
     scheduleSnapshotBroadcast(snapshot);
   });
 
-  socketServer.on("connection", (client) => {
-    const transportSnapshot = buildTransportSnapshot(args.runtime.getSnapshot());
-    client.send(
-      JSON.stringify({
-        type: "snapshot",
-        snapshot: transportSnapshot,
-      }),
-    );
+  socketServer.on("connection", (client, request) => {
+    const requestUrl = new URL(request.url ?? "/ws", `http://${request.headers.host ?? "127.0.0.1"}`);
+    const sessionToken = requestUrl.searchParams.get("sessionToken") ?? undefined;
+    clientSessionTokens.set(client, sessionToken);
+    void sendClientSnapshot(client, sessionToken);
   });
 
   await new Promise<void>((resolve) => {

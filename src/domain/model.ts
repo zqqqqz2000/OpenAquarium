@@ -13,6 +13,10 @@ export type WatcherId = string;
 export type TraceId = string;
 export type ProviderModelProfileId = string;
 export type AccountId = string;
+export type UserId = string;
+export type AuthSessionId = string;
+export type ProjectMembershipId = string;
+export type ProjectRole = "owner" | "admin" | "member";
 
 export type ProviderKind = "codex-acp" | "generic-acp";
 export type ProviderProfileType = "acp" | "openai-compatible";
@@ -359,6 +363,37 @@ export interface WorkspaceAccount {
   archivedAt?: string;
 }
 
+export interface User {
+  id: UserId;
+  handle: string;
+  displayName: string;
+  isAdmin?: boolean;
+  passwordSalt: string;
+  passwordHash: string;
+  createdAt: string;
+  updatedAt?: string;
+  archivedAt?: string;
+}
+
+export interface AuthSession {
+  id: AuthSessionId;
+  userId: UserId;
+  tokenHash: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+}
+
+export interface ProjectMembership {
+  id: ProjectMembershipId;
+  projectId: ProjectId;
+  userId: UserId;
+  role: ProjectRole;
+  createdAt: string;
+  updatedAt?: string;
+  archivedAt?: string;
+}
+
 export interface WorkspaceSnapshot {
   projects: Record<ProjectId, Project>;
   projectOrder: ProjectId[];
@@ -377,9 +412,37 @@ export interface WorkspaceSnapshot {
   watchers: Record<WatcherId, WatchSubscription>;
   accounts?: Record<AccountId, WorkspaceAccount>;
   accountOrder?: AccountId[];
+  users?: Record<UserId, User>;
+  userOrder?: UserId[];
+  authSessions?: Record<AuthSessionId, AuthSession>;
+  authSessionOrder?: AuthSessionId[];
+  projectMemberships?: Record<ProjectMembershipId, ProjectMembership>;
   selection: WorkspaceSelection;
   currentUserName: string;
   currentAccountId?: AccountId;
+}
+
+export interface LoginInput {
+  handle: string;
+  password: string;
+  displayName?: string;
+}
+
+export interface UpdateMeInput {
+  handle?: string;
+  displayName?: string;
+}
+
+export interface UpsertWorkspaceAccountInput {
+  displayName: string;
+  handle?: string;
+  roomId?: RoomId;
+  activate?: boolean;
+}
+
+export interface SetActiveAccountInput {
+  accountId: AccountId;
+  roomId?: RoomId;
 }
 
 export interface CreateProjectInput {

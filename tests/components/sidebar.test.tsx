@@ -31,6 +31,7 @@ vi.mock("@/components/theme/locale-toggle", () => ({
 import { Sidebar } from "@/components/layout/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { I18nProvider } from "@/lib/i18n";
+import { RECOMMENDED_DEV_RUNTIME_COMMAND } from "@/lib/runtime-dev";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { buildProjectActivitySummaries } from "@/lib/workspace-activity";
 import { AppThemeProvider } from "@/theme/theme-provider";
@@ -99,6 +100,36 @@ function renderSidebar(node: ReactNode) {
 }
 
 describe("Sidebar", () => {
+  it("recommends the watch runtime command when offline", () => {
+    const snapshot = createSeedWorkspace();
+    const sidebarData = buildSidebarViewState(snapshot);
+
+    renderSidebar(
+      <Sidebar
+        collapsed={false}
+        projects={sidebarData.projects}
+        roomsByProject={sidebarData.roomsByProject}
+        projectActivityById={sidebarData.projectActivityById}
+        roomActivityById={sidebarData.roomActivityById}
+        projectUnreadCountById={sidebarData.projectUnreadCountById}
+        roomUnreadCountById={sidebarData.roomUnreadCountById}
+        projectRunningMembersById={sidebarData.projectRunningMembersById}
+        roomRunningMembersById={sidebarData.roomRunningMembersById}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected={false}
+        loading={false}
+        onDeleteProject={vi.fn()}
+        onDeleteRoom={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(RECOMMENDED_DEV_RUNTIME_COMMAND)).toBeInTheDocument();
+  });
+
   it("uses compact header toggles instead of full-width sidebar controls", () => {
     const snapshot = createSeedWorkspace();
     const sidebarData = buildSidebarViewState(snapshot);

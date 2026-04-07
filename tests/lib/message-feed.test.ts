@@ -81,6 +81,59 @@ describe("message feed helpers", () => {
     expect(getMessageRecipientHandles(snapshot, room, message)).toEqual(["You"]);
   });
 
+  it("labels direct replies to a non-default active human with that handle", () => {
+    const context = createRuntimeContext();
+    let snapshot = createSeedWorkspace();
+    const roomId = snapshot.selection.roomId!;
+    const room = snapshot.rooms[roomId];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((member) => member.handle === "lead")!;
+
+    snapshot.accounts = {
+      ...(snapshot.accounts ?? {}),
+      account_alice: {
+        id: "account_alice",
+        displayName: "Alice",
+        handle: "alice",
+      },
+    };
+    snapshot.accountOrder = [...(snapshot.accountOrder ?? []), "account_alice"];
+    snapshot.currentAccountId = "account_alice";
+    snapshot.currentUserName = "Alice";
+    snapshot.humans = {
+      ...(snapshot.humans ?? {}),
+      human_room_1_account_alice: {
+        id: "human_room_1_account_alice",
+        roomId,
+        displayName: "Alice",
+        handle: "alice",
+        kind: "human",
+        accountId: "account_alice",
+      },
+    };
+    snapshot.humanOrderByRoom = {
+      ...(snapshot.humanOrderByRoom ?? {}),
+      [roomId]: [
+        ...(snapshot.humanOrderByRoom?.[roomId] ?? []),
+        "human_room_1_account_alice",
+      ],
+    };
+
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: lead.id,
+        content: "DM-ALICE",
+        directToUser: true,
+      },
+      context,
+    );
+
+    const message = snapshot.messages[snapshot.messageOrderByRoom[roomId].at(-1)!];
+
+    expect(getMessageRecipientHandles(snapshot, room, message)).toEqual(["alice"]);
+  });
+
   it("includes human handles in mentions and direct recipients", () => {
     const snapshot = createSeedWorkspace();
     const roomId = snapshot.selection.roomId!;

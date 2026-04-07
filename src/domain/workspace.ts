@@ -32,6 +32,7 @@ import type {
   UpdateMemberConfigInput,
   UpdateRoomSettingsInput,
   UpdateRoomTeamInput,
+  UpsertWorkspaceAccountInput,
   UpdateTemplateInput,
   WatchSubscription,
   WorkspaceAccount,
@@ -63,6 +64,8 @@ function cloneSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
     templates: { ...snapshot.templates },
     templateOrder: [...snapshot.templateOrder],
     members: { ...snapshot.members },
+    accounts: snapshot.accounts ? { ...snapshot.accounts } : undefined,
+    accountOrder: snapshot.accountOrder ? [...snapshot.accountOrder] : undefined,
     humans: snapshot.humans ? { ...snapshot.humans } : undefined,
     humanOrderByRoom: snapshot.humanOrderByRoom
       ? Object.fromEntries(
@@ -1181,8 +1184,17 @@ export function createWorkspaceSnapshot(templates: TeamTemplate[], currentUserNa
     taskTraces: {},
     taskTraceOrderByTask: {},
     watchers: {},
+    accounts: {
+      [DEFAULT_ACCOUNT_ID]: {
+        id: DEFAULT_ACCOUNT_ID,
+        displayName: currentUserName,
+        handle: DEFAULT_ACCOUNT_HANDLE,
+      },
+    },
+    accountOrder: [DEFAULT_ACCOUNT_ID],
     selection: {},
     currentUserName,
+    currentAccountId: DEFAULT_ACCOUNT_ID,
   };
 }
 
@@ -1487,10 +1499,16 @@ export function postMemberMessage(
   }
 
   const now = context.now();
-  const isDirectMessage = Boolean(input.directMemberId || input.directHumanId || input.directToUser);
   const content = input.content.trim();
   const recipientMemberIds = input.directMemberId ? [input.directMemberId] : [];
-  const recipientHumanIds = input.directHumanId ? normalizeRoomHumanIds(snapshot, input.roomId, [input.directHumanId]) : [];
+  const directToActiveHuman = input.directToUser ? ensureRoomHumanForActiveAccount(snapshot, input.roomId) : undefined;
+  const recipientHumanIds = input.directHumanId
+    ? normalizeRoomHumanIds(snapshot, input.roomId, [input.directHumanId])
+    : directToActiveHuman && directToActiveHuman.accountId !== DEFAULT_ACCOUNT_ID
+      ? [directToActiveHuman.id]
+      : [];
+  const recipientUser = input.directToUser && recipientHumanIds.length === 0 ? true : undefined;
+  const isDirectMessage = Boolean(input.directMemberId || recipientHumanIds.length > 0 || recipientUser);
 
   const message: ChatMessage = {
     id: context.createId("message"),
@@ -1506,7 +1524,7 @@ export function postMemberMessage(
     quotedMemberIds: isDirectMessage ? [] : input.quotedMemberIds ?? extractQuotedMemberIds(snapshot, input.roomId, content),
     recipientMemberIds,
     recipientHumanIds,
-    recipientUser: input.directToUser ? true : undefined,
+    recipientUser,
     taskId: input.taskId,
   };
 
@@ -2217,7 +2235,7 @@ export function setEntryMember(current: WorkspaceSnapshot, memberId: MemberId): 
   return snapshot;
 }
 
-export function setActiveAccount(current: WorkspaceSnapshot, accountId: AccountId): WorkspaceSnapshot {
+export function setActiveAccount(current: WorkspaceSnapshot, accountId: AccountId, roomId?: RoomId): WorkspaceSnapshot {
   const snapshot = cloneSnapshot(current);
   const defaultAccount = ensureDefaultAccount(snapshot);
   const nextAccount = resolveWorkspaceAccount(snapshot, accountId);
@@ -2233,10 +2251,67 @@ export function setActiveAccount(current: WorkspaceSnapshot, accountId: AccountI
   snapshot.currentAccountId = accountId;
   snapshot.currentUserName = nextAccount.displayName;
 
-  const roomId = snapshot.selection.roomId;
+  const targetRoomId = roomId ?? snapshot.selection.roomId;
+  if (targetRoomId && snapshot.rooms[targetRoomId]) {
+    ensureRoomHumanForAccount(snapshot, targetRoomId, defaultAccount);
+    ensureRoomHumanForAccount(snapshot, targetRoomId, nextAccount);
+  }
+
+  return snapshot;
+}
+
+export function upsertWorkspaceAccount(
+  current: WorkspaceSnapshot,
+  input: UpsertWorkspaceAccountInput,
+  context: MutationContext,
+): WorkspaceSnapshot {
+  void context;
+  const snapshot = cloneSnapshot(current);
+  const displayName = input.displayName.trim();
+  const normalizedHandle = normalizeHandleToken(input.handle?.trim() || displayName);
+  const roomId = input.roomId;
+
+  if (!displayName) {
+    throw new Error("Display name is required.");
+  }
+  if (!normalizedHandle) {
+    throw new Error("Handle is required.");
+  }
+
+  if (roomId) {
+    const conflictingMember = getActiveRoomMembers(snapshot, roomId)
+      .find((member) => member.handle.toLowerCase() === normalizedHandle);
+    if (conflictingMember) {
+      throw new Error(`Handle @${normalizedHandle} is already used by room member @${conflictingMember.handle}.`);
+    }
+
+    const conflictingHuman = getActiveRoomHumans(snapshot, roomId)
+      .find((human) => human.handle.toLowerCase() === normalizedHandle);
+    if (conflictingHuman) {
+      throw new Error(`Handle @${normalizedHandle} is already used by room human ${conflictingHuman.displayName}.`);
+    }
+  }
+
+  snapshot.accounts ??= {};
+  snapshot.accountOrder ??= [];
+
+  const accountId = `account_${normalizedHandle}`;
+  snapshot.accounts[accountId] = {
+    id: accountId,
+    displayName,
+    handle: normalizedHandle,
+  };
+
+  if (!snapshot.accountOrder.includes(accountId)) {
+    snapshot.accountOrder = [...snapshot.accountOrder, accountId];
+  }
+
   if (roomId && snapshot.rooms[roomId]) {
-    ensureRoomHumanForAccount(snapshot, roomId, defaultAccount);
-    ensureRoomHumanForAccount(snapshot, roomId, nextAccount);
+    ensureRoomHumanForAccount(snapshot, roomId, snapshot.accounts[accountId]);
+  }
+
+  if (input.activate) {
+    return setActiveAccount(snapshot, accountId, roomId);
   }
 
   return snapshot;

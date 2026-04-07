@@ -1,0 +1,1 @@
+export const RECOMMENDED_DEV_RUNTIME_COMMAND = "bun run dev:server";

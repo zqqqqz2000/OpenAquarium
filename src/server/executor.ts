@@ -47,6 +47,8 @@ export type ExecutionPreparationRequest = Omit<ExecutionRequest, "prompt" | "pro
 
 export interface ExecutionPreparation {
   sessionContinuation?: ExecutionSessionContinuation;
+  providerSessionId?: string;
+  persistedProviderSessionId?: string;
 }
 
 export interface MemberExecutor {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
-import { describeActiveMemberStreams, resolvePrimaryMemberId } from "@/lib/chat/use-room-chat";
+import { describeActiveMemberStreams, normalizeRoomChatTarget, resolvePrimaryMemberId } from "@/lib/chat/use-room-chat";
 
 describe("useRoomChat helpers", () => {
   it("prefers an explicit direct member target", () => {
@@ -68,6 +68,24 @@ describe("useRoomChat helpers", () => {
         content: "先接住这条消息，再让 @>research 后续补事实。",
       }),
     ).toBe(research?.id);
+  });
+
+  it("normalizes room chat targets for member-only and human-aware sends", () => {
+    expect(normalizeRoomChatTarget("member_builder")).toEqual({
+      directMemberId: "member_builder",
+    });
+
+    expect(
+      normalizeRoomChatTarget({
+        authorHumanId: "human_alice",
+        directHumanId: "human_bob",
+      }),
+    ).toEqual({
+      authorHumanId: "human_alice",
+      directHumanId: "human_bob",
+    });
+
+    expect(normalizeRoomChatTarget()).toEqual({});
   });
 
   it("summarizes one or many active member streams", () => {

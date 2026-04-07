@@ -225,9 +225,9 @@ export function createWorkspaceTools(args: {
       },
     }),
     oa_send_direct_message: tool({
-      description: "Send a direct message from this member to another member handle in the same room, or to @user for a private reply to the human.",
+      description: "Send a direct message from this member to another member handle in the same room, to a room human handle like @alice, or to @user for the currently active human alias.",
       inputSchema: z.object({
-        targetHandle: z.string().min(1).describe("Target handle, with or without leading @. Use @user to reply privately to the human."),
+        targetHandle: z.string().min(1).describe("Target handle, with or without leading @. You can target a member handle, a room human handle like @alice, or @user for the currently active human alias."),
         content: z.string().min(1),
       }),
       execute: async ({ targetHandle, content }) => {

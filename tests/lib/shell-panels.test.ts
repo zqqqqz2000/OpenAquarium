@@ -31,6 +31,26 @@ describe("shell panels", () => {
     expect(parseShellPanelsState(serializeShellPanelsState(state))).toEqual(state);
   });
 
+  it("always keeps desktop sidebars expanded after restore", () => {
+    const parsed = parseShellPanelsState(
+      JSON.stringify({
+        desktopLeftCollapsed: true,
+        leftWidth: 320,
+        overlayLeftCollapsed: true,
+        desktopRightCollapsed: true,
+        rightWidth: 408,
+        overlayRightCollapsed: true,
+      }),
+    );
+
+    expect(resolveShellPanelsState(parsed, "desktop")).toEqual({
+      leftCollapsed: false,
+      leftWidth: 320,
+      rightCollapsed: false,
+      rightWidth: 408,
+    });
+  });
+
   it("returns zero-width columns for a collapsed left panel", () => {
     expect(
       getRoomGridColumns({

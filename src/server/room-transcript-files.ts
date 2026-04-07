@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ChatMessage, Project, Room, TeamMember, WorkspaceSnapshot } from "../domain/model";
 import { getMemberSessionEntries, type MemberSessionEntry } from "../lib/member-session-feed";
 import { isVisibleMemberRoomMessage } from "../lib/message-visibility";
+import { resolveChatAuthorActorKind } from "@/lib/chat-author";
 import {
   getMemberHistoryFilePath as getRoomContextMemberHistoryFilePath,
   getRoomContextDirectoryPath as getRoomContextDirectoryPathInternal,
@@ -18,6 +19,13 @@ function formatHandles(prefix: string, memberIds: string[], snapshot: WorkspaceS
   return [`${prefix}: ${memberIds.map((memberId) => `${marker}${snapshot.members[memberId]?.handle ?? memberId}`).join(", ")}`];
 }
 
+function formatHumanHandles(prefix: string, humanIds: string[], snapshot: WorkspaceSnapshot): string[] {
+  const handles = humanIds
+    .map((humanId) => snapshot.humans?.[humanId]?.handle)
+    .filter((handle): handle is string => Boolean(handle));
+  return handles.length > 0 ? [`${prefix}: ${handles.map((handle) => `@${handle}`).join(", ")}`] : [];
+}
+
 function formatReferenceHandles(message: ChatMessage, snapshot: WorkspaceSnapshot): string[] {
   if ((message.quotedMemberIds?.length ?? 0) === 0) {
     return [];
@@ -26,13 +34,35 @@ function formatReferenceHandles(message: ChatMessage, snapshot: WorkspaceSnapsho
   return formatHandles("references", message.quotedMemberIds ?? [], snapshot);
 }
 
+function formatTranscriptAuthor(message: ChatMessage): string {
+  const actorKind = resolveChatAuthorActorKind(message.author);
+  const handleSuffix = message.author.handle ? ` @${message.author.handle}` : "";
+  return `${message.author.label}${handleSuffix} [${actorKind}]`;
+}
+
+function formatRecipientHandles(snapshot: WorkspaceSnapshot, message: ChatMessage): string[] {
+  if (message.recipientUser) {
+    const activeHuman = snapshot.currentAccountId
+      ? Object.values(snapshot.humans ?? {}).find((human) => human.accountId === snapshot.currentAccountId && !human.archivedAt)
+      : undefined;
+    return [activeHuman ? `recipients: @user (active human: @${activeHuman.handle})` : "recipients: @user"];
+  }
+
+  return [
+    ...formatHandles("recipients", message.recipientMemberIds, snapshot),
+    ...formatHumanHandles("recipients", message.recipientHumanIds ?? [], snapshot),
+  ];
+}
+
 function formatTranscriptEntry(snapshot: WorkspaceSnapshot, message: ChatMessage): string {
   const lines = [
-    `- [${message.createdAt}] ${message.author.label} (${message.transport}/${message.status})`,
+    `- [${message.createdAt}] ${formatTranscriptAuthor(message)} (${message.transport}/${message.status})`,
     `  <!-- messageId: ${message.id} -->`,
     `  ${message.content.replace(/\n/gu, "\n  ")}`,
     ...formatHandles("  assignments", message.mentionedMemberIds, snapshot, "@>"),
+    ...formatHumanHandles("  mentions", message.mentionedHumanIds ?? [], snapshot).map((line) => `  ${line}`),
     ...formatReferenceHandles(message, snapshot).map((line) => `  ${line}`),
+    ...formatRecipientHandles(snapshot, message).map((line) => `  ${line}`),
   ];
 
   return `${lines.join("\n")}\n`;

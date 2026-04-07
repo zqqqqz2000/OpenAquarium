@@ -1155,6 +1155,46 @@ describe("workspace domain", () => {
     ).toHaveLength(0);
   });
 
+  it("resolves direct @user replies to the active non-default human", () => {
+    const context = createRuntimeContext();
+    let snapshot = createStartedProjectSnapshot(context);
+
+    const roomId = snapshot.selection.roomId!;
+    const lead = snapshot.rooms[roomId].memberIds
+      .map((memberId) => snapshot.members[memberId])
+      .find((member) => member.isEntryMember)!;
+
+    snapshot.accounts = {
+      ...(snapshot.accounts ?? {}),
+      account_alice: {
+        id: "account_alice",
+        displayName: "Alice",
+        handle: "alice",
+      },
+    };
+    snapshot.accountOrder = [...(snapshot.accountOrder ?? []), "account_alice"];
+    snapshot = setActiveAccount(snapshot, "account_alice", roomId);
+
+    snapshot = postMemberMessage(
+      snapshot,
+      {
+        roomId,
+        memberId: lead.id,
+        taskId: lead.activeTaskId,
+        content: "DM-ALICE",
+        directToUser: true,
+      },
+      context,
+    );
+
+    const lastMessageId = snapshot.messageOrderByRoom[roomId]?.at(-1);
+    const lastMessage = lastMessageId ? snapshot.messages[lastMessageId] : undefined;
+
+    expect(lastMessage?.transport).toBe("direct");
+    expect(lastMessage?.recipientUser).toBeUndefined();
+    expect(lastMessage?.recipientHumanIds).toEqual(["human_room_1_account_alice"]);
+  });
+
   it("establishes a watcher baseline before sending digests for new room activity", () => {
     const context = createRuntimeContext();
     let snapshot = createStartedProjectSnapshot(context);

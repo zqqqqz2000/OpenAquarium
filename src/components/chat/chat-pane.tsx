@@ -31,7 +31,7 @@ import type {
   UpdateRoomSettingsInput,
   WorkspaceSnapshot,
 } from "@/domain/model";
-import { ChatComposer } from "@/components/chat/chat-composer";
+import { ChatComposer, type ChatComposerHumanOption } from "@/components/chat/chat-composer";
 import {
   MessageBubble,
   MessageBubbleMeta,
@@ -56,6 +56,7 @@ import { getMemberRoleLabel } from "@/lib/member-display";
 import { useRoomChat, type RoomChatStatus } from "@/lib/chat/use-room-chat";
 import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
 import { isProviderAssociationRequiredBinding } from "@/lib/provider-association";
+import { RECOMMENDED_DEV_RUNTIME_COMMAND } from "@/lib/runtime-dev";
 import type { RoomTeamSummary } from "@/lib/room-team";
 import {
   getUIMessageText,
@@ -71,6 +72,7 @@ import {
   type MessageHandlerSummary,
 } from "@/lib/message-feed";
 import { WorkspaceRuntimeClient } from "@/lib/runtime-client";
+import { DESKTOP_COLLAPSED_LEFT_PANEL_WIDTH } from "@/lib/shell-panels";
 import { badgeToneProps, compactBadgeClassName } from "@/lib/ui-tone";
 import { cn, summarizePrompt } from "@/lib/utils";
 
@@ -136,6 +138,44 @@ const transcriptViewStateByScopeKey = new Map<
   string,
   CachedTranscriptViewState
 >();
+
+function resolveRoomHumanOptions(snapshot: WorkspaceSnapshot, roomId: string): ChatComposerHumanOption[] {
+  const activeHumans = (snapshot.humanOrderByRoom?.[roomId] ?? [])
+    .map((humanId) => snapshot.humans?.[humanId])
+    .filter((human): human is NonNullable<typeof human> => Boolean(human))
+    .filter((human) => human.roomId === roomId && !human.archivedAt)
+    .map((human) => ({
+      accountId: human.accountId ?? human.id,
+      humanId: human.id,
+      label: human.displayName,
+      handle: human.handle,
+    }));
+
+  const activeAccountId = snapshot.currentAccountId ?? "account_default";
+  const activeAccount = snapshot.accounts?.[activeAccountId];
+  if (activeAccount && !activeHumans.some((human) => human.accountId === activeAccount.id)) {
+    return [
+      {
+        accountId: activeAccount.id,
+        label: activeAccount.displayName,
+        handle: activeAccount.handle ?? "default",
+      },
+      ...activeHumans,
+    ];
+  }
+
+  if (activeHumans.length > 0) {
+    return activeHumans;
+  }
+
+  return [
+    {
+      accountId: activeAccountId,
+      label: snapshot.currentUserName,
+      handle: activeAccount?.handle ?? "default",
+    },
+  ];
+}
 
 function buildMemberCardBadges(
   member: TeamMember,
@@ -560,6 +600,8 @@ export function ChatPane(props: {
   projectsPanelContent?: ReactNode;
   rightSidebarCollapsed: boolean;
   rightSidebarWidth?: number;
+  showSidebarToggles?: boolean;
+  topBarSecondaryContent?: ReactNode;
   snapshot: WorkspaceSnapshot;
   room?: Room;
   roomTeam?: RoomTeamSummary;
@@ -570,6 +612,8 @@ export function ChatPane(props: {
   onOpenMember: (memberId: string) => void;
   onOpenRoomTeam?: () => void;
   onUpdateRoomSettings?: (input: UpdateRoomSettingsInput) => void;
+  onCreateWorkspaceAccount?: (input: { displayName: string; handle?: string; roomId?: string; activate?: boolean }) => void;
+  onSetActiveAccount?: (accountId: string, roomId?: string) => void;
   onToggleLeftSidebar: () => void;
   onToggleRightSidebar: () => void;
   onRightSidebarResizeStart?: (
@@ -582,6 +626,8 @@ export function ChatPane(props: {
     projectsPanelContent,
     rightSidebarCollapsed,
     rightSidebarWidth = 372,
+    showSidebarToggles = false,
+    topBarSecondaryContent,
     snapshot,
     room,
     roomTeam,
@@ -592,6 +638,8 @@ export function ChatPane(props: {
     onOpenMember,
     onOpenRoomTeam,
     onUpdateRoomSettings,
+    onCreateWorkspaceAccount,
+    onSetActiveAccount,
     onToggleLeftSidebar,
     onToggleRightSidebar,
     onRightSidebarResizeStart = () => undefined,
@@ -616,6 +664,7 @@ export function ChatPane(props: {
   const historyRequestIdRef = useRef(0);
   const runtimeClient = useMemo(() => new WorkspaceRuntimeClient(), []);
   const roomId = room?.id;
+  const roomHumanOptions = useMemo(() => (room ? resolveRoomHumanOptions(snapshot, room.id) : []), [room, snapshot]);
   const visibleMemberIds = room
     ? resolveRoomVisibleMemberIds(
         snapshot,
@@ -693,7 +742,7 @@ export function ChatPane(props: {
     [room, snapshot, transcriptDomainMessages],
   );
   const latestLiveMessageId = liveRoomMessages.at(-1)?.id;
-  const layoutKey = `${roomId ?? "no-room"}:${leftSidebarCollapsed ? "left-closed" : "left-open"}:${rightSidebarCollapsed ? "right-closed" : "right-open"}`;
+  const layoutKey = roomId ?? "no-room";
   const activeRouteSummaryByMemberId = useMemo(
     () =>
       Object.fromEntries(
@@ -1154,14 +1203,20 @@ export function ChatPane(props: {
       .slice(0, 3)
       .map((templateId) => snapshot.templates[templateId])
       .filter((template): template is TeamTemplate => Boolean(template));
-
-    return (
+    const emptyStateContent = (
       <main className="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden px-6 py-10">
-        <ShellToolbar
-          leftSidebarCollapsed={leftSidebarCollapsed}
-          onToggleLeftSidebar={onToggleLeftSidebar}
-        />
-        <div className="grid flex-1 content-start gap-10 pt-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(17rem,24rem)]">
+        {showSidebarToggles ? (
+          <ShellToolbar
+            leftSidebarCollapsed={leftSidebarCollapsed}
+            onToggleLeftSidebar={onToggleLeftSidebar}
+          />
+        ) : null}
+        {topBarSecondaryContent ? (
+          <div className="flex justify-end">
+            {topBarSecondaryContent}
+          </div>
+        ) : null}
+        <div className="grid flex-1 content-start gap-10 overflow-y-auto pt-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(17rem,24rem)]">
           <section className="space-y-10">
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
@@ -1169,7 +1224,7 @@ export function ChatPane(props: {
                   {connected ? "Runtime online" : "Runtime offline"}
                 </Badge>
                 <Badge variant="outline">{templateCount} templates ready</Badge>
-                <Badge variant="outline">Project path supported</Badge>
+                <Badge variant="outline">Web folder manager ready</Badge>
               </div>
               <div className="space-y-3">
                 <p className="m-0 text-5xl font-semibold tracking-tight">
@@ -1177,7 +1232,7 @@ export function ChatPane(props: {
                 </p>
                 <p className="m-0 max-w-3xl text-lg leading-8 text-muted-foreground">
                   从左侧创建一个 project 开始协作。你可以选 team
-                  template，也可以额外填写 project path，让 ACP
+                  template，也可以在网页内浏览并选择项目目录，让 ACP
                   直接在真实仓库目录里启动。
                 </p>
               </div>
@@ -1208,10 +1263,10 @@ export function ChatPane(props: {
                 <GitBranch size={18} />
                 <div className="space-y-2">
                   <p className="m-0 text-3xl font-semibold tracking-tight">3</p>
-                  <p className="m-0 text-sm font-medium">可选填写 path</p>
+                  <p className="m-0 text-sm font-medium">网页内选择目录</p>
                   <p className="m-0 text-sm leading-7 text-muted-foreground">
-                    如果你要操作真实项目，填写路径后 ACP
-                    会以那个目录作为默认工作目录。
+                    如果你要操作真实项目，可在网页内浏览并选择目录，ACP
+                    会以该目录作为默认工作目录。
                   </p>
                 </div>
               </div>
@@ -1231,7 +1286,7 @@ export function ChatPane(props: {
               </p>
               {!connected ? (
                 <p className="m-0 font-mono text-xs text-muted-foreground">
-                  bun run server
+                  {RECOMMENDED_DEV_RUNTIME_COMMAND}
                 </p>
               ) : null}
             </div>
@@ -1262,6 +1317,28 @@ export function ChatPane(props: {
         </div>
       </main>
     );
+
+    if (projectsPanelContent) {
+      return (
+        <div className="flex h-full min-h-0 min-w-0 gap-3 overflow-hidden p-3">
+          <div
+            className="min-h-0 shrink-0 overflow-hidden"
+            style={{
+              width: leftSidebarCollapsed
+                ? `${DESKTOP_COLLAPSED_LEFT_PANEL_WIDTH}px`
+                : `${leftSidebarWidth}px`,
+            }}
+          >
+            {projectsPanelContent}
+          </div>
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm">
+            {emptyStateContent}
+          </div>
+        </div>
+      );
+    }
+
+    return emptyStateContent;
   }
 
   const chatPanelContent = (
@@ -1414,7 +1491,11 @@ export function ChatPane(props: {
         connected={connected}
         error={error}
         members={members}
+        humanOptions={roomHumanOptions}
+        activeHumanAccountId={snapshot.currentAccountId}
         onSend={roomChat.sendMessage}
+        onCreateWorkspaceAccount={onCreateWorkspaceAccount ? ({ displayName, handle }) => onCreateWorkspaceAccount({ displayName, handle, roomId: room.id, activate: true }) : undefined}
+        onSetActiveAccount={onSetActiveAccount ? (accountId) => onSetActiveAccount(accountId, room.id) : undefined}
         onUploadFiles={uploadRoomAssets}
         sending={roomChat.hasActiveStreams}
         draftKey={`room:${room.id}`}
@@ -1432,7 +1513,7 @@ export function ChatPane(props: {
               启动本地 runtime 后，发消息和保存改动才会生效。
             </p>
             <p className="m-0 font-mono text-xs text-muted-foreground">
-              bun run server
+              {RECOMMENDED_DEV_RUNTIME_COMMAND}
             </p>
             {error ? (
               <p className="m-0 text-xs text-destructive">{error}</p>
@@ -1444,6 +1525,8 @@ export function ChatPane(props: {
         <RoomTopBar
           leftSidebarCollapsed={leftSidebarCollapsed}
           rightSidebarCollapsed={rightSidebarCollapsed}
+          showSidebarToggles={showSidebarToggles}
+          secondaryContent={topBarSecondaryContent}
           room={room}
           roomTeam={roomTeam}
           members={members}
@@ -1483,6 +1566,7 @@ export function ChatPane(props: {
         ) : null}
         <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
           <WorkspaceFlexLayout
+            key={layoutKey}
             layoutKey={layoutKey}
             leftCollapsed={leftSidebarCollapsed}
             leftPanelWidth={leftSidebarWidth}
@@ -1588,6 +1672,8 @@ function ShellToolbar(props: {
 function RoomTopBar(props: {
   leftSidebarCollapsed: boolean;
   rightSidebarCollapsed: boolean;
+  showSidebarToggles: boolean;
+  secondaryContent?: ReactNode;
   room: Room;
   roomTeam?: RoomTeamSummary;
   members: TeamMember[];
@@ -1601,6 +1687,8 @@ function RoomTopBar(props: {
   const {
     leftSidebarCollapsed,
     rightSidebarCollapsed,
+    showSidebarToggles,
+    secondaryContent,
     room,
     roomTeam,
     members,
@@ -1615,29 +1703,45 @@ function RoomTopBar(props: {
   const teamBadgeTitle = roomTeam?.name?.trim() || "Room team";
 
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="flex min-w-0 flex-1 items-start gap-3">
-        <PanelToggleButton
-          collapsed={leftSidebarCollapsed}
-          side="left"
-          onToggle={onToggleLeftSidebar}
-        />
-        <div className="min-w-0 flex-1 space-y-3 pt-0.5">
-          <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
-            <div className="min-w-[min(100%,24rem)] flex-[1_1_24rem]">
-              <p className="m-0 truncate text-3xl font-semibold tracking-tight">
-                {room.name}
-              </p>
-            </div>
-            <div className="flex max-w-full shrink-0 flex-nowrap items-center gap-1.5">
-              {onOpenRoomTeam ? (
-                <button
-                  type="button"
-                  aria-label={`Edit ${teamBadgeTitle}`}
-                  title={teamBadgeTitle}
-                  className="inline-flex rounded-full border-0 bg-transparent p-0 text-left align-middle"
-                  onClick={onOpenRoomTeam}
-                >
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          {showSidebarToggles ? (
+            <PanelToggleButton
+              collapsed={leftSidebarCollapsed}
+              side="left"
+              onToggle={onToggleLeftSidebar}
+            />
+          ) : null}
+          <div className="min-w-0 flex-1 space-y-3 pt-0.5">
+            <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+              <div className="min-w-[min(100%,24rem)] flex-[1_1_24rem]">
+                <p className="m-0 truncate text-3xl font-semibold tracking-tight">
+                  {room.name}
+                </p>
+              </div>
+              <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5">
+                {onOpenRoomTeam ? (
+                  <button
+                    type="button"
+                    aria-label={`Edit ${teamBadgeTitle}`}
+                    title={teamBadgeTitle}
+                    className="inline-flex rounded-full border-0 bg-transparent p-0 text-left align-middle"
+                    onClick={onOpenRoomTeam}
+                  >
+                    <Badge
+                      variant={teamBadge.variant}
+                      className={cn(
+                        compactBadgeClassName,
+                        teamBadge.className,
+                        "max-w-full gap-1.5 px-2",
+                      )}
+                    >
+                      <Link2 aria-hidden size={12} />
+                      <span>Team</span>
+                    </Badge>
+                  </button>
+                ) : (
                   <Badge
                     variant={teamBadge.variant}
                     className={cn(
@@ -1645,48 +1749,39 @@ function RoomTopBar(props: {
                       teamBadge.className,
                       "max-w-full gap-1.5 px-2",
                     )}
+                    title={teamBadgeTitle}
                   >
                     <Link2 aria-hidden size={12} />
                     <span>Team</span>
                   </Badge>
-                </button>
-              ) : (
-                <Badge
-                  variant={teamBadge.variant}
-                  className={cn(
-                    compactBadgeClassName,
-                    teamBadge.className,
-                    "max-w-full gap-1.5 px-2",
-                  )}
-                  title={teamBadgeTitle}
-                >
-                  <Link2 aria-hidden size={12} />
-                  <span>Team</span>
-                </Badge>
-              )}
-              <RoomMetaBadge label="Members" value={String(members.length)} />
-              <RoomMetaBadge
-                label="Watchers"
-                value={String(room.watcherIds.length)}
-              />
-              <ActiveRoomStatusBadge
-                runningMembers={runningMembers}
-                onOpenMember={(preview) => onOpenMember(preview.memberId)}
-              />
+                )}
+                <RoomMetaBadge label="Members" value={String(members.length)} />
+                <RoomMetaBadge
+                  label="Watchers"
+                  value={String(room.watcherIds.length)}
+                />
+                <ActiveRoomStatusBadge
+                  runningMembers={runningMembers}
+                  onOpenMember={(preview) => onOpenMember(preview.memberId)}
+                />
+                {secondaryContent ? <div className="flex max-w-full shrink-0 items-center">{secondaryContent}</div> : null}
+              </div>
             </div>
+            {activeStreamSummary ? (
+              <p className="m-0 text-sm text-muted-foreground">
+                {activeStreamSummary}
+              </p>
+            ) : null}
           </div>
-          {activeStreamSummary ? (
-            <p className="m-0 text-sm text-muted-foreground">
-              {activeStreamSummary}
-            </p>
-          ) : null}
         </div>
+        {showSidebarToggles ? (
+          <PanelToggleButton
+            collapsed={rightSidebarCollapsed}
+            side="right"
+            onToggle={onToggleRightSidebar}
+          />
+        ) : null}
       </div>
-      <PanelToggleButton
-        collapsed={rightSidebarCollapsed}
-        side="right"
-        onToggle={onToggleRightSidebar}
-      />
     </div>
   );
 }
@@ -1861,10 +1956,12 @@ function toBubbleModel(
     message: {
       id: message.id,
       roomId: room.id,
-      author: {
+      author: sourceMessage?.author ?? {
         kind: authorKind,
+        actorKind: message.metadata?.authorActorKind,
         id: authorId,
         label: authorLabel,
+        handle: message.metadata?.authorHandle,
       },
       content: text,
       createdAt: message.metadata?.createdAt ?? new Date().toISOString(),
