@@ -597,9 +597,12 @@ export function ChatPane(props: {
     onRightSidebarResizeStart = () => undefined,
   } = props;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const transcriptContentRef = useRef<HTMLDivElement | null>(null);
   const previousLayoutKeyRef = useRef<string | undefined>(undefined);
   const previousLiveLatestMessageIdRef = useRef<string | undefined>(undefined);
   const historyBootstrapCursorRef = useRef<string | undefined>(undefined);
+  const transcriptStickToLatestRef = useRef(true);
+  const transcriptResizeRafRef = useRef<number | undefined>(undefined);
   const pendingInitialBottomAlignRef = useRef(false);
   const pendingInitialHistoryLoadRef = useRef(false);
   const pendingBottomAlignBehaviorRef = useRef<ScrollBehavior | undefined>(
@@ -747,7 +750,16 @@ export function ChatPane(props: {
     setTranscriptScrollTop(container.scrollTop);
     const bottomGap =
       container.scrollHeight - container.clientHeight - container.scrollTop;
-    setShowScrollToLatest(bottomGap > TRANSCRIPT_BOTTOM_GAP_THRESHOLD);
+    const shouldStickToLatest = bottomGap <= TRANSCRIPT_BOTTOM_GAP_THRESHOLD;
+    transcriptStickToLatestRef.current = shouldStickToLatest;
+    setShowScrollToLatest(!shouldStickToLatest);
+  }, []);
+
+  const cancelPendingTranscriptResize = useCallback((): void => {
+    if (typeof transcriptResizeRafRef.current === "number") {
+      window.cancelAnimationFrame(transcriptResizeRafRef.current);
+      transcriptResizeRafRef.current = undefined;
+    }
   }, []);
 
   const cancelPendingBottomAlign = useCallback((): void => {
@@ -837,12 +849,75 @@ export function ChatPane(props: {
     [cancelPendingBottomAlign, disableTranscriptVirtualization, flushTranscriptToLatest],
   );
 
+  const scheduleTranscriptToLatest = useCallback(
+    (behavior: ScrollBehavior = "auto"): void => {
+      if (typeof transcriptResizeRafRef.current === "number") {
+        return;
+      }
+
+      transcriptResizeRafRef.current = window.requestAnimationFrame(() => {
+        transcriptResizeRafRef.current = undefined;
+        scrollTranscriptToLatest(behavior);
+      });
+    },
+    [scrollTranscriptToLatest],
+  );
+
   useEffect(
     () => () => {
+      cancelPendingTranscriptResize();
       cancelPendingBottomAlign();
     },
-    [cancelPendingBottomAlign],
+    [cancelPendingBottomAlign, cancelPendingTranscriptResize],
   );
+
+  useEffect(() => {
+    const container = transcriptRef.current;
+    if (!container || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (pendingInitialHistoryLoadRef.current) {
+        return;
+      }
+
+      if (transcriptMessages.length === 0) {
+        scheduleTranscriptToLatest("auto");
+        return;
+      }
+
+      if (
+        pendingInitialBottomAlignRef.current
+        || pendingBottomAlignFramesRef.current > 0
+        || transcriptStickToLatestRef.current
+      ) {
+        scheduleTranscriptToLatest("auto");
+        return;
+      }
+
+      cancelPendingTranscriptResize();
+      transcriptResizeRafRef.current = window.requestAnimationFrame(() => {
+        transcriptResizeRafRef.current = undefined;
+        updateScrollState();
+      });
+    });
+
+    resizeObserver.observe(container);
+    if (transcriptContentRef.current && transcriptContentRef.current !== container) {
+      resizeObserver.observe(transcriptContentRef.current);
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+      cancelPendingTranscriptResize();
+    };
+  }, [
+    cancelPendingTranscriptResize,
+    scheduleTranscriptToLatest,
+    transcriptMessages.length,
+    updateScrollState,
+  ]);
 
   useEffect(() => {
     historyRequestIdRef.current += 1;
@@ -1262,6 +1337,7 @@ export function ChatPane(props: {
             </Card>
           ) : (
             <div
+              ref={transcriptContentRef}
               className="relative w-full"
               style={{
                 height: `${messageVirtualizer.getTotalSize()}px`,

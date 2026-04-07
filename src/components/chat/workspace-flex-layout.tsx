@@ -299,9 +299,11 @@ export function WorkspaceFlexLayout(props: {
 
         renderValues.leading = <panel.icon aria-hidden size={14} />;
         renderValues.content = (
-          <span className="inline-flex items-center gap-2">
-            <span>{panel.title}</span>
-            {panel.badge ? <span className="shrink-0">{panel.badge}</span> : null}
+          <span className="workspace-flex-layout-tab-label inline-flex items-center gap-2">
+            <span className="workspace-flex-layout-tab-title">{panel.title}</span>
+            {panel.badge ? (
+              <span className="workspace-flex-layout-tab-badge shrink-0">{panel.badge}</span>
+            ) : null}
           </span>
         );
       },
@@ -334,21 +336,23 @@ export function WorkspaceFlexLayout(props: {
 
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
-        <div className="-mx-1 flex shrink-0 gap-2 overflow-x-auto px-1 pb-1">
+        <div className="-mx-1 flex shrink-0 gap-0 overflow-x-auto px-1 pb-1">
           {orderedMobilePanels.map((panelId) => {
             const panel = panels[panelId];
             const Icon = panel.icon;
             const selected = panelId === activePanelId;
+            const isFirstTab = panelId === orderedMobilePanels[0];
 
             return (
               <button
                 key={panelId}
                 type="button"
                 className={cn(
-                  "inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
+                  "inline-flex shrink-0 items-center gap-2 border-0 px-3 py-2 text-sm font-medium transition-colors",
+                  isFirstTab ? "" : "border-l border-border/70",
                   selected
-                    ? "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)] text-[color:var(--tone-blueprint-foreground)]"
-                    : "border-border/70 bg-background text-muted-foreground",
+                    ? "bg-muted text-foreground"
+                    : "bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                 )}
                 onClick={() => setActivePanelId(panelId)}
               >
@@ -391,7 +395,7 @@ export function WorkspaceFlexLayout(props: {
       <div
         data-testid="workspace-flex-layout"
         className={cn(
-          "relative flexlayout__theme_light dark:flexlayout__theme_dark flex h-full min-h-0 min-w-0 flex-1 overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm",
+          "workspace-flex-layout-shell relative flexlayout__theme_light dark:flexlayout__theme_dark flex h-full min-h-0 min-w-0 flex-1 overflow-hidden border border-border/70 bg-card shadow-sm",
         )}
       >
         <Layout

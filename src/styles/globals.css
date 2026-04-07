@@ -205,6 +205,107 @@
   min-width: 0;
 }
 
+.workspace-flex-layout-shell .flexlayout__layout {
+  background: transparent;
+}
+
+.workspace-flex-layout-shell .flexlayout__tabset {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.workspace-flex-layout-shell .flexlayout__tabset_tabbar_outer {
+  background: transparent;
+}
+
+.workspace-flex-layout-shell .flexlayout__tabset_tabbar_outer_top,
+.workspace-flex-layout-shell .flexlayout__tabset_tabbar_outer_bottom {
+  padding: 0;
+  border-top: 0;
+  border-bottom: 0;
+}
+
+.workspace-flex-layout-shell .flexlayout__tabset_tabbar_inner {
+  gap: 0;
+  padding: 0;
+}
+
+.workspace-flex-layout-shell .flexlayout__tabset_content {
+  background: transparent;
+}
+
+.workspace-flex-layout-shell .flexlayout__tabset_tabbar_inner_tab_container {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.workspace-flex-layout-shell .flexlayout__tabset_tabbar_inner_tab_container_top,
+.workspace-flex-layout-shell .flexlayout__tabset_tabbar_inner_tab_container_bottom {
+  border-top: 0;
+  border-bottom: 0;
+}
+
+.workspace-flex-layout-shell
+  .flexlayout__tabset_tabbar_inner_tab_container
+  + .flexlayout__tabset_tabbar_inner_tab_container {
+  border-left: 1px solid color-mix(in oklch, var(--border) 86%, transparent);
+}
+
+.workspace-flex-layout-shell .flexlayout__tab_button {
+  gap: 0.4rem;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0.58rem 0.88rem;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.workspace-flex-layout-shell .flexlayout__tab_button--selected {
+  background: color-mix(in oklch, var(--accent) 22%, transparent);
+  color: var(--foreground);
+}
+
+.workspace-flex-layout-shell .flexlayout__tab_button--unselected {
+  background: transparent;
+  color: color-mix(in oklch, var(--foreground) 66%, var(--muted-foreground) 34%);
+}
+
+.workspace-flex-layout-shell .flexlayout__tab_button:hover {
+  background: color-mix(in oklch, var(--muted) 42%, transparent);
+  color: var(--foreground);
+}
+
+.workspace-flex-layout-shell .flexlayout__tab_button_leading {
+  opacity: 0.8;
+}
+
+.workspace-flex-layout-shell .workspace-flex-layout-tab-label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.workspace-flex-layout-shell .workspace-flex-layout-tab-title {
+  display: inline-flex;
+  align-items: center;
+}
+
+.workspace-flex-layout-shell .workspace-flex-layout-tab-badge {
+  display: inline-flex;
+  align-items: center;
+}
+
+.workspace-flex-layout-shell .flexlayout__tab_button--selected .workspace-flex-layout-tab-label {
+  font-weight: 700;
+}
+
+.workspace-flex-layout-shell .flexlayout__tab_button--selected .flexlayout__tab_button_leading {
+  opacity: 0.95;
+}
+
 @keyframes oa-breathe {
   0%,
   100% {
