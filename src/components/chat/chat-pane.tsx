@@ -123,11 +123,13 @@ interface RoomRoleGroup {
 }
 
 const HISTORY_PAGE_SIZE = 80;
+const TRANSCRIPT_BOTTOM_GAP_THRESHOLD = 32;
+const TRANSCRIPT_BOTTOM_ALIGN_EPSILON = 2;
+const MAX_TRANSCRIPT_BOTTOM_ALIGN_FRAMES = 12;
 
 interface CachedTranscriptViewState {
   historyMessages: ChatMessage[];
   historyHasMore: boolean;
-  scrollTop: number;
 }
 
 const transcriptViewStateByScopeKey = new Map<
@@ -595,11 +597,16 @@ export function ChatPane(props: {
   const previousLiveLatestMessageIdRef = useRef<string | undefined>(undefined);
   const historyBootstrapCursorRef = useRef<string | undefined>(undefined);
   const pendingInitialBottomAlignRef = useRef(false);
+  const pendingInitialHistoryLoadRef = useRef(false);
+  const pendingBottomAlignBehaviorRef = useRef<ScrollBehavior | undefined>(
+    undefined,
+  );
+  const pendingBottomAlignFramesRef = useRef(0);
+  const pendingBottomAlignRafRef = useRef<number | undefined>(undefined);
   const pendingPrependAnchorRef = useRef<
     { scrollHeight: number; scrollTop: number } | undefined
   >(undefined);
   const historyRequestIdRef = useRef(0);
-  const pendingRestoreScrollTopRef = useRef<number | undefined>(undefined);
   const runtimeClient = useMemo(() => new WorkspaceRuntimeClient(), []);
   const roomId = room?.id;
   const visibleMemberIds = room
@@ -736,16 +743,79 @@ export function ChatPane(props: {
     setTranscriptScrollTop(container.scrollTop);
     const bottomGap =
       container.scrollHeight - container.clientHeight - container.scrollTop;
-    setShowScrollToLatest(bottomGap > 32);
+    setShowScrollToLatest(bottomGap > TRANSCRIPT_BOTTOM_GAP_THRESHOLD);
   }, []);
+
+  const cancelPendingBottomAlign = useCallback((): void => {
+    if (typeof pendingBottomAlignRafRef.current === "number") {
+      window.cancelAnimationFrame(pendingBottomAlignRafRef.current);
+      pendingBottomAlignRafRef.current = undefined;
+    }
+    pendingBottomAlignBehaviorRef.current = undefined;
+    pendingBottomAlignFramesRef.current = 0;
+  }, []);
+
+  const flushTranscriptToLatest = useCallback((): void => {
+    const container = transcriptRef.current;
+    if (!container) {
+      cancelPendingBottomAlign();
+      return;
+    }
+
+    const remainingFrames = pendingBottomAlignFramesRef.current;
+    if (remainingFrames <= 0) {
+      cancelPendingBottomAlign();
+      updateScrollState();
+      return;
+    }
+
+    pendingBottomAlignFramesRef.current = remainingFrames - 1;
+    const behavior = pendingBottomAlignBehaviorRef.current ?? "auto";
+
+    if (!disableTranscriptVirtualization && transcriptMessages.length > 0) {
+      messageVirtualizer.scrollToIndex(transcriptMessages.length - 1, {
+        align: "end",
+        behavior: "auto",
+      });
+    }
+
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior,
+    });
+    setShowScrollToLatest(false);
+    updateScrollState();
+
+    const bottomGap =
+      container.scrollHeight - container.clientHeight - container.scrollTop;
+    if (
+      bottomGap > TRANSCRIPT_BOTTOM_ALIGN_EPSILON
+      && pendingBottomAlignFramesRef.current > 0
+    ) {
+      pendingBottomAlignBehaviorRef.current = "auto";
+      pendingBottomAlignRafRef.current = window.requestAnimationFrame(() => {
+        pendingBottomAlignRafRef.current = undefined;
+        flushTranscriptToLatest();
+      });
+      return;
+    }
+
+    cancelPendingBottomAlign();
+    updateScrollState();
+  }, [
+    cancelPendingBottomAlign,
+    disableTranscriptVirtualization,
+    messageVirtualizer,
+    transcriptMessages.length,
+    updateScrollState,
+  ]);
 
   useEffect(() => {
     transcriptViewStateByScopeKey.set(historyScopeKey, {
       historyMessages,
       historyHasMore,
-      scrollTop: transcriptRef.current?.scrollTop ?? transcriptScrollTop,
     });
-  }, [historyHasMore, historyMessages, historyScopeKey, transcriptScrollTop]);
+  }, [historyHasMore, historyMessages, historyScopeKey]);
   const scrollTranscriptToLatest = useCallback(
     (behavior: ScrollBehavior = "smooth"): void => {
       const container = transcriptRef.current;
@@ -753,51 +823,41 @@ export function ChatPane(props: {
         return;
       }
 
-      if (!disableTranscriptVirtualization && transcriptMessages.length > 0) {
-        messageVirtualizer.scrollToIndex(transcriptMessages.length - 1, {
-          align: "end",
-          behavior,
-        });
-      }
-
-      if (disableTranscriptVirtualization) {
-        container.scrollTo({
-          top: container.scrollHeight,
-          behavior,
-        });
-        setShowScrollToLatest(false);
-        updateScrollState();
-        return;
-      }
-
-      window.requestAnimationFrame(() => {
-        container.scrollTo({
-          top: container.scrollHeight,
-          behavior,
-        });
-        setShowScrollToLatest(false);
-        updateScrollState();
-      });
+      cancelPendingBottomAlign();
+      pendingBottomAlignBehaviorRef.current = behavior;
+      pendingBottomAlignFramesRef.current = disableTranscriptVirtualization
+        ? 1
+        : MAX_TRANSCRIPT_BOTTOM_ALIGN_FRAMES;
+      flushTranscriptToLatest();
     },
-    [messageVirtualizer, transcriptMessages.length, updateScrollState],
+    [cancelPendingBottomAlign, disableTranscriptVirtualization, flushTranscriptToLatest],
+  );
+
+  useEffect(
+    () => () => {
+      cancelPendingBottomAlign();
+    },
+    [cancelPendingBottomAlign],
   );
 
   useEffect(() => {
     historyRequestIdRef.current += 1;
     const requestId = historyRequestIdRef.current;
-    pendingInitialBottomAlignRef.current = !cachedTranscriptViewState;
+    pendingInitialBottomAlignRef.current = Boolean(roomId);
+    pendingInitialHistoryLoadRef.current = Boolean(roomId) && !cachedTranscriptViewState;
     pendingPrependAnchorRef.current = undefined;
-    pendingRestoreScrollTopRef.current = cachedTranscriptViewState?.scrollTop;
     setHistoryMessages([]);
     setHistoryHasMore(cachedTranscriptViewState?.historyHasMore ?? false);
     setHistoryError(undefined);
 
     if (!roomId) {
+      pendingInitialHistoryLoadRef.current = false;
       setHistoryLoading(false);
       return;
     }
 
     if (cachedTranscriptViewState) {
+      pendingInitialHistoryLoadRef.current = false;
       setHistoryMessages(cachedTranscriptViewState.historyMessages);
       setHistoryLoading(false);
       return;
@@ -834,6 +894,7 @@ export function ChatPane(props: {
       })
       .finally(() => {
         if (historyRequestIdRef.current === requestId) {
+          pendingInitialHistoryLoadRef.current = false;
           setHistoryLoading(false);
         }
       });
@@ -847,28 +908,11 @@ export function ChatPane(props: {
     previousLayoutKeyRef.current = layoutKey;
     previousLiveLatestMessageIdRef.current = latestLiveMessageId;
 
-    const restoreScrollTop = pendingRestoreScrollTopRef.current;
-    if (typeof restoreScrollTop === "number") {
-      pendingRestoreScrollTopRef.current = undefined;
-      pendingInitialBottomAlignRef.current = false;
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          const container = transcriptRef.current;
-          if (!container) {
-            return;
-          }
-
-          container.scrollTo({
-            top: restoreScrollTop,
-            behavior: "auto",
-          });
-          updateScrollState();
-        });
-      });
+    if (!pendingInitialBottomAlignRef.current) {
       return;
     }
 
-    if (!pendingInitialBottomAlignRef.current) {
+    if (pendingInitialHistoryLoadRef.current) {
       return;
     }
 
@@ -1190,6 +1234,7 @@ export function ChatPane(props: {
         ) : null}
         <div
           ref={transcriptRef}
+          data-testid="chat-transcript"
           className="h-full min-h-0 overflow-y-auto pb-6"
           onScroll={updateScrollState}
         >
@@ -1273,7 +1318,7 @@ export function ChatPane(props: {
             className="absolute right-2 bottom-2 z-30 shadow-lg"
             size="sm"
             type="button"
-            onClick={() => scrollTranscriptToLatest()}
+            onClick={() => scrollTranscriptToLatest("auto")}
           >
             <ArrowDown size={16} />
             Jump to latest
@@ -1315,7 +1360,7 @@ export function ChatPane(props: {
           </CardContent>
         </Card>
       ) : null}
-      <section className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
         <RoomTopBar
           leftSidebarCollapsed={leftSidebarCollapsed}
           rightSidebarCollapsed={rightSidebarCollapsed}
@@ -1356,7 +1401,7 @@ export function ChatPane(props: {
             </CardContent>
           </Card>
         ) : null}
-        <div className="min-h-0 flex-1 overflow-hidden">
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
           <WorkspaceFlexLayout
             collapsed={rightSidebarCollapsed}
             layoutKey={layoutKey}
@@ -1392,7 +1437,7 @@ export function ChatPane(props: {
                 title: "Todo",
                 icon: FolderKanban,
                 content: (
-                  <div className="h-full min-h-0 overflow-hidden">
+                  <div className="h-full min-h-0 min-w-0 overflow-hidden">
                     <RoomTodoTreesPanel room={room} runtimeClient={runtimeClient} />
                   </div>
                 ),
@@ -1402,7 +1447,7 @@ export function ChatPane(props: {
                 title: "Dashboard",
                 icon: BarChart3,
                 content: (
-                  <div className="h-full min-h-0 overflow-y-auto">
+                  <div className="h-full min-h-0 min-w-0 overflow-y-auto">
                     <RoomDashboard
                       snapshot={snapshot}
                       room={room}
@@ -1594,8 +1639,8 @@ function RoomMembersPanelContent(props: {
   );
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto">
-      <div className="flex min-h-full flex-col gap-2.5">
+    <div className="h-full min-h-0 min-w-0 overflow-y-auto">
+      <div className="flex min-h-full min-w-0 flex-col gap-2.5">
         {roleGroups.map((group: RoomRoleGroup) => {
           if (group.members.length === 0) {
             return null;

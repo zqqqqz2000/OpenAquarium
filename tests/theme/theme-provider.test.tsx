@@ -72,4 +72,25 @@ describe("AppThemeProvider", () => {
     expect(document.documentElement.style.colorScheme).toBe("dark");
     expect(window.localStorage.getItem(APP_THEME_STORAGE_KEY)).toBe("dark");
   });
+
+  it("supports the compact theme toggle button used in the sidebar header", async () => {
+    mockMatchMedia(false);
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <AppThemeProvider>
+          <ThemeToggle mode="compact" />
+        </AppThemeProvider>
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Light" }));
+
+    expect(screen.getByRole("button", { name: "Dark" })).toBeInTheDocument();
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(window.localStorage.getItem(APP_THEME_STORAGE_KEY)).toBe("dark");
+  });
 });

@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 import type { AppTheme } from "@/theme/theme";
 import { useAppTheme } from "@/theme/use-app-theme";
 
+type ThemeToggleMode = "segmented" | "compact";
+
 function ThemeButton(props: {
   active: boolean;
   className?: string;
@@ -30,8 +32,8 @@ function ThemeButton(props: {
   );
 }
 
-export function ThemeToggle(props: { className?: string }) {
-  const { className } = props;
+export function ThemeToggle(props: { className?: string; mode?: ThemeToggleMode }) {
+  const { className, mode = "segmented" } = props;
   const { theme, setTheme } = useAppTheme();
   const { t } = useI18n();
 
@@ -40,6 +42,24 @@ export function ThemeToggle(props: { className?: string }) {
       setTheme(nextTheme);
     }
   };
+
+  if (mode === "compact") {
+    const currentLabel = theme === "light" ? t("theme.light") : t("theme.dark");
+    const nextTheme = theme === "light" ? "dark" : "light";
+
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className={cn("h-8 rounded-full border-border/70 bg-background/80 px-2.5 shadow-sm hover:bg-muted/80", className)}
+        onClick={() => applyTheme(nextTheme)}
+        title={currentLabel}
+      >
+        {theme === "light" ? <Sun size={14} /> : <Moon size={14} />}
+        <span className="text-[11px] font-medium">{currentLabel}</span>
+      </Button>
+    );
+  }
 
   return (
     <div className={cn("grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/70 p-0.5", className)}>

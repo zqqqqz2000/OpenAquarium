@@ -1,4 +1,5 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,7 +14,7 @@ vi.mock("@/components/chat/workspace-flex-layout", async () => {
       collapsed: boolean;
       panels: Record<
         WorkspacePanelId,
-        { content: React.ReactNode; title: string }
+        { content: ReactNode; title: string }
       >;
     }) {
       const { collapsed, panels } = props;
@@ -79,6 +80,117 @@ import { postMemberMessage, postUserMessage } from "@/domain/workspace";
 import { resolveRoomVisibleMemberIds } from "@/lib/room-message-preferences";
 import { resolveRoomTeamSummary } from "@/lib/room-team";
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
+
+type ScrollCall = ScrollToOptions | [number, number];
+
+function cloneSeedWorkspaceWithRoomId(roomId: string) {
+  const snapshot = createSeedWorkspace();
+  const originalRoomId = snapshot.selection.roomId;
+
+  if (!originalRoomId) {
+    throw new Error("Expected a selected room in the seed workspace");
+  }
+
+  const originalRoom = snapshot.rooms[originalRoomId];
+  const messageIds = [...(snapshot.messageOrderByRoom[originalRoomId] ?? [])];
+
+  snapshot.rooms[roomId] = {
+    ...originalRoom,
+    id: roomId,
+  };
+  delete snapshot.rooms[originalRoomId];
+  snapshot.messageOrderByRoom[roomId] = messageIds;
+  delete snapshot.messageOrderByRoom[originalRoomId];
+  snapshot.selection.roomId = roomId;
+
+  messageIds.forEach((messageId) => {
+    const message = snapshot.messages[messageId];
+    if (!message) {
+      return;
+    }
+
+    snapshot.messages[messageId] = {
+      ...message,
+      roomId,
+    };
+  });
+
+  return snapshot;
+}
+
+function installTranscriptMetrics(
+  transcript: HTMLElement,
+  options?: {
+    clientHeight?: number;
+    scrollHeight?: number;
+    scrollTop?: number;
+    onScrollTo?: (
+      call: ScrollCall,
+      controls: {
+        clientHeight: number;
+        getScrollHeight: () => number;
+        getScrollTop: () => number;
+        setScrollHeight: (value: number) => void;
+        setScrollTop: (value: number) => void;
+      },
+    ) => void;
+  },
+) {
+  const clientHeight = options?.clientHeight ?? 600;
+  let scrollHeight = options?.scrollHeight ?? 3200;
+  let scrollTop = options?.scrollTop ?? 0;
+  const scrollCalls: ScrollCall[] = [];
+  const controls = {
+    clientHeight,
+    getScrollHeight: () => scrollHeight,
+    getScrollTop: () => scrollTop,
+    setScrollHeight: (value: number) => {
+      scrollHeight = value;
+    },
+    setScrollTop: (value: number) => {
+      scrollTop = value;
+    },
+  };
+
+  Object.defineProperty(transcript, "clientHeight", {
+    configurable: true,
+    get: () => clientHeight,
+  });
+  Object.defineProperty(transcript, "scrollHeight", {
+    configurable: true,
+    get: () => scrollHeight,
+  });
+  Object.defineProperty(transcript, "scrollTop", {
+    configurable: true,
+    get: () => scrollTop,
+    set: (value: number) => {
+      scrollTop = value;
+    },
+  });
+  Object.defineProperty(transcript, "scrollTo", {
+    configurable: true,
+    value: (callOrLeft: ScrollToOptions | number, top?: number) => {
+      const call = typeof callOrLeft === "number"
+        ? [callOrLeft, top ?? 0] as [number, number]
+        : callOrLeft;
+      scrollCalls.push(call);
+
+      const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+      if (Array.isArray(call)) {
+        scrollTop = Math.min(call[1], maxScrollTop);
+      } else if (typeof call.top === "number") {
+        scrollTop = Math.min(call.top, maxScrollTop);
+      }
+
+      options?.onScrollTo?.(call, controls);
+    },
+  });
+
+  return {
+    scrollCalls,
+    ...controls,
+  };
+}
 
 describe("ChatPane", () => {
   it("shows highlighted mentions, member actions, and shell toggles for room messages", async () => {
@@ -1366,4 +1478,259 @@ describe("ChatPane", () => {
       expect(typeof firstAutoCall?.top).toBe("number");
     });
   });
+
+  it("keeps jumping until a single click reaches the latest message", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const transcript = await screen.findByTestId("chat-transcript");
+    let clickScrollCalls = 0;
+    const metrics = installTranscriptMetrics(transcript, {
+      scrollHeight: 3200,
+      scrollTop: 0,
+      onScrollTo: (_call, controls) => {
+        clickScrollCalls += 1;
+        if (clickScrollCalls === 1) {
+          controls.setScrollHeight(4200);
+          controls.setScrollTop(4200 - controls.clientHeight - 240);
+          return;
+        }
+
+        controls.setScrollTop(controls.getScrollHeight() - controls.clientHeight);
+      },
+    });
+
+    fireEvent.scroll(transcript);
+    const jumpButton = await screen.findByRole("button", { name: "Jump to latest" });
+    await user.click(jumpButton);
+
+    await waitFor(() => {
+      expect(metrics.scrollCalls.length).toBeGreaterThanOrEqual(2);
+      expect(metrics.getScrollTop()).toBe(
+        metrics.getScrollHeight() - metrics.clientHeight,
+      );
+    });
+  });
+
+  it("opens a room at the latest message instead of restoring an older scrollTop", async () => {
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 10));
+
+    const snapshot = cloneSeedWorkspaceWithRoomId("room-chat-scroll-reentry");
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
+
+    const firstRender = render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const firstTranscript = await screen.findByTestId("chat-transcript");
+    const firstMetrics = installTranscriptMetrics(firstTranscript, {
+      scrollHeight: 2800,
+      scrollTop: 2200,
+    });
+
+    await waitFor(() => {
+      const firstAutoCall = firstMetrics.scrollCalls.find(
+        (call): call is ScrollToOptions => !Array.isArray(call) && call.behavior === "auto",
+      );
+      expect(firstAutoCall).toBeDefined();
+    });
+
+    firstMetrics.setScrollTop(480);
+    fireEvent.scroll(firstTranscript);
+    firstRender.unmount();
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const secondTranscript = await screen.findByTestId("chat-transcript");
+    const secondMetrics = installTranscriptMetrics(secondTranscript, {
+      scrollHeight: 2800,
+      scrollTop: 0,
+    });
+
+    await waitFor(() => {
+      const secondAutoCall = secondMetrics.scrollCalls.find(
+        (call): call is ScrollToOptions => !Array.isArray(call) && call.behavior === "auto",
+      );
+
+      expect(secondAutoCall).toBeDefined();
+      expect(secondAutoCall?.top).toBe(2800);
+      expect(secondAutoCall?.top).not.toBe(480);
+    });
+
+    requestAnimationFrameSpy.mockRestore();
+  });
+  it("waits for the initial history page before bottom-aligning the first room view", async () => {
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 10));
+
+    const snapshot = cloneSeedWorkspaceWithRoomId("room-chat-scroll-initial-history");
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const roomTeam = resolveRoomTeamSummary(snapshot, room);
+    const members = room.memberIds.map(
+      (memberId) => snapshot.members[memberId],
+    );
+    const oldestLiveMessageId = snapshot.messageOrderByRoom[room.id]?.[0];
+    if (!oldestLiveMessageId) {
+      throw new Error("Expected an oldest visible live message id");
+    }
+
+    const oldestLiveMessage = snapshot.messages[oldestLiveMessageId];
+    if (!oldestLiveMessage) {
+      throw new Error("Expected an oldest visible live message");
+    }
+
+    const olderHistoryMessage = {
+      ...oldestLiveMessage,
+      id: `${oldestLiveMessage.id}-history`,
+      createdAt: new Date(Date.parse(oldestLiveMessage.createdAt) - 60_000).toISOString(),
+      content: `${oldestLiveMessage.content}
+(history prepend)`,
+    };
+
+    let resolveHistoryFetch: ((response: Response) => void) | undefined;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url =
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+              ? input.toString()
+              : input;
+        if (url.includes(`/api/rooms/${room.id}/history`)) {
+          return new Promise((resolve) => {
+            resolveHistoryFetch = resolve;
+          });
+        }
+
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      });
+
+    render(
+      <TooltipProvider>
+        <ChatPane
+          leftSidebarCollapsed={false}
+          rightSidebarCollapsed={false}
+          snapshot={snapshot}
+          room={room}
+          roomTeam={roomTeam}
+          members={members}
+          selectedMemberId={room.entryMemberId}
+          connected
+          onOpenMember={vi.fn()}
+          error={undefined}
+          onToggleLeftSidebar={vi.fn()}
+          onToggleRightSidebar={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const transcript = await screen.findByTestId("chat-transcript");
+    const metrics = installTranscriptMetrics(transcript, {
+      scrollHeight: 3200,
+      scrollTop: 0,
+    });
+
+    await waitFor(() => {
+      expect(resolveHistoryFetch).toBeDefined();
+    });
+
+    metrics.setScrollHeight(4200);
+    resolveHistoryFetch?.(
+      new Response(
+        JSON.stringify({
+          roomId: room.id,
+          messages: [olderHistoryMessage],
+          hasMore: false,
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      ),
+    );
+
+    await waitFor(() => {
+      const firstAutoCall = metrics.scrollCalls.find(
+        (call): call is ScrollToOptions => !Array.isArray(call) && call.behavior === "auto",
+      );
+
+      expect(firstAutoCall).toBeDefined();
+      expect(firstAutoCall?.top).toBe(4200);
+      expect(metrics.getScrollTop()).toBe(4200 - metrics.clientHeight);
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Jump to latest" }),
+    ).not.toBeInTheDocument();
+
+    fetchSpy.mockRestore();
+    requestAnimationFrameSpy.mockRestore();
+  });
+
 });

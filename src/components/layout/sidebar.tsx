@@ -1,7 +1,7 @@
 import { useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, ChevronRight, CirclePause, FolderKanban, LoaderCircle, Pause, Play, Settings2, Trash2, Waves, X } from "lucide-react";
+import { ChevronDown, ChevronRight, CirclePause, FolderKanban, LoaderCircle, PanelLeftOpen, Pause, Play, Settings2, Trash2, Waves, X } from "lucide-react";
 
 import type { Project, Room, TeamTemplate } from "@/domain/model";
 import { RunningMembersHoverCard, type RunningMemberPreview } from "@/components/members/running-members-hover-card";
@@ -410,6 +410,8 @@ function ProjectRow(props: {
 
 export function Sidebar(props: {
   collapsed: boolean;
+  overlay?: boolean;
+  onToggleCollapsed?: () => void;
   projects: Project[];
   roomsByProject: Record<string, Room[]>;
   projectActivityById: Record<string, ProjectActivitySummary>;
@@ -441,6 +443,8 @@ export function Sidebar(props: {
 }) {
   const {
     collapsed,
+    overlay = false,
+    onToggleCollapsed,
     projects,
     roomsByProject,
     projectActivityById,
@@ -481,13 +485,38 @@ export function Sidebar(props: {
   ) as Record<string, boolean>;
 
   if (collapsed) {
+    if (!overlay && onToggleCollapsed) {
+      return (
+        <aside className="relative z-20 flex h-full min-h-0 min-w-0 flex-col items-center gap-3 overflow-hidden border-r border-border/60 bg-background/92 px-2 py-3 backdrop-blur">
+          <Button
+            aria-label="Show projects sidebar"
+            className="shrink-0"
+            size="icon-sm"
+            type="button"
+            variant="outline"
+            onClick={onToggleCollapsed}
+          >
+            <PanelLeftOpen size={16} />
+          </Button>
+          <span className="rotate-180 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground [writing-mode:vertical-rl]">
+            Projects
+          </span>
+        </aside>
+      );
+    }
+
     return <aside className="min-h-0 min-w-0 overflow-hidden" data-collapsed="true" aria-hidden />;
   }
 
   return (
-    <aside className="relative z-20 flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden border-r border-border/60 bg-background/96 px-3 py-3 backdrop-blur md:px-3.5 max-[860px]:absolute max-[860px]:inset-y-0 max-[860px]:left-0 max-[860px]:w-[min(21rem,82vw)] max-[860px]:shadow-2xl">
+    <aside
+      className={cn(
+        "relative z-20 shrink-0 flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden border-r border-border/60 bg-background/96 px-3 py-3 backdrop-blur md:px-3.5",
+        overlay && "absolute inset-y-0 left-0 w-[min(21rem,82vw)] shadow-2xl",
+      )}
+    >
       <div className="shrink-0 space-y-2">
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="flex size-8 items-center justify-center rounded-xl border border-border/70 bg-card shadow-sm">
             <Waves size={18} />
           </div>
@@ -512,9 +541,11 @@ export function Sidebar(props: {
             </div>
             <p className="m-0 text-xs text-muted-foreground">{t("sidebar.subtitle")}</p>
           </div>
+          <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+            <ThemeToggle mode="compact" />
+            <LocaleToggle mode="compact" />
+          </div>
         </div>
-        <ThemeToggle className="w-full" />
-        <LocaleToggle className="w-full" />
         {!connected ? (
           <p className="m-0 text-xs leading-5 text-muted-foreground">
             {t("sidebar.startRuntime")} <span className="font-mono">bun run server</span>

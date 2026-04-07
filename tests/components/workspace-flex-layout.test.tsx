@@ -2,7 +2,14 @@ import { render, screen } from "@testing-library/react";
 import { MessageSquare, Users, FolderKanban, BarChart3 } from "lucide-react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { WorkspaceFlexLayout } from "@/components/chat/workspace-flex-layout";
+import {
+  WorkspaceFlexLayout,
+  updateWorkspaceFlexLayoutModelJsonPresentation,
+} from "@/components/chat/workspace-flex-layout";
+import {
+  WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID,
+  buildWorkspaceFlexLayoutModelJson,
+} from "@/components/chat/workspace-flex-layout-support";
 
 beforeAll(() => {
   vi.stubGlobal(
@@ -32,6 +39,36 @@ beforeEach(() => {
 });
 
 describe("WorkspaceFlexLayout", () => {
+  it("removes fixed right-tabset width constraints from the persisted model json", () => {
+    const modelJson = buildWorkspaceFlexLayoutModelJson({
+      primaryTabTitle: "Chat",
+      rightTabsetWidth: 420,
+    });
+    const rightTabset = modelJson.layout.children[1];
+
+    if (rightTabset?.type !== "tabset") {
+      throw new Error("Expected the second root child to be a tabset");
+    }
+
+    rightTabset.maxWidth = 420;
+    const nextModelJson = updateWorkspaceFlexLayoutModelJsonPresentation({
+      modelJson,
+      primaryTabTitle: "Workspace Chat",
+    });
+    const nextRightTabset = nextModelJson.layout.children.find(
+      (child) => child.type === "tabset" && child.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID,
+    );
+    const primaryTab = nextModelJson.layout.children[0]?.type === "tabset"
+      ? nextModelJson.layout.children[0].children?.[0]
+      : undefined;
+
+    expect(nextRightTabset?.type).toBe("tabset");
+    expect((nextRightTabset as { minWidth?: number }).minWidth).toBeUndefined();
+    expect((nextRightTabset as { maxWidth?: number }).maxWidth).toBeUndefined();
+    expect(primaryTab?.type).toBe("tab");
+    expect(primaryTab?.name).toBe("Workspace Chat");
+  });
+
   it("renders desktop layout with FlexLayout and one right-side tabset", () => {
     const { container } = render(
       <WorkspaceFlexLayout

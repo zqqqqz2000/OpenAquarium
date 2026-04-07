@@ -29,20 +29,28 @@ beforeAll(() => {
 });
 
 describe("workspace flex layout support spike", () => {
-  it("builds a right-side single tabset with four tabs", () => {
+  it("builds a primary chat tabset plus a right-side utility tabset", () => {
     const model = createWorkspaceFlexLayoutModel({ defaultActivePanelId: "chat" });
+    const primaryTabset = model.getNodeById(WORKSPACE_FLEXLAYOUT_PRIMARY_TABSET_ID);
     const rightTabset = model.getNodeById(WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID);
+    const primaryLayoutNode = buildWorkspaceFlexLayoutModelJson().layout.children[0];
     const rightLayoutNode = buildWorkspaceFlexLayoutModelJson().layout.children[1];
     const rightTabComponents = Array.isArray((rightLayoutNode as { children?: Array<{ component?: string }> } | undefined)?.children)
       ? ((rightLayoutNode as { children: Array<{ component?: string }> }).children.map((child) => child.component))
       : [];
+    const primaryTabComponents = Array.isArray((primaryLayoutNode as { children?: Array<{ component?: string }> } | undefined)?.children)
+      ? ((primaryLayoutNode as { children: Array<{ component?: string }> }).children.map((child) => child.component))
+      : [];
 
+    expect(primaryTabset?.getType()).toBe("tabset");
+    expect(primaryTabset?.getChildren()).toHaveLength(1);
     expect(rightTabset?.getType()).toBe("tabset");
-    expect(rightTabset?.getChildren()).toHaveLength(4);
+    expect(rightTabset?.getChildren()).toHaveLength(3);
+    expect(primaryLayoutNode?.type).toBe("tabset");
     expect(rightLayoutNode?.type).toBe("tabset");
     expect((rightLayoutNode as { enableTabWrap?: boolean }).enableTabWrap).toBe(true);
+    expect(primaryTabComponents).toEqual(["workspace-primary"]);
     expect(rightTabComponents).toEqual([
-      "chat",
       "members",
       "todo",
       "dashboard",
@@ -75,7 +83,7 @@ describe("workspace flex layout support spike", () => {
     expect(screen.getByTestId("members-content")).toBeInTheDocument();
   });
 
-  it("customizes tab headers and renders all four right-side tabs", () => {
+  it("customizes tab headers and renders workspace plus right-side tabs", () => {
     const panels = {
       chat: { title: "Chat", icon: MessageSquare, content: <div data-testid="chat-panel-body">chat body</div> },
       members: { title: "Members", icon: Users, content: <div data-testid="members-panel-body">members body</div>, badge: <span>4</span> },
@@ -102,17 +110,18 @@ describe("workspace flex layout support spike", () => {
     expect(screen.getByTestId("custom-tab-content")).toHaveTextContent("Members");
     expect(screen.getByTestId("custom-tab-content")).toHaveTextContent("4");
     expect(screen.getByTestId("workspace-flex-layout-support")).toBeInTheDocument();
-    expect(screen.getAllByText("Chat").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Workspace").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Members").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Todo").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Dashboard").length).toBeGreaterThan(0);
   });
 
-  it("only allows indexed right-tabset reorders and blocks content-center no-op drops", () => {
+  it("allows non-border drops so the utility panes can split freely", () => {
     const model = createWorkspaceFlexLayoutModel({ defaultActivePanelId: "dashboard" });
     const dashboardTab = model.getNodeById("workspace-dashboard-tab");
     const rightTabset = model.getNodeById(WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID);
     const primaryTabset = model.getNodeById(WORKSPACE_FLEXLAYOUT_PRIMARY_TABSET_ID);
+    const borderNode = { getType: () => "border" };
 
     expect(
       allowWorkspaceFlexLayoutDrop({
@@ -125,11 +134,17 @@ describe("workspace flex layout support spike", () => {
         dragNode: dashboardTab!,
         dropInfo: { index: -1, location: DockLocation.CENTER, node: rightTabset! } as never,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       allowWorkspaceFlexLayoutDrop({
         dragNode: dashboardTab!,
         dropInfo: { index: 0, location: DockLocation.CENTER, node: primaryTabset! } as never,
+      }),
+    ).toBe(true);
+    expect(
+      allowWorkspaceFlexLayoutDrop({
+        dragNode: dashboardTab!,
+        dropInfo: { index: 0, location: DockLocation.LEFT, node: borderNode } as never,
       }),
     ).toBe(false);
     expect(
@@ -143,12 +158,12 @@ describe("workspace flex layout support spike", () => {
         action: Actions.moveNode("workspace-dashboard-tab", WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID, DockLocation.CENTER, -1),
         model,
       }),
-    ).toBeUndefined();
+    ).toBeDefined();
     expect(
       interceptWorkspaceFlexLayoutAction({
         action: Actions.moveNode("workspace-dashboard-tab", WORKSPACE_FLEXLAYOUT_PRIMARY_TABSET_ID, DockLocation.CENTER, 0),
         model,
       }),
-    ).toBeUndefined();
+    ).toBeDefined();
   });
 });

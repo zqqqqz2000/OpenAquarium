@@ -219,6 +219,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | undefined>(undefined);
   const [togglingRoomWatcherSuspensionRoomId, setTogglingRoomWatcherSuspensionRoomId] = useState<string | undefined>(undefined);
   const {
+    layoutMode,
     leftCollapsed,
     leftWidth,
     rightCollapsed,
@@ -435,29 +436,36 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     window.addEventListener("pointerup", handlePointerUp);
   };
 
-  const gridColumns = getRoomGridColumns({
-    leftCollapsed,
-    leftWidth,
-    rightCollapsed,
-    rightWidth,
-  });
+  const isOverlayLayout = layoutMode === "overlay";
+  const gridColumns = getRoomGridColumns(
+    {
+      leftCollapsed,
+      leftWidth,
+      rightCollapsed,
+      rightWidth,
+    },
+    layoutMode,
+  );
   const gridStyle = {
     "--oa-left-panel": gridColumns.leftPanel,
+    "--oa-room-grid-columns": gridColumns.templateColumns,
   } as CSSProperties;
 
   return (
     <>
-      <div className="room-grid" style={gridStyle}>
-        {!leftCollapsed ? (
+      <div className="room-grid" style={gridStyle} data-layout-mode={layoutMode}>
+        {isOverlayLayout && !leftCollapsed ? (
           <button
             aria-label="Close projects sidebar"
-            className="absolute inset-y-0 right-0 z-10 hidden bg-background/48 backdrop-blur-sm max-[860px]:block left-[min(21rem,82vw)]"
+            className="absolute inset-y-0 right-0 z-10 bg-background/48 backdrop-blur-sm left-[min(21rem,82vw)]"
             type="button"
             onClick={toggleLeftCollapsed}
           />
         ) : null}
         <Sidebar
           collapsed={leftCollapsed}
+          overlay={isOverlayLayout}
+          onToggleCollapsed={toggleLeftCollapsed}
           projects={sidebarData.projects}
           roomsByProject={sidebarData.roomsByProject}
           projectActivityById={sidebarData.projectActivityById}

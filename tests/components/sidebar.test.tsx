@@ -21,11 +21,11 @@ vi.mock("@/components/projects/create-room-dialog", () => ({
 }));
 
 vi.mock("@/components/theme/theme-toggle", () => ({
-  ThemeToggle: () => <div data-testid="theme-toggle" />,
+  ThemeToggle: (props: { mode?: string; className?: string }) => <div data-testid="theme-toggle" data-mode={props.mode} className={props.className} />,
 }));
 
 vi.mock("@/components/theme/locale-toggle", () => ({
-  LocaleToggle: () => <div data-testid="locale-toggle" />,
+  LocaleToggle: (props: { mode?: string; className?: string }) => <div data-testid="locale-toggle" data-mode={props.mode} className={props.className} />,
 }));
 
 import { Sidebar } from "@/components/layout/sidebar";
@@ -99,6 +99,131 @@ function renderSidebar(node: ReactNode) {
 }
 
 describe("Sidebar", () => {
+  it("uses compact header toggles instead of full-width sidebar controls", () => {
+    const snapshot = createSeedWorkspace();
+    const sidebarData = buildSidebarViewState(snapshot);
+
+    renderSidebar(
+      <Sidebar
+        collapsed={false}
+        projects={sidebarData.projects}
+        roomsByProject={sidebarData.roomsByProject}
+        projectActivityById={sidebarData.projectActivityById}
+        roomActivityById={sidebarData.roomActivityById}
+        projectUnreadCountById={sidebarData.projectUnreadCountById}
+        roomUnreadCountById={sidebarData.roomUnreadCountById}
+        projectRunningMembersById={sidebarData.projectRunningMembersById}
+        roomRunningMembersById={sidebarData.roomRunningMembersById}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected
+        loading={false}
+        onDeleteProject={vi.fn()}
+        onDeleteRoom={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("theme-toggle")).toHaveAttribute("data-mode", "compact");
+    expect(screen.getByTestId("locale-toggle")).toHaveAttribute("data-mode", "compact");
+  });
+
+  it("keeps the desktop projects sidebar stacked above the workspace", () => {
+    const snapshot = createSeedWorkspace();
+    const sidebarData = buildSidebarViewState(snapshot);
+    const { container } = renderSidebar(
+      <Sidebar
+        collapsed={false}
+        projects={sidebarData.projects}
+        roomsByProject={sidebarData.roomsByProject}
+        projectActivityById={sidebarData.projectActivityById}
+        roomActivityById={sidebarData.roomActivityById}
+        projectUnreadCountById={sidebarData.projectUnreadCountById}
+        roomUnreadCountById={sidebarData.roomUnreadCountById}
+        projectRunningMembersById={sidebarData.projectRunningMembersById}
+        roomRunningMembersById={sidebarData.roomRunningMembersById}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected
+        loading={false}
+        onDeleteProject={vi.fn()}
+        onDeleteRoom={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector("aside")).toHaveClass("z-20");
+    expect(container.querySelector("aside")).toHaveClass("shrink-0");
+    expect(container.querySelector("aside")).not.toHaveClass("absolute");
+  });
+
+  it("switches the projects sidebar to overlay positioning only when requested", () => {
+    const snapshot = createSeedWorkspace();
+    const sidebarData = buildSidebarViewState(snapshot);
+    const { container } = renderSidebar(
+      <Sidebar
+        collapsed={false}
+        overlay
+        projects={sidebarData.projects}
+        roomsByProject={sidebarData.roomsByProject}
+        projectActivityById={sidebarData.projectActivityById}
+        roomActivityById={sidebarData.roomActivityById}
+        projectUnreadCountById={sidebarData.projectUnreadCountById}
+        roomUnreadCountById={sidebarData.roomUnreadCountById}
+        projectRunningMembersById={sidebarData.projectRunningMembersById}
+        roomRunningMembersById={sidebarData.roomRunningMembersById}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected
+        loading={false}
+        onDeleteProject={vi.fn()}
+        onDeleteRoom={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector("aside")).toHaveClass("absolute");
+    expect(container.querySelector("aside")).toHaveClass("shadow-2xl");
+  });
+
+  it("keeps a visible restore rail when the desktop projects sidebar is collapsed", () => {
+    const snapshot = createSeedWorkspace();
+    const sidebarData = buildSidebarViewState(snapshot);
+
+    renderSidebar(
+      <Sidebar
+        collapsed
+        onToggleCollapsed={vi.fn()}
+        projects={sidebarData.projects}
+        roomsByProject={sidebarData.roomsByProject}
+        projectActivityById={sidebarData.projectActivityById}
+        roomActivityById={sidebarData.roomActivityById}
+        projectUnreadCountById={sidebarData.projectUnreadCountById}
+        roomUnreadCountById={sidebarData.roomUnreadCountById}
+        projectRunningMembersById={sidebarData.projectRunningMembersById}
+        roomRunningMembersById={sidebarData.roomRunningMembersById}
+        templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])}
+        connected
+        loading={false}
+        onDeleteProject={vi.fn()}
+        onDeleteRoom={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+        onResizeStart={vi.fn()}
+        onOpenTemplate={vi.fn()}
+        onOpenTemplateStudio={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Show projects sidebar" })).toBeInTheDocument();
+    expect(screen.getByText("Projects")).toBeInTheDocument();
+  });
+
   it("keeps templates collapsed by default and scrolls the expanded list", async () => {
     const user = userEvent.setup();
     const snapshot = createSeedWorkspace();
@@ -280,12 +405,18 @@ describe("Sidebar", () => {
       ...project,
       path: "/tmp/openaquarium/demo-path",
     };
-    snapshot.tasks[Object.keys(snapshot.tasks)[0]!] = {
-      ...snapshot.tasks[Object.keys(snapshot.tasks)[0]!]!,
+    const firstTaskId = Object.keys(snapshot.tasks)[0];
+    const entryMember = snapshot.members[room.entryMemberId];
+    if (!firstTaskId || !entryMember) {
+      throw new Error("Expected seeded task and entry member");
+    }
+
+    snapshot.tasks[firstTaskId] = {
+      ...snapshot.tasks[firstTaskId],
       status: "running",
     };
     snapshot.members[room.entryMemberId] = {
-      ...snapshot.members[room.entryMemberId]!,
+      ...entryMember,
       status: "running",
     };
     const sidebarData = buildSidebarViewState(snapshot);
@@ -486,12 +617,18 @@ describe("Sidebar", () => {
       throw new Error("Expected seeded project and room");
     }
 
-    snapshot.tasks[Object.keys(snapshot.tasks)[0]!] = {
-      ...snapshot.tasks[Object.keys(snapshot.tasks)[0]!]!,
+    const firstTaskId = Object.keys(snapshot.tasks)[0];
+    const entryMember = snapshot.members[room.entryMemberId];
+    if (!firstTaskId || !entryMember) {
+      throw new Error("Expected seeded task and entry member");
+    }
+
+    snapshot.tasks[firstTaskId] = {
+      ...snapshot.tasks[firstTaskId],
       status: "running",
     };
     snapshot.members[room.entryMemberId] = {
-      ...snapshot.members[room.entryMemberId]!,
+      ...entryMember,
       status: "running",
     };
 
@@ -543,12 +680,18 @@ describe("Sidebar", () => {
       throw new Error("Expected seeded room");
     }
 
-    snapshot.tasks[Object.keys(snapshot.tasks)[0]!] = {
-      ...snapshot.tasks[Object.keys(snapshot.tasks)[0]!]!,
+    const firstTaskId = Object.keys(snapshot.tasks)[0];
+    const entryMember = snapshot.members[room.entryMemberId];
+    if (!firstTaskId || !entryMember) {
+      throw new Error("Expected seeded task and entry member");
+    }
+
+    snapshot.tasks[firstTaskId] = {
+      ...snapshot.tasks[firstTaskId],
       status: "running",
     };
     snapshot.members[room.entryMemberId] = {
-      ...snapshot.members[room.entryMemberId]!,
+      ...entryMember,
       status: "running",
     };
 

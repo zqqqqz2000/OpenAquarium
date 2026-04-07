@@ -12,6 +12,7 @@ import {
   Model,
   type Action,
   type IJsonModel,
+  type IJsonRowNode,
   type IJsonTabNode,
   type IJsonTabSetNode,
   type ITabRenderValues,
@@ -22,6 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   WORKSPACE_FLEXLAYOUT_PRIMARY_COMPONENT,
+  WORKSPACE_FLEXLAYOUT_PRIMARY_TAB_ID,
   WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID,
   buildWorkspaceFlexLayoutModelJson,
   configureWorkspaceFlexLayoutModel,
@@ -79,7 +81,7 @@ function renderFlexLayoutTabContent(panel: WorkspacePanelDefinition): ReactNode 
   return (
     <div
       data-workspace-panel-id={panel.id}
-      className="h-full min-h-0 overflow-hidden bg-card"
+      className="h-full min-h-0 min-w-0 overflow-hidden bg-card"
     >
       {panel.content}
     </div>
@@ -90,33 +92,58 @@ function cloneModelJson(modelJson: IJsonModel): IJsonModel {
   return JSON.parse(JSON.stringify(modelJson)) as IJsonModel;
 }
 
-function updateWorkspaceFlexLayoutModelJsonPresentation(args: {
+type WorkspaceFlexLayoutJsonNode = IJsonRowNode | IJsonTabSetNode | IJsonTabNode;
+
+function updateWorkspaceFlexLayoutJsonNodePresentation(args: {
+  node: WorkspaceFlexLayoutJsonNode | undefined;
+  primaryTabTitle: string;
+}): void {
+  const { node, primaryTabTitle } = args;
+
+  if (!node) {
+    return;
+  }
+
+  if (node.type === "tab") {
+    if (
+      node.id === WORKSPACE_FLEXLAYOUT_PRIMARY_TAB_ID
+      || node.component === WORKSPACE_FLEXLAYOUT_PRIMARY_COMPONENT
+      || node.component === "chat"
+    ) {
+      node.name = primaryTabTitle;
+    }
+
+    return;
+  }
+
+  if (node.type === "tabset" && node.id === WORKSPACE_FLEXLAYOUT_RIGHT_TABSET_ID) {
+    delete node.minWidth;
+    delete node.maxWidth;
+  }
+
+  if (!Array.isArray(node.children)) {
+    return;
+  }
+
+  node.children.forEach((child) => {
+    updateWorkspaceFlexLayoutJsonNodePresentation({
+      node: child as WorkspaceFlexLayoutJsonNode,
+      primaryTabTitle,
+    });
+  });
+}
+
+export function updateWorkspaceFlexLayoutModelJsonPresentation(args: {
   modelJson: IJsonModel;
   primaryTabTitle: string;
-  rightTabsetWidth: number;
 }): IJsonModel {
-  const { modelJson, primaryTabTitle, rightTabsetWidth } = args;
+  const { modelJson, primaryTabTitle } = args;
   const nextModelJson = cloneModelJson(modelJson);
-  const layoutChildren = nextModelJson.layout?.children;
 
-  if (Array.isArray(layoutChildren)) {
-    const primaryTabset = layoutChildren[0];
-    const rightTabset = layoutChildren[1];
-
-    if (primaryTabset?.type === "tabset" && Array.isArray(primaryTabset.children)) {
-      const nextPrimaryTabset = primaryTabset as IJsonTabSetNode;
-      const primaryTab = nextPrimaryTabset.children?.[0] as IJsonTabNode | undefined;
-      if (primaryTab?.type === "tab") {
-        primaryTab.name = primaryTabTitle;
-      }
-    }
-
-    if (rightTabset?.type === "tabset") {
-      const nextRightTabset = rightTabset as IJsonTabSetNode;
-      nextRightTabset.minWidth = rightTabsetWidth;
-      nextRightTabset.maxWidth = rightTabsetWidth;
-    }
-  }
+  updateWorkspaceFlexLayoutJsonNodePresentation({
+    node: nextModelJson.layout,
+    primaryTabTitle,
+  });
 
   return nextModelJson;
 }
@@ -135,7 +162,6 @@ function createWorkspaceDesktopModel(args: {
       rightTabsetWidth: panelWidth,
     }),
     primaryTabTitle,
-    rightTabsetWidth: panelWidth,
   });
 
   return configureWorkspaceFlexLayoutModel(Model.fromJson(nextModelJson));
@@ -252,7 +278,7 @@ export function WorkspaceFlexLayout(props: {
     const activePanel = panels[activePanelId];
 
     return (
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
         <div className="-mx-1 flex shrink-0 gap-2 overflow-x-auto px-1 pb-1">
           {orderedMobilePanels.map((panelId) => {
             const panel = panels[panelId];
@@ -279,7 +305,7 @@ export function WorkspaceFlexLayout(props: {
         </div>
         <section
           data-workspace-panel-id={activePanel.id}
-          className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm"
         >
           <header className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
             <div className="flex min-w-0 items-center gap-2">
@@ -298,7 +324,7 @@ export function WorkspaceFlexLayout(props: {
     return (
       <section
         data-workspace-panel-id={panels.chat.id}
-        className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm"
+        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[1.5rem] border border-border/70 bg-card shadow-sm"
       >
         <div className="min-h-0 flex-1 overflow-hidden p-3">{panels.chat.content}</div>
       </section>
@@ -306,7 +332,7 @@ export function WorkspaceFlexLayout(props: {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
+    <div className="flex min-h-0 min-w-0 flex-1 gap-3 overflow-hidden">
       <div
         data-testid="workspace-flex-layout"
         className={cn(

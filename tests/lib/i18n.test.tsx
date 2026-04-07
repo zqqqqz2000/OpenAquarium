@@ -59,6 +59,28 @@ describe("I18nProvider", () => {
     expect(window.localStorage.getItem(APP_LOCALE_STORAGE_KEY)).toBe("zh-CN");
   });
 
+  it("supports the compact locale toggle button in the sidebar header", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <AppThemeProvider>
+          <LocaleToggle mode="compact" />
+          <ThemeToggle mode="compact" />
+        </AppThemeProvider>
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "EN" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Light" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "EN" }));
+
+    expect(screen.getByRole("button", { name: "中" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "浅色" })).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("zh-CN");
+  });
+
   it("falls back to English messages when a locale key is missing", () => {
     const catalog = {
       en: { sidebar: { projects: "Projects" } },

@@ -31,6 +31,11 @@ import {
   type AqTodoFlowNodeData,
   type AqTodoNodeModel,
 } from "@/lib/aqtodo";
+import {
+  getInitialRoomTodoTreesPanelState,
+  getRoomTodoTreesPanelStorageKey,
+  serializeRoomTodoTreesPanelState,
+} from "@/lib/room-todo-trees-panel-state";
 import { cn } from "@/lib/utils";
 import { RoomAssetImage } from "@/components/media/room-asset-image";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +51,11 @@ const TODO_STATUS_STYLES: Record<string, string> = {
 };
 
 type AqTodoFlowNode = Node<AqTodoFlowNodeData, "aqtodo">;
+
+interface AqTodoOutlineEntry {
+  depth: number;
+  node: AqTodoNodeModel;
+}
 
 function getTodoStatusClassName(status: string): string {
   return TODO_STATUS_STYLES[status] ?? TODO_STATUS_STYLES.todo;
@@ -92,6 +102,37 @@ function buildNodeSummary(node: AqTodoNodeModel): string[] {
   ].filter((value): value is string => Boolean(value));
 }
 
+function flattenTodoNodes(
+  node: AqTodoNodeModel,
+  depth = 0,
+): AqTodoOutlineEntry[] {
+  return [
+    { depth, node },
+    ...node.children.flatMap((child) => flattenTodoNodes(child, depth + 1)),
+  ];
+}
+
+function getNodeEvidenceSummary(node: AqTodoNodeModel): string[] {
+  return [
+    node.images.length ? `${node.images.length} image${node.images.length === 1 ? "" : "s"}` : undefined,
+    node.codes.length ? `${node.codes.length} code block${node.codes.length === 1 ? "" : "s"}` : undefined,
+    node.details ? "details" : undefined,
+    node.note ? "note" : undefined,
+  ].filter((value): value is string => Boolean(value));
+}
+
+function getFailurePointCopy(node: AqTodoNodeModel): string {
+  if (node.status === "blocked") {
+    return node.note ?? node.details ?? "This node is blocked. Attach the exact failing step or missing dependency here.";
+  }
+
+  return (
+    node.note ??
+    node.details ??
+    "No explicit failure point yet. Use this slot for acceptance blockers, retry notes, or unresolved dependencies."
+  );
+}
+
 function pruneGraphStateByFiles<T>(
   state: Record<string, T>,
   files: RoomTodoTreesPayload["files"],
@@ -104,6 +145,7 @@ function pruneGraphStateByFiles<T>(
 
 function AqTodoFlowNodeCard(props: NodeProps<AqTodoFlowNode>) {
   const {
+    selected,
     data: {
       canCollapse,
       collapsed,
@@ -127,7 +169,8 @@ function AqTodoFlowNodeCard(props: NodeProps<AqTodoFlowNode>) {
   return (
     <div
       className={cn(
-        "relative flex h-full w-full flex-col overflow-hidden rounded-[1.35rem] border bg-background/96 shadow-[0_22px_48px_-34px_rgba(15,23,42,0.52)]",
+        "relative flex h-full w-full flex-col overflow-hidden rounded-[1.35rem] border bg-background/96 shadow-[0_22px_48px_-34px_rgba(15,23,42,0.52)] transition-[box-shadow,transform,border-color]",
+        selected && "border-[color:var(--tone-blueprint-border)] shadow-[0_28px_68px_-30px_rgba(59,130,246,0.72)] ring-2 ring-[color:var(--tone-blueprint-border)]/35",
         getTodoStatusClassName(displayStatus),
       )}
     >
@@ -341,13 +384,25 @@ const TODO_NODE_TYPES = {
   aqtodo: AqTodoFlowNodeCard,
 };
 
+function matchesTodoFilter(status: string, filter: "all" | "active" | "blocked" | "done"): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "active") {
+    return status === "in_progress" || status === "todo";
+  }
+
+  return status === filter;
+}
+
 export function RoomTodoTreesPanel(props: {
   room: Room;
   runtimeClient: WorkspaceRuntimeClient;
 }) {
   const { room, runtimeClient } = props;
+  const initialPanelState = getInitialRoomTodoTreesPanelState(room.id);
   const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>(
-    undefined,
+    initialPanelState.selectedFilePath,
   );
   const [payload, setPayload] = useState<RoomTodoTreesPayload | undefined>(
     undefined,
@@ -356,10 +411,61 @@ export function RoomTodoTreesPanel(props: {
   const [error, setError] = useState<string | undefined>(undefined);
   const [collapsedNodeIdsByFile, setCollapsedNodeIdsByFile] = useState<
     Record<string, string[]>
-  >({});
+  >(initialPanelState.collapsedNodeIdsByFile);
   const [zoomedOutByFile, setZoomedOutByFile] = useState<Record<string, boolean>>(
-    {},
+    initialPanelState.zoomedOutByFile,
   );
+  const [selectedNodeIdByFile, setSelectedNodeIdByFile] = useState<
+    Record<string, string | undefined>
+  >(initialPanelState.selectedNodeIdByFile);
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "active" | "blocked" | "done"
+  >(initialPanelState.statusFilter);
+  const [density, setDensity] = useState<"comfortable" | "compact">(
+    initialPanelState.density,
+  );
+  const [viewMode, setViewMode] = useState<"split" | "graph" | "outline">(
+    initialPanelState.viewMode,
+  );
+
+  useEffect(() => {
+    const nextPanelState = getInitialRoomTodoTreesPanelState(room.id);
+    setSelectedFilePath(nextPanelState.selectedFilePath);
+    setCollapsedNodeIdsByFile(nextPanelState.collapsedNodeIdsByFile);
+    setZoomedOutByFile(nextPanelState.zoomedOutByFile);
+    setSelectedNodeIdByFile(nextPanelState.selectedNodeIdByFile);
+    setStatusFilter(nextPanelState.statusFilter);
+    setDensity(nextPanelState.density);
+    setViewMode(nextPanelState.viewMode);
+  }, [room.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      getRoomTodoTreesPanelStorageKey(room.id),
+      serializeRoomTodoTreesPanelState({
+        collapsedNodeIdsByFile,
+        density,
+        selectedFilePath,
+        selectedNodeIdByFile,
+        statusFilter,
+        viewMode,
+        zoomedOutByFile,
+      }),
+    );
+  }, [
+    collapsedNodeIdsByFile,
+    density,
+    room.id,
+    selectedFilePath,
+    selectedNodeIdByFile,
+    statusFilter,
+    viewMode,
+    zoomedOutByFile,
+  ]);
 
   const loadTodoTrees = useCallback(async () => {
     setLoading(true);
@@ -372,6 +478,9 @@ export function RoomTodoTreesPanel(props: {
         pruneGraphStateByFiles(current, nextPayload.files),
       );
       setZoomedOutByFile((current) =>
+        pruneGraphStateByFiles(current, nextPayload.files),
+      );
+      setSelectedNodeIdByFile((current) =>
         pruneGraphStateByFiles(current, nextPayload.files),
       );
       setSelectedFilePath((current) =>
@@ -392,7 +501,6 @@ export function RoomTodoTreesPanel(props: {
 
   useEffect(() => {
     setPayload(undefined);
-    setSelectedFilePath(undefined);
     void loadTodoTrees();
   }, [loadTodoTrees, room.updatedAt]);
 
@@ -491,15 +599,16 @@ export function RoomTodoTreesPanel(props: {
       zoomedOut,
     });
   }, [collapsedNodeIds, parsedDocument.document, room.id, toggleCollapse, zoomedOut]);
-  const rootAggregate = useMemo(() => {
+  const nodeAggregates = useMemo(() => {
     if (!parsedDocument.document) {
       return undefined;
     }
 
-    return buildAqTodoNodeAggregates(parsedDocument.document.root).get(
-      parsedDocument.document.root.id,
-    );
+    return buildAqTodoNodeAggregates(parsedDocument.document.root);
   }, [parsedDocument.document]);
+  const rootAggregate = parsedDocument.document
+    ? nodeAggregates?.get(parsedDocument.document.root.id)
+    : undefined;
   const rootDisplayStatus = useMemo(() => {
     if (!parsedDocument.document) {
       return undefined;
@@ -507,14 +616,81 @@ export function RoomTodoTreesPanel(props: {
 
     return deriveAqTodoDisplayStatus(parsedDocument.document.root, rootAggregate);
   }, [parsedDocument.document, rootAggregate]);
+  const outlineEntries = useMemo(
+    () =>
+      parsedDocument.document
+        ? flattenTodoNodes(parsedDocument.document.root)
+        : [],
+    [parsedDocument.document],
+  );
+  const filteredOutlineEntries = useMemo(
+    () =>
+      outlineEntries.filter((entry) =>
+        matchesTodoFilter(
+          deriveAqTodoDisplayStatus(entry.node, nodeAggregates?.get(entry.node.id)),
+          statusFilter,
+        ),
+      ),
+    [nodeAggregates, outlineEntries, statusFilter],
+  );
+  const selectedNodeId = selectedFile
+    ? selectedNodeIdByFile[selectedFile.absolutePath]
+    : undefined;
+  const selectedNode = useMemo(() => {
+    if (filteredOutlineEntries.length === 0) {
+      return undefined;
+    }
+
+    return (
+      filteredOutlineEntries.find((entry) => entry.node.id === selectedNodeId)?.node ??
+      filteredOutlineEntries[0]?.node
+    );
+  }, [filteredOutlineEntries, selectedNodeId]);
+  const selectedNodeAggregate = selectedNode ? nodeAggregates?.get(selectedNode.id) : undefined;
+  const selectedNodeStatus = selectedNode
+    ? deriveAqTodoDisplayStatus(selectedNode, selectedNodeAggregate)
+    : undefined;
+  const selectedNodeEvidenceSummary = selectedNode
+    ? getNodeEvidenceSummary(selectedNode)
+    : [];
   const renderableFlowGraph = useMemo(
     () => (flowGraph && flowGraph.nodes.length > 0 ? flowGraph : undefined),
     [flowGraph],
+  );
+  const graphNodes = useMemo(
+    () =>
+      renderableFlowGraph?.nodes.map((node) => ({
+        ...node,
+        selected: node.id === selectedNode?.id,
+        selectable: true,
+      })) ?? [],
+    [renderableFlowGraph?.nodes, selectedNode],
   );
   const hasRenderableGraph = Boolean(renderableFlowGraph);
   const reactFlowKey = selectedFile
     ? `${selectedFile.absolutePath}:${selectedFile.modifiedAt}`
     : undefined;
+
+  useEffect(() => {
+    if (!selectedFile) {
+      return;
+    }
+
+    setSelectedNodeIdByFile((current) => {
+      const currentNodeId = current[selectedFile.absolutePath];
+      if (
+        currentNodeId
+        && filteredOutlineEntries.some((entry) => entry.node.id === currentNodeId)
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [selectedFile.absolutePath]: filteredOutlineEntries[0]?.node.id,
+      };
+    });
+  }, [filteredOutlineEntries, selectedFile]);
 
   return (
     <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-[1.75rem] border border-border/75 bg-background/96 shadow-sm">
@@ -619,28 +795,295 @@ export function RoomTodoTreesPanel(props: {
               </p>
             </div>
           ) : null}
-          <div className="relative flex h-full min-h-[22rem] min-w-0 flex-1 overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(110,135,255,0.12),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,248,252,0.96))] dark:bg-[radial-gradient(circle_at_top_left,rgba(110,135,255,0.16),transparent_32%),linear-gradient(180deg,rgba(25,29,40,0.96),rgba(18,22,31,0.98))]">
-            <ReactFlow
-              className="h-full w-full"
-              style={{ width: "100%", height: "100%" }}
-              key={reactFlowKey}
-              nodes={renderableFlowGraph?.nodes ?? []}
-              edges={renderableFlowGraph?.edges ?? []}
-              nodeTypes={TODO_NODE_TYPES}
-              fitView
-              fitViewOptions={{ padding: 0.16 }}
-              minZoom={0.25}
-              maxZoom={1.5}
-              nodesDraggable={false}
-              nodesConnectable={false}
-              elementsSelectable={false}
-              zoomOnDoubleClick={false}
-              onMove={handleViewportChange}
-              proOptions={{ hideAttribution: true }}
-            >
-              <Background gap={20} size={1} color="rgba(120, 130, 160, 0.18)" />
-              <Controls showInteractive={false} position="top-left" />
-            </ReactFlow>
+          <div className="border-b border-border/70 bg-background/88 px-4 py-3">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div>
+                <p className="m-0 text-sm font-semibold text-foreground">Workspace Controls</p>
+                <p className="m-0 mt-1 text-xs text-muted-foreground">
+                  Toolbar shell for filtering, density, and split/graph/outline workspace modes.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {(["split", "graph", "outline"] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className={cn(
+                      "h-7 rounded-full border border-border/70 bg-background/84 px-2.5 text-[11px] shadow-sm",
+                      viewMode === mode
+                        && "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)] text-[color:var(--tone-blueprint-foreground)]",
+                    )}
+                    onClick={() => setViewMode(mode)}
+                    aria-pressed={viewMode === mode}
+                  >
+                    {mode}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-3 flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                  Filter
+                </span>
+                {([
+                  ["all", "All"],
+                  ["active", "Active"],
+                  ["blocked", "Blocked"],
+                  ["done", "Done"],
+                ] as const).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className={cn(
+                      "h-7 rounded-full border border-border/70 bg-background/84 px-2.5 text-[11px] shadow-sm",
+                      statusFilter === value
+                        && "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)] text-[color:var(--tone-blueprint-foreground)]",
+                    )}
+                    onClick={() => setStatusFilter(value)}
+                    aria-pressed={statusFilter === value}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                  Density
+                </span>
+                {(["comfortable", "compact"] as const).map((value) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className={cn(
+                      "h-7 rounded-full border border-border/70 bg-background/84 px-2.5 text-[11px] shadow-sm",
+                      density === value
+                        && "border-[color:var(--tone-blueprint-border)] bg-[color:var(--tone-blueprint-surface)] text-[color:var(--tone-blueprint-foreground)]",
+                    )}
+                    onClick={() => setDensity(value)}
+                    aria-pressed={density === value}
+                  >
+                    {value}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div
+            className={cn(
+              "grid h-full min-h-[24rem] min-w-0 flex-1 grid-cols-1 divide-y divide-border/70 xl:divide-x xl:divide-y-0",
+              viewMode === "split" && "xl:grid-cols-[minmax(15rem,18rem)_minmax(0,1.35fr)_minmax(18rem,22rem)]",
+              viewMode === "graph" && "xl:grid-cols-[minmax(0,1.55fr)_minmax(18rem,22rem)]",
+              viewMode === "outline" && "xl:grid-cols-[minmax(17rem,21rem)_minmax(18rem,22rem)]",
+            )}
+          >
+            {viewMode !== "graph" ? (
+            <section className="min-h-0 bg-muted/18">
+              <div className="border-b border-border/70 px-4 py-3">
+                <p className="m-0 text-sm font-semibold text-foreground">Outline</p>
+                <p className="m-0 mt-1 text-xs text-muted-foreground">
+                  Tree list shell with filter and density controls wired above.
+                </p>
+              </div>
+              <div
+                className={cn(
+                  "flex max-h-full min-h-[14rem] flex-col overflow-auto px-2 py-2",
+                  density === "compact" && "gap-0.5",
+                )}
+              >
+                {filteredOutlineEntries.map((entry) => {
+                  const isSelected = entry.node.id === selectedNode?.id;
+                  const aggregate = nodeAggregates?.get(entry.node.id);
+                  const status = deriveAqTodoDisplayStatus(entry.node, aggregate);
+                  const progressValue = Math.round(
+                    aggregate?.completion ?? inferAqTodoNodeProgress(entry.node),
+                  );
+
+                  return (
+                    <button
+                      key={entry.node.id}
+                      type="button"
+                      aria-label={`Select node ${entry.node.title}`}
+                      className={cn(
+                        "flex items-center justify-between gap-3 rounded-2xl px-3 text-left transition-colors hover:bg-background/80",
+                        density === "compact" ? "py-1.5" : "py-2.5",
+                        isSelected && "bg-background shadow-sm ring-1 ring-border/70",
+                      )}
+                      style={{ marginLeft: `${Math.min(entry.depth * 12, 48)}px` }}
+                      onClick={() => {
+                        if (!selectedFile) {
+                          return;
+                        }
+
+                        setSelectedNodeIdByFile((current) => ({
+                          ...current,
+                          [selectedFile.absolutePath]: entry.node.id,
+                        }));
+                      }}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="m-0 truncate text-sm font-medium text-foreground">
+                          {entry.node.title}
+                        </p>
+                        <p className="m-0 mt-1 truncate text-[11px] text-muted-foreground">
+                          {entry.node.member ? `${entry.node.member} · ` : ""}
+                          {aggregate?.totalItemCount
+                            ? formatItemCount(aggregate.totalItemCount)
+                            : "Leaf node"}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Badge
+                          variant="outline"
+                          className={cn("rounded-full text-[10px]", getTodoStatusClassName(status))}
+                        >
+                          {getTodoStatusLabel(status)}
+                        </Badge>
+                        <span className="text-[11px] text-muted-foreground">
+                          {formatPercent(progressValue)}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+                {filteredOutlineEntries.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-border/70 px-3 py-5 text-sm text-muted-foreground">
+                    当前过滤条件下没有节点，切回 `all` 可恢复完整视图。
+                  </div>
+                ) : null}
+              </div>
+            </section>
+            ) : null}
+
+            {viewMode !== "outline" ? (
+            <section className="relative min-h-0 overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(110,135,255,0.18),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(241,245,255,0.98))] dark:bg-[radial-gradient(circle_at_top_left,rgba(110,135,255,0.22),transparent_32%),linear-gradient(180deg,rgba(25,29,40,0.96),rgba(18,22,31,0.98))]">
+              <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between gap-3 border-b border-border/60 bg-background/82 px-4 py-3 backdrop-blur-sm">
+                <div>
+                  <p className="m-0 text-sm font-semibold text-foreground">Graph</p>
+                  <p className="m-0 mt-1 text-xs text-muted-foreground">
+                    Click any node to sync selection into outline and inspector.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge variant="outline">{graphNodes.length} nodes</Badge>
+                  {selectedNode ? (
+                    <Badge className="rounded-full" variant="secondary">
+                      Focused: {selectedNode.title}
+                    </Badge>
+                  ) : null}
+                </div>
+              </div>
+              <ReactFlow
+                className="h-full w-full"
+                style={{ width: "100%", height: "100%" }}
+                key={reactFlowKey}
+                nodes={graphNodes}
+                edges={renderableFlowGraph?.edges ?? []}
+                nodeTypes={TODO_NODE_TYPES}
+                fitView
+                fitViewOptions={{ padding: viewMode === "graph" ? 0.12 : 0.16 }}
+                minZoom={0.25}
+                maxZoom={1.5}
+                nodesDraggable={false}
+                nodesConnectable={false}
+                elementsSelectable
+                zoomOnDoubleClick={false}
+                onMove={handleViewportChange}
+                onNodeClick={(_event, node) => {
+                  if (!selectedFile) {
+                    return;
+                  }
+
+                  setSelectedNodeIdByFile((current) => ({
+                    ...current,
+                    [selectedFile.absolutePath]: node.id,
+                  }));
+                }}
+                proOptions={{ hideAttribution: true }}
+              >
+                <Background gap={20} size={1} color="rgba(120, 130, 160, 0.18)" />
+                <Controls showInteractive={false} position="top-left" />
+              </ReactFlow>
+            </section>
+            ) : null}
+
+            <aside className="min-h-0 bg-background/92">
+              <div className="border-b border-border/70 px-4 py-3">
+                <p className="m-0 text-sm font-semibold text-foreground">Inspector</p>
+                <p className="m-0 mt-1 text-xs text-muted-foreground">
+                  Acceptance and proof placeholders are visible now; builder fields can plug in next.
+                </p>
+              </div>
+              <div className="flex max-h-full min-h-[14rem] flex-col gap-3 overflow-auto p-3">
+                <div className="rounded-2xl border border-border/70 bg-muted/18 px-3.5 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                        Acceptance Status
+                      </p>
+                      <p className="m-0 mt-2 text-sm font-semibold text-foreground">
+                        {selectedNode?.title ?? "No node selected"}
+                      </p>
+                    </div>
+                    {selectedNodeStatus ? (
+                      <Badge
+                        variant="outline"
+                        className={cn("rounded-full", getTodoStatusClassName(selectedNodeStatus))}
+                      >
+                        {getTodoStatusLabel(selectedNodeStatus)}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <p className="m-0 mt-2 text-xs text-muted-foreground">
+                    {selectedNodeAggregate
+                      ? `${formatPercent(selectedNodeAggregate.completion)} complete · ${selectedNodeAggregate.doneItemCount}/${selectedNodeAggregate.totalItemCount} items done`
+                      : "Waiting for richer acceptance fields. This shell keeps the status slot visible in the workspace."}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-border/70 bg-background px-3.5 py-3 shadow-sm">
+                  <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                    Failure Point
+                  </p>
+                  <p className="m-0 mt-2 text-sm leading-6 text-foreground">
+                    {selectedNode ? getFailurePointCopy(selectedNode) : "Select a node to inspect its failure context."}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-border/70 bg-background px-3.5 py-3 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                      Proof Pack
+                    </p>
+                    <Badge variant="secondary">
+                      {selectedNodeEvidenceSummary.length > 0
+                        ? `${selectedNodeEvidenceSummary.length} linked`
+                        : "placeholder"}
+                    </Badge>
+                  </div>
+                  <p className="m-0 mt-2 text-sm leading-6 text-foreground">
+                    {selectedNodeEvidenceSummary.length > 0
+                      ? selectedNodeEvidenceSummary.join(" · ")
+                      : "Attach screenshots, code refs, or acceptance notes here to close the review loop."}
+                  </p>
+                  {selectedNode?.tags.length ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {selectedNode.tags.map((tag) => (
+                        <Badge key={tag} variant="outline" className="rounded-full text-[10px]">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </aside>
           </div>
         </div>
       ) : (

@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 import type { AppLocale } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n";
 
+type LocaleToggleMode = "segmented" | "compact";
+
 function LocaleButton(props: {
   active: boolean;
   className?: string;
@@ -25,8 +27,8 @@ function LocaleButton(props: {
   );
 }
 
-export function LocaleToggle(props: { className?: string }) {
-  const { className } = props;
+export function LocaleToggle(props: { className?: string; mode?: LocaleToggleMode }) {
+  const { className, mode = "segmented" } = props;
   const { locale, setLocale, t } = useI18n();
 
   const applyLocale = (nextLocale: AppLocale) => {
@@ -34,6 +36,25 @@ export function LocaleToggle(props: { className?: string }) {
       setLocale(nextLocale);
     }
   };
+
+  if (mode === "compact") {
+    const currentLabel = locale === "en" ? t("locale.english") : t("locale.simplifiedChinese");
+    const nextLocale = locale === "en" ? "zh-CN" : "en";
+    const compactLabel = locale === "en" ? "EN" : "中";
+
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className={cn("h-8 rounded-full border-border/70 bg-background/80 px-2.5 shadow-sm hover:bg-muted/80", className)}
+        onClick={() => applyLocale(nextLocale)}
+        title={currentLabel}
+      >
+        <Languages size={14} />
+        <span className="text-[11px] font-semibold">{compactLabel}</span>
+      </Button>
+    );
+  }
 
   return (
     <div className={cn("space-y-1", className)}>
