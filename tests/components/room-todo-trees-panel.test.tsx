@@ -235,6 +235,41 @@ describe("RoomTodoTreesPanel", () => {
     expect(screen.getByText("QA sweep")).toBeInTheDocument();
   });
 
+  it("renders the todo workspace shell without an outer rounded corner", async () => {
+    const snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          createTodoTreeResponse(room, [
+            createTreeFile({
+              fileName: "main.aqtree.xml",
+              modifiedAt: "2026-04-08T09:00:00.000Z",
+              room,
+              title: "Main plan",
+              nodes: [
+                '  <node id="root" title="Main plan" status="in_progress">',
+                '    <node id="ship-ui" title="Ship UI" status="done" />',
+                "  </node>",
+              ],
+            }),
+          ]),
+        ),
+      ),
+    );
+
+    const { container } = renderPanel(room);
+
+    expect(await screen.findByText("Workspace Controls")).toBeInTheDocument();
+
+    const panelShell = container.firstElementChild?.firstElementChild;
+    expect(panelShell).toBeInstanceOf(HTMLDivElement);
+    expect(panelShell).toHaveClass("rounded-none");
+    expect(panelShell).not.toHaveClass("rounded-[1.75rem]");
+  });
+
   it("keeps a completed tree visible in split view instead of collapsing into an empty panel", async () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];

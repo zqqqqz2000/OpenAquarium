@@ -693,7 +693,7 @@ export function RoomTodoTreesPanel(props: {
   }, [filteredOutlineEntries, selectedFile]);
 
   return (
-    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-[1.75rem] border border-border/75 bg-background/96 shadow-sm">
+    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-none border border-border/75 bg-background/96 shadow-sm">
       {selectedFile || payload?.files.length ? (
         <div className="pointer-events-none absolute top-3 right-3 z-20 flex items-start gap-2">
           {payload && payload.files.length > 1 ? (
