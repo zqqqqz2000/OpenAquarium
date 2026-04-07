@@ -30,6 +30,11 @@ const TOOL_STATUS_PREFIX = "__oa_tool__";
 type AcpExecutionMember = ExecutionMember & {
   provider: ProviderBinding;
 };
+type AcpProtocolLanguageModel = {
+  connection?: {
+    cancel?: (params: { sessionId: string }) => Promise<void>;
+  };
+};
 
 class TimeoutError extends Error {
   constructor(message: string) {
@@ -130,6 +135,7 @@ export class AcpMemberExecutor implements MemberExecutor {
   private currentTurn?: Promise<void>;
   private currentAbortController?: AbortController;
   private currentTurnPromptVisible = false;
+  private currentLanguageModel?: AcpProtocolLanguageModel;
 
   constructor(args: {
     workspaceRoot: string;
@@ -189,6 +195,7 @@ export class AcpMemberExecutor implements MemberExecutor {
     const abortController = new AbortController();
     this.currentAbortController = abortController;
     this.currentTurnPromptVisible = false;
+    this.currentLanguageModel = undefined;
     this.logger?.info("acp-execute-start", {
       taskId: request.task.id,
       roomId: request.room.id,
@@ -214,10 +221,15 @@ export class AcpMemberExecutor implements MemberExecutor {
           memberHandle: request.member.handle,
           providerSessionId: this.providerSessionId ?? null,
         });
+        const languageModel = this.provider.languageModel(request.member.modelId);
+        const protocolLanguageModel = languageModel as unknown as AcpProtocolLanguageModel;
+        if (this.currentAbortController === abortController) {
+          this.currentLanguageModel = protocolLanguageModel;
+        }
         const result = streamText({
           abortSignal: abortController.signal,
           includeRawChunks: true,
-          model: this.provider.languageModel(request.member.modelId),
+          model: languageModel,
           prompt: request.prompt,
           tools,
           onChunk: async ({ chunk }) => {
@@ -357,6 +369,7 @@ export class AcpMemberExecutor implements MemberExecutor {
           this.currentAbortController = undefined;
           this.currentTurn = undefined;
           this.currentTurnPromptVisible = false;
+          this.currentLanguageModel = undefined;
         }
         if (this.preparedTaskId === request.task.id) {
           this.preparedTaskId = undefined;
@@ -381,13 +394,41 @@ export class AcpMemberExecutor implements MemberExecutor {
     const abortController = this.currentAbortController;
     const currentTurn = this.currentTurn;
     const shouldPersistSessionOnCancel = this.currentTurnPromptVisible;
+    const sessionId = this.provider.getSessionId() ?? this.providerSessionId;
+    const protocolCancel = this.currentLanguageModel?.connection?.cancel;
     this.logger?.warn("acp-cancel-start", {
       memberId: this.member.id,
       memberHandle: this.member.handle,
       providerSessionId: this.providerSessionId ?? null,
       shouldPersistSessionOnCancel,
+      sessionId: sessionId ?? null,
+      protocolCancelAvailable: typeof protocolCancel === "function",
     });
-    abortController.abort("cancelled");
+
+    let sentProtocolCancel = false;
+    if (shouldPersistSessionOnCancel && sessionId && typeof protocolCancel === "function") {
+      try {
+        await protocolCancel({ sessionId });
+        sentProtocolCancel = true;
+        this.logger?.info("acp-cancel-session-sent", {
+          memberId: this.member.id,
+          memberHandle: this.member.handle,
+          sessionId,
+        });
+      } catch (error) {
+        this.logger?.warn("acp-cancel-session-failed", {
+          memberId: this.member.id,
+          memberHandle: this.member.handle,
+          sessionId,
+          message: getErrorMessage(error as RuntimeError),
+        });
+      }
+    }
+
+    if (!sentProtocolCancel) {
+      abortController.abort("cancelled");
+    }
+
     try {
       await withTimeout(
         currentTurn,

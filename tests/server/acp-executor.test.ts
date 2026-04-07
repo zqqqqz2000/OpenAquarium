@@ -24,6 +24,7 @@ interface MockAcpModel {
   provider: "mock";
   connection:
     | {
+        cancel?: (params: { sessionId: string }) => Promise<void>;
         unstable_forkSession?: (params: { sessionId: string; cwd: string }) => Promise<MockSessionResponse>;
       }
     | null;
@@ -63,6 +64,7 @@ function createMockSessionResponse(sessionId: string, currentModeId = "read-only
 
 const {
   initSessionMock,
+  cancelSessionMock,
   setModeMock,
   cleanupMock,
   languageModelMock,
@@ -71,6 +73,7 @@ const {
   providerRecords,
 } = vi.hoisted(() => ({
   initSessionMock: vi.fn(),
+  cancelSessionMock: vi.fn(),
   setModeMock: vi.fn(),
   cleanupMock: vi.fn(),
   languageModelMock: vi.fn(),
@@ -85,7 +88,9 @@ vi.mock("@mcpc-tech/acp-ai-provider", () => ({
   createACPProvider: createACPProviderMock.mockImplementation((config: MockProviderRecord["config"]) => {
     const model: MockAcpModel = {
       provider: "mock",
-      connection: {},
+      connection: {
+        cancel: (params) => cancelSessionMock(params, { config, model }),
+      },
       sessionId: config.existingSessionId ?? null,
       sessionResponse: config.existingSessionId ? createMockSessionResponse(config.existingSessionId) : null,
       isFreshSession: !config.existingSessionId,
@@ -241,6 +246,8 @@ describe("AcpMemberExecutor", () => {
     initSessionMock.mockImplementation(async ({ config }: { config: MockProviderRecord["config"] }) =>
       createMockSessionResponse(config.existingSessionId ?? "session_1"),
     );
+    cancelSessionMock.mockReset();
+    cancelSessionMock.mockResolvedValue(undefined);
     setModeMock.mockReset();
     setModeMock.mockResolvedValue(undefined);
     cleanupMock.mockReset();
@@ -563,6 +570,10 @@ describe("AcpMemberExecutor", () => {
     await secondRun;
     await firstRun;
 
+    expect(cancelSessionMock).toHaveBeenCalledWith(
+      { sessionId: "session_fresh" },
+      expect.anything(),
+    );
     expect(persistMemberSession).toHaveBeenCalledWith({
       memberId: "member_1",
       sessionId: "session_fresh",

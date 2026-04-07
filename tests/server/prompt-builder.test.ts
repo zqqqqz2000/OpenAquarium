@@ -182,6 +182,72 @@ describe("buildTaskPrompt", () => {
     expect(prompt).not.toContain(`prompt: ${lead.prompt}`);
   });
 
+  it("forces a full prompt again when a later acp turn is marked as fresh", () => {
+    const context = createRuntimeContext(501, "2026-03-10T12:00:00.000Z");
+    let snapshot = createSeedWorkspace();
+    const room = snapshot.rooms[snapshot.selection.roomId!];
+    const project = snapshot.projects[room.projectId];
+    const lead = room.memberIds.map((memberId) => snapshot.members[memberId]).find((candidate) => candidate.handle === "lead");
+
+    if (!lead) {
+      throw new Error("Expected the lead member");
+    }
+
+    snapshot = {
+      ...snapshot,
+      members: {
+        ...snapshot.members,
+        [lead.id]: {
+          ...lead,
+          providerSessionId: "session_previous",
+        },
+      },
+    };
+
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>lead 第一轮完成",
+      },
+      context,
+    );
+
+    const firstLeadTaskId = snapshot.members[lead.id].activeTaskId;
+    if (!firstLeadTaskId) {
+      throw new Error("Expected a first lead task");
+    }
+
+    snapshot = completeMemberTask(snapshot, { taskId: firstLeadTaskId }, context);
+    snapshot = postUserMessage(
+      snapshot,
+      {
+        roomId: room.id,
+        content: "@>lead 新 session 继续",
+      },
+      context,
+    );
+
+    const nextLead = snapshot.members[lead.id];
+    const currentTask = nextLead.activeTaskId ? snapshot.tasks[nextLead.activeTaskId] : undefined;
+    if (!currentTask) {
+      throw new Error("Expected a new lead task");
+    }
+
+    const payload = buildTaskPromptPayload({
+      workspaceRoot: process.cwd(),
+      project,
+      room: snapshot.rooms[room.id],
+      member: nextLead,
+      task: currentTask,
+      snapshot,
+      sessionContinuation: "fresh",
+    });
+
+    expect(payload.promptMode).toBe("full");
+    expect(payload.prompt).toContain("prompt mode: full");
+  });
+
   it("reuses persisted openai-compatible conversation history and switches later turns to delta", () => {
     const context = createRuntimeContext(505, "2026-03-10T12:00:00.000Z");
     let snapshot = createSeedWorkspace();
