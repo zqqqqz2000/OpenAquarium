@@ -7,6 +7,7 @@ import { createDefaultWorkspaceSnapshot } from "@/lib/default-workspace";
 import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profiles";
 import {
   WorkspaceRuntimeClient,
+  resolveWorkspaceRuntimeBaseUrl,
   resolveWorkspaceRuntimeRequestCredentials,
   resolveWorkspaceRuntimeRequestHeaders,
 } from "@/lib/runtime-client";
@@ -63,6 +64,12 @@ describe("WorkspaceRuntimeClient", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("uses the current browser host for the default runtime base url", () => {
+    vi.stubGlobal("location", new URL("http://localhost:5173/") as unknown as Location);
+
+    expect(resolveWorkspaceRuntimeBaseUrl()).toBe("http://localhost:4301");
   });
 
   it("surfaces the server's error field instead of raw JSON text", async () => {
@@ -322,12 +329,12 @@ describe("WorkspaceRuntimeClient", () => {
       }),
     });
 
-    expect(onRemoteState).toHaveBeenCalledWith(expect.objectContaining({
-      auth: expect.objectContaining({
+    expect(onRemoteState.mock.calls[0]?.[0]).toMatchObject({
+      auth: {
         authenticated: true,
         sessionToken: "session-token",
-      }),
-    }));
+      },
+    });
 
     disconnect();
     expect(sockets[0]?.close).toHaveBeenCalledTimes(1);
@@ -409,12 +416,12 @@ describe("WorkspaceRuntimeClient", () => {
     });
 
     expect(onRemoteState).toHaveBeenCalledTimes(1);
-    expect(onRemoteState).toHaveBeenCalledWith(expect.objectContaining({
-      auth: expect.objectContaining({
+    expect(onRemoteState.mock.calls[0]?.[0]).toMatchObject({
+      auth: {
         authenticated: true,
         sessionToken: "session-token",
-      }),
-    }));
+      },
+    });
 
     disconnectBeforeLogin();
     disconnectAfterLogin();
@@ -510,14 +517,14 @@ describe("WorkspaceRuntimeClient", () => {
     expect(onConnectionChange).toHaveBeenCalledTimes(1);
     expect(onConnectionChange).toHaveBeenCalledWith(true);
     expect(onRemoteState).toHaveBeenCalledTimes(1);
-    expect(onRemoteState).toHaveBeenCalledWith(expect.objectContaining({
-      auth: expect.objectContaining({
+    expect(onRemoteState.mock.calls[0]?.[0]).toMatchObject({
+      auth: {
         authenticated: true,
-        user: expect.objectContaining({
+        user: {
           handle: "alice",
-        }),
-      }),
-    }));
+        },
+      },
+    });
 
     disconnectFirst();
     disconnectSecond();

@@ -177,7 +177,7 @@ function resolveAllowedCorsOrigin(request: IncomingMessage): string | undefined 
 
 function appendVaryHeader(response: ServerResponse, value: string): void {
   const currentValue = response.getHeader("vary");
-  const existingValues = `${currentValue ?? ""}`
+  const existingValues = String(currentValue ?? "")
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
@@ -220,6 +220,17 @@ function buildSessionCookie(sessionToken: string): string {
 
 function buildClearedSessionCookie(): string {
   return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+function buildSessionRefreshHeaders(sessionToken?: string): Record<string, string> | undefined {
+  const normalized = sessionToken?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  return {
+    "set-cookie": buildSessionCookie(normalized),
+  };
 }
 
 function isMyProjectMembershipsPath(pathname: string): boolean {
@@ -273,6 +284,15 @@ export async function handleWorkspaceJsonApiRequest(args: {
       };
     }
 
+    if (method === "POST" && pathname === "/api/auth/setup") {
+      const result = await runtime.completeUserSetup(body as { token: string; password: string });
+      return {
+        statusCode: 200,
+        payload: result,
+        headers: result.sessionToken ? { "set-cookie": buildSessionCookie(result.sessionToken) } : undefined,
+      };
+    }
+
     if (method === "POST" && pathname === "/api/auth/logout") {
       const result = await runtime.logout({
         sessionToken: sessionToken ?? (body as { sessionToken?: string } | undefined)?.sessionToken,
@@ -285,33 +305,41 @@ export async function handleWorkspaceJsonApiRequest(args: {
     }
 
     if (method === "GET" && pathname === "/api/auth/session") {
+      const payload = await runtime.restoreSession({ sessionToken });
       return {
         statusCode: 200,
-        payload: await runtime.restoreSession({ sessionToken }),
+        payload,
+        headers: payload.authenticated ? buildSessionRefreshHeaders(sessionToken) : undefined,
       };
     }
 
     if (method === "GET" && pathname === "/api/me") {
+      const payload = await runtime.getMe({ sessionToken });
       return {
         statusCode: 200,
-        payload: await runtime.getMe({ sessionToken }),
+        payload,
+        headers: buildSessionRefreshHeaders(sessionToken),
       };
     }
 
     if (method === "POST" && pathname === "/api/me") {
+      const payload = await runtime.updateMe({
+        sessionToken,
+        ...((body as { handle?: string; displayName?: string } | undefined) ?? {}),
+      });
       return {
         statusCode: 200,
-        payload: await runtime.updateMe({
-          sessionToken,
-          ...((body as { handle?: string; displayName?: string } | undefined) ?? {}),
-        }),
+        payload,
+        headers: buildSessionRefreshHeaders(sessionToken),
       };
     }
 
     if (method === "GET" && isMyProjectMembershipsPath(pathname)) {
+      const payload = await runtime.listMyProjectMemberships({ sessionToken });
       return {
         statusCode: 200,
-        payload: await runtime.listMyProjectMemberships({ sessionToken }),
+        payload,
+        headers: buildSessionRefreshHeaders(sessionToken),
       };
     }
 
@@ -327,10 +355,9 @@ export async function handleWorkspaceJsonApiRequest(args: {
         statusCode: 200,
         payload: await runtime.createManagedUser({
           sessionToken,
-          ...((body as { handle: string; displayName: string; password: string; isAdmin?: boolean } | undefined) ?? {
+          ...((body as { handle: string; displayName: string; isAdmin?: boolean } | undefined) ?? {
             handle: "",
             displayName: "",
-            password: "",
           }),
         }),
       };
@@ -351,8 +378,24 @@ export async function handleWorkspaceJsonApiRequest(args: {
         payload: await runtime.updateManagedUser({
           sessionToken,
           userId,
-          ...((body as { handle?: string; displayName?: string; password?: string; isAdmin?: boolean } | undefined) ?? {}),
+          ...((body as { handle?: string; displayName?: string; isAdmin?: boolean } | undefined) ?? {}),
         }),
+      };
+    }
+
+    const adminUserSetupMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/setup$/u);
+    if (method === "POST" && adminUserSetupMatch) {
+      const [, userId] = adminUserSetupMatch;
+      if (!userId) {
+        return {
+          statusCode: 400,
+          payload: { error: "Missing user id" },
+        };
+      }
+
+      return {
+        statusCode: 200,
+        payload: await runtime.issueManagedUserSetup({ sessionToken, userId }),
       };
     }
 
@@ -374,6 +417,7 @@ export async function handleWorkspaceJsonApiRequest(args: {
       return {
         statusCode: 200,
         payload: { snapshot: state.snapshot, globalConfig: runtime.getGlobalConfig(), auth: state.auth },
+        headers: state.auth.authenticated ? buildSessionRefreshHeaders(sessionToken) : undefined,
       };
     }
 
@@ -1003,7 +1047,12 @@ export async function startWorkspaceHttpServer(args: {
             ...summarizeWorkspaceSnapshot(payload.snapshot),
           });
         }
-        sendJson(response, 200, payload);
+        sendJson(
+          response,
+          200,
+          payload,
+          state.auth.authenticated ? (buildSessionRefreshHeaders(sessionToken) ?? {}) : {},
+        );
         return;
       }
 
@@ -1048,6 +1097,18 @@ export async function startWorkspaceHttpServer(args: {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/api/auth/setup") {
+        const body = await readJson<{ token: string; password: string }>(request);
+        const result = await args.runtime.completeUserSetup(body);
+        sendJson(
+          response,
+          200,
+          result,
+          result.sessionToken ? { "set-cookie": buildSessionCookie(result.sessionToken) } : {},
+        );
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/auth/logout") {
         const body = await readJson<{ sessionToken?: string }>(request);
         const result = await args.runtime.logout({ sessionToken: sessionToken ?? body.sessionToken });
@@ -1056,23 +1117,44 @@ export async function startWorkspaceHttpServer(args: {
       }
 
       if (request.method === "GET" && url.pathname === "/api/auth/session") {
-        sendJson(response, 200, await args.runtime.restoreSession({ sessionToken }));
+        const result = await args.runtime.restoreSession({ sessionToken });
+        sendJson(
+          response,
+          200,
+          result,
+          result.authenticated ? (buildSessionRefreshHeaders(sessionToken) ?? {}) : {},
+        );
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/me") {
-        sendJson(response, 200, await args.runtime.getMe({ sessionToken }));
+        sendJson(
+          response,
+          200,
+          await args.runtime.getMe({ sessionToken }),
+          buildSessionRefreshHeaders(sessionToken) ?? {},
+        );
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/me") {
         const body = await readJson<{ handle?: string; displayName?: string }>(request);
-        sendJson(response, 200, await args.runtime.updateMe({ sessionToken, ...body }));
+        sendJson(
+          response,
+          200,
+          await args.runtime.updateMe({ sessionToken, ...body }),
+          buildSessionRefreshHeaders(sessionToken) ?? {},
+        );
         return;
       }
 
       if (request.method === "GET" && isMyProjectMembershipsPath(url.pathname)) {
-        sendJson(response, 200, await args.runtime.listMyProjectMemberships({ sessionToken }));
+        sendJson(
+          response,
+          200,
+          await args.runtime.listMyProjectMemberships({ sessionToken }),
+          buildSessionRefreshHeaders(sessionToken) ?? {},
+        );
         return;
       }
 
@@ -1082,7 +1164,7 @@ export async function startWorkspaceHttpServer(args: {
       }
 
       if (request.method === "POST" && url.pathname === "/api/admin/users") {
-        const body = await readJson<{ handle: string; displayName: string; password: string; isAdmin?: boolean }>(request);
+        const body = await readJson<{ handle: string; displayName: string; isAdmin?: boolean }>(request);
         sendJson(response, 200, await args.runtime.createManagedUser({ sessionToken, ...body }));
         return;
       }
@@ -1095,8 +1177,20 @@ export async function startWorkspaceHttpServer(args: {
           return;
         }
 
-        const body = await readJson<{ handle?: string; displayName?: string; password?: string; isAdmin?: boolean }>(request);
+        const body = await readJson<{ handle?: string; displayName?: string; isAdmin?: boolean }>(request);
         sendJson(response, 200, await args.runtime.updateManagedUser({ sessionToken, userId, ...body }));
+        return;
+      }
+
+      const adminUserSetupMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/setup$/u);
+      if (request.method === "POST" && adminUserSetupMatch) {
+        const [, userId] = adminUserSetupMatch;
+        if (!userId) {
+          sendJson(response, 400, { error: "Missing user id" });
+          return;
+        }
+
+        sendJson(response, 200, await args.runtime.issueManagedUserSetup({ sessionToken, userId }));
         return;
       }
 

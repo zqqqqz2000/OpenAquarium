@@ -112,7 +112,18 @@ export interface WorkspaceManagedUser {
   isAdmin: boolean;
   createdAt: string;
   updatedAt?: string;
+  setupPending: boolean;
   memberships: WorkspaceAuthMembership[];
+}
+
+export interface WorkspaceUserSetupLink {
+  token: string;
+  path: string;
+}
+
+export interface WorkspaceManagedUserSetupResult {
+  user: WorkspaceManagedUser;
+  setup: WorkspaceUserSetupLink;
 }
 
 export interface AuthenticatedWorkspaceAuth {
@@ -128,14 +139,30 @@ export interface AuthenticatedWorkspaceAuth {
 export interface UnauthenticatedWorkspaceAuth {
   required: boolean;
   authenticated: false;
+  canRegister?: boolean;
 }
 
 export type WorkspaceAuthState = AuthenticatedWorkspaceAuth | UnauthenticatedWorkspaceAuth;
-export type WorkspaceAuthResponse = Omit<AuthenticatedWorkspaceAuth, "required"> | { authenticated: false };
+export type WorkspaceAuthResponse =
+  | Omit<AuthenticatedWorkspaceAuth, "required">
+  | { authenticated: false; canRegister?: boolean };
 
 export function resolveWorkspaceRuntimeBaseUrl(): string {
   const configured = import.meta.env.VITE_OA_SERVER_URL as string | undefined;
-  return configured ?? "http://127.0.0.1:4301";
+  if (configured?.trim()) {
+    return configured.trim();
+  }
+
+  const location = typeof globalThis !== "undefined" && "location" in globalThis
+    ? globalThis.location
+    : undefined;
+  if (location?.hostname) {
+    const baseUrl = new URL(`${location.protocol === "https:" ? "https:" : "http:"}//127.0.0.1:4301`);
+    baseUrl.hostname = location.hostname;
+    return baseUrl.toString().replace(/\/$/u, "");
+  }
+
+  return "http://127.0.0.1:4301";
 }
 
 function resolveWebSocketUrl(baseUrl: string): string {
@@ -246,6 +273,7 @@ export class WorkspaceRuntimeClient {
       return {
         required,
         authenticated: false,
+        canRegister: "canRegister" in auth ? auth.canRegister : undefined,
       } satisfies UnauthenticatedWorkspaceAuth;
     }
 
@@ -266,13 +294,24 @@ export class WorkspaceRuntimeClient {
     }>(await this.request(`${this.baseUrl}/api/state`));
     return {
       ...payload,
-      auth: this.withPersistedSessionToken(payload.auth, payload.auth.required) as WorkspaceAuthState,
+      auth: this.withPersistedSessionToken(payload.auth, payload.auth.required),
     };
   }
 
   async login(input: { handle: string; password: string; displayName?: string }): Promise<WorkspaceAuthResponse> {
     const payload = await parseJson<WorkspaceAuthResponse>(
       await this.request(`${this.baseUrl}/api/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    );
+    return this.withPersistedSessionToken(payload) as WorkspaceAuthResponse;
+  }
+
+  async completeUserSetup(input: { token: string; password: string }): Promise<WorkspaceAuthResponse> {
+    const payload = await parseJson<WorkspaceAuthResponse>(
+      await this.request(`${this.baseUrl}/api/auth/setup`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(input),
@@ -329,9 +368,8 @@ export class WorkspaceRuntimeClient {
   async createManagedUser(input: {
     handle: string;
     displayName: string;
-    password: string;
     isAdmin?: boolean;
-  }): Promise<{ user: WorkspaceManagedUser }> {
+  }): Promise<WorkspaceManagedUserSetupResult> {
     return parseJson(
       await this.request(`${this.baseUrl}/api/admin/users`, {
         method: "POST",
@@ -345,7 +383,6 @@ export class WorkspaceRuntimeClient {
     userId: string;
     handle?: string;
     displayName?: string;
-    password?: string;
     isAdmin?: boolean;
   }): Promise<{ user: WorkspaceManagedUser }> {
     return parseJson(
@@ -355,9 +392,18 @@ export class WorkspaceRuntimeClient {
         body: JSON.stringify({
           handle: input.handle,
           displayName: input.displayName,
-          password: input.password,
           isAdmin: input.isAdmin,
         }),
+      }),
+    );
+  }
+
+  async issueManagedUserSetup(input: { userId: string }): Promise<WorkspaceManagedUserSetupResult> {
+    return parseJson(
+      await this.request(`${this.baseUrl}/api/admin/users/${input.userId}/setup`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
       }),
     );
   }
@@ -807,7 +853,7 @@ export class WorkspaceRuntimeClient {
         if (payload.type === "snapshot") {
           onRemoteState({
             snapshot: payload.snapshot,
-            auth: this.withPersistedSessionToken(payload.auth, payload.auth.required) as WorkspaceAuthState,
+            auth: this.withPersistedSessionToken(payload.auth, payload.auth.required),
           });
         }
       });

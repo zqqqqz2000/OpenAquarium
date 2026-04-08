@@ -173,11 +173,13 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
     connected,
     error,
     login,
+    completeUserSetup,
     logout,
     updateMe,
     listManagedUsers,
     createManagedUser,
     updateManagedUser,
+    issueManagedUserSetup,
     setManagedProjectMembership,
     deleteProject,
     deleteRoom,
@@ -203,11 +205,13 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
       connected: state.connected,
       error: state.error,
       login: state.login,
+      completeUserSetup: state.completeUserSetup,
       logout: state.logout,
       updateMe: state.updateMe,
       listManagedUsers: state.listManagedUsers,
       createManagedUser: state.createManagedUser,
       updateManagedUser: state.updateManagedUser,
+      issueManagedUserSetup: state.issueManagedUserSetup,
       setManagedProjectMembership: state.setManagedProjectMembership,
       deleteProject: state.deleteProject,
       deleteRoom: state.deleteRoom,
@@ -567,7 +571,15 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
   }
 
   if (!auth.authenticated) {
-    return <WorkspaceAuthGate connected={connected} error={error} onLogin={(input) => login(input)} />;
+    return (
+      <WorkspaceAuthGate
+        canRegister={auth.canRegister === true}
+        connected={connected}
+        error={error}
+        onLogin={(input) => login(input)}
+        onCompleteSetup={(input) => completeUserSetup(input)}
+      />
+    );
   }
 
   const authProfileControl = (
@@ -583,6 +595,7 @@ export function WorkspaceScreen(props: { projectId?: string; roomId?: string; me
       onListManagedUsers={() => listManagedUsers()}
       onCreateManagedUser={(input) => createManagedUser(input)}
       onUpdateManagedUser={(input) => updateManagedUser(input)}
+      onIssueManagedUserSetup={(input) => issueManagedUserSetup(input)}
       onSetManagedProjectMembership={(input) => setManagedProjectMembership(input)}
     />
   );

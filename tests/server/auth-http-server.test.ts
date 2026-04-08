@@ -11,10 +11,6 @@ import { WorkspacePersistence } from "@/server/persistence";
 import { WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
 import type { ExecutionRequest, ExecutorCallbacks, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 
-const ORIGINAL_BOOTSTRAP_ADMIN_HANDLE = process.env.OA_BOOTSTRAP_ADMIN_HANDLE;
-const ORIGINAL_BOOTSTRAP_ADMIN_PASSWORD = process.env.OA_BOOTSTRAP_ADMIN_PASSWORD;
-const ORIGINAL_BOOTSTRAP_ADMIN_DISPLAY_NAME = process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME;
-
 class CompletingExecutor implements MemberExecutor {
   async execute(_request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
     await callbacks.onComplete("ok", "end_turn");
@@ -40,37 +36,15 @@ function createRuntime(workspaceRoot: string): WorkspaceRuntime {
   });
 }
 
-function configureBootstrapAdmin(args: { handle: string; password: string; displayName: string }): void {
-  process.env.OA_BOOTSTRAP_ADMIN_HANDLE = args.handle;
-  process.env.OA_BOOTSTRAP_ADMIN_PASSWORD = args.password;
-  process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME = args.displayName;
-}
-
 describe("workspace auth http api", () => {
   const runtimes: WorkspaceRuntime[] = [];
 
   afterEach(async () => {
     await Promise.all(runtimes.map((runtime) => runtime.dispose()));
     runtimes.length = 0;
-    if (ORIGINAL_BOOTSTRAP_ADMIN_HANDLE === undefined) {
-      delete process.env.OA_BOOTSTRAP_ADMIN_HANDLE;
-    } else {
-      process.env.OA_BOOTSTRAP_ADMIN_HANDLE = ORIGINAL_BOOTSTRAP_ADMIN_HANDLE;
-    }
-    if (ORIGINAL_BOOTSTRAP_ADMIN_PASSWORD === undefined) {
-      delete process.env.OA_BOOTSTRAP_ADMIN_PASSWORD;
-    } else {
-      process.env.OA_BOOTSTRAP_ADMIN_PASSWORD = ORIGINAL_BOOTSTRAP_ADMIN_PASSWORD;
-    }
-    if (ORIGINAL_BOOTSTRAP_ADMIN_DISPLAY_NAME === undefined) {
-      delete process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME;
-    } else {
-      process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME = ORIGINAL_BOOTSTRAP_ADMIN_DISPLAY_NAME;
-    }
   });
 
-  it("supports login, session restore, me update, and project gate responses", async () => {
-    configureBootstrapAdmin({ handle: "alice", password: "secret-pass", displayName: "Alice" });
+  it("supports first-user registration, invite/setup, and logout back to login mode", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-auth-http-"));
     const runtime = createRuntime(workspaceRoot);
     runtimes.push(runtime);
@@ -79,6 +53,19 @@ describe("workspace auth http api", () => {
       projectName: "HTTP auth project",
       templateId: "template-product-pod",
     });
+
+    const initialState = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "GET",
+      pathname: "/api/state",
+    });
+    expect(initialState?.statusCode).toBe(200);
+    expect((initialState?.payload as { auth: { authenticated: boolean; canRegister?: boolean } }).auth).toEqual(
+      expect.objectContaining({
+        authenticated: false,
+        canRegister: true,
+      }),
+    );
 
     const loginResult = await handleWorkspaceJsonApiRequest({
       runtime,
@@ -93,7 +80,17 @@ describe("workspace auth http api", () => {
 
     expect(loginResult?.statusCode).toBe(200);
     expect(loginResult?.headers?.["set-cookie"]).toContain("oa_session=");
-    const sessionToken = (loginResult?.payload as { sessionToken?: string }).sessionToken;
+    const loginPayload = loginResult?.payload as {
+      createdUser: boolean;
+      sessionToken?: string;
+      user: { handle: string; isAdmin: boolean };
+    };
+    expect(loginPayload.createdUser).toBe(true);
+    expect(loginPayload.user).toEqual(expect.objectContaining({
+      handle: "alice",
+      isAdmin: true,
+    }));
+    const sessionToken = loginPayload.sessionToken;
     expect(sessionToken).toBeTruthy();
 
     const authHeaders = {
@@ -159,24 +156,38 @@ describe("workspace auth http api", () => {
       headers: authHeaders,
       body: {
         handle: "outsider",
-        password: "outsider-pass",
         displayName: "Outsider",
       },
     });
     expect(createUserResult?.statusCode).toBe(200);
+    const createUserPayload = createUserResult?.payload as {
+      user: { id: string; handle: string; isAdmin: boolean; setupPending: boolean };
+      setup: { token: string; path: string };
+    };
+    expect(createUserPayload).toEqual(expect.objectContaining({
+      user: expect.objectContaining({
+        handle: "outsider",
+        isAdmin: false,
+        setupPending: true,
+      }),
+      setup: expect.objectContaining({
+        token: expect.any(String),
+        path: expect.stringContaining("/?setup="),
+      }),
+    }));
 
-    const outsiderLogin = await handleWorkspaceJsonApiRequest({
+    const outsiderSetup = await handleWorkspaceJsonApiRequest({
       runtime,
       method: "POST",
-      pathname: "/api/auth/login",
+      pathname: "/api/auth/setup",
       body: {
-        handle: "outsider",
+        token: createUserPayload.setup.token,
         password: "outsider-pass",
-        displayName: "Outsider",
       },
     });
+    expect(outsiderSetup?.statusCode).toBe(200);
     const outsiderHeaders = {
-      authorization: `Bearer ${(outsiderLogin?.payload as { sessionToken?: string }).sessionToken}`,
+      authorization: `Bearer ${(outsiderSetup?.payload as { sessionToken?: string }).sessionToken}`,
     };
 
     const forbiddenCreateRoom = await handleWorkspaceJsonApiRequest({
@@ -207,5 +218,18 @@ describe("workspace auth http api", () => {
     });
     expect(restoredAfterLogout?.statusCode).toBe(200);
     expect(restoredAfterLogout?.payload).toEqual({ authenticated: false });
+
+    const loggedOutState = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "GET",
+      pathname: "/api/state",
+    });
+    expect(loggedOutState?.statusCode).toBe(200);
+    expect((loggedOutState?.payload as { auth: { authenticated: boolean; canRegister?: boolean } }).auth).toEqual(
+      expect.objectContaining({
+        authenticated: false,
+        canRegister: false,
+      }),
+    );
   });
 });

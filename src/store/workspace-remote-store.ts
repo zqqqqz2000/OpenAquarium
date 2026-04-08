@@ -22,6 +22,7 @@ import {
   type ProjectDirectoryBrowsePayload,
   type ProjectPathInspectionPayload,
   type WorkspaceManagedUser,
+  type WorkspaceManagedUserSetupResult,
   type WatcherRunResult,
   type WorkspaceAuthMembership,
   type WorkspaceAuthResponse,
@@ -154,6 +155,7 @@ function normalizeAuthState(
     return {
       required: args.required,
       authenticated: false,
+      canRegister: "canRegister" in auth ? auth.canRegister : undefined,
     };
   }
 
@@ -175,17 +177,18 @@ export interface WorkspaceRemoteStoreState {
   error?: string;
   hydrate(): Promise<void>;
   login(input: { handle: string; password: string; displayName?: string }): Promise<void>;
+  completeUserSetup(input: { token: string; password: string }): Promise<void>;
   logout(): Promise<void>;
   updateMe(input: { handle?: string; displayName?: string }): Promise<void>;
   listManagedUsers(): Promise<WorkspaceManagedUser[]>;
-  createManagedUser(input: { handle: string; displayName: string; password: string; isAdmin?: boolean }): Promise<WorkspaceManagedUser>;
+  createManagedUser(input: { handle: string; displayName: string; isAdmin?: boolean }): Promise<WorkspaceManagedUserSetupResult>;
   updateManagedUser(input: {
     userId: string;
     handle?: string;
     displayName?: string;
-    password?: string;
     isAdmin?: boolean;
   }): Promise<WorkspaceManagedUser>;
+  issueManagedUserSetup(input: { userId: string }): Promise<WorkspaceManagedUserSetupResult>;
   setManagedProjectMembership(input: {
     userId: string;
     projectId: string;
@@ -230,20 +233,21 @@ export interface WorkspaceRemoteClient {
   getState(): Promise<{ snapshot: WorkspaceSnapshot; globalConfig: GlobalWorkspaceConfig; auth: WorkspaceAuthState }>;
   getSessionToken(): string | undefined;
   login(input: { handle: string; password: string; displayName?: string }): Promise<WorkspaceAuthResponse>;
+  completeUserSetup(input: { token: string; password: string }): Promise<WorkspaceAuthResponse>;
   logout(): Promise<{ authenticated: false }>;
   restoreSession(): Promise<WorkspaceAuthResponse>;
   getMe(): Promise<WorkspaceAuthResponse>;
   updateMe(input: { handle?: string; displayName?: string }): Promise<WorkspaceAuthResponse>;
   listMyProjectMemberships(): Promise<{ memberships: WorkspaceAuthMembership[] }>;
   listManagedUsers(): Promise<{ users: WorkspaceManagedUser[] }>;
-  createManagedUser(input: { handle: string; displayName: string; password: string; isAdmin?: boolean }): Promise<{ user: WorkspaceManagedUser }>;
+  createManagedUser(input: { handle: string; displayName: string; isAdmin?: boolean }): Promise<WorkspaceManagedUserSetupResult>;
   updateManagedUser(input: {
     userId: string;
     handle?: string;
     displayName?: string;
-    password?: string;
     isAdmin?: boolean;
   }): Promise<{ user: WorkspaceManagedUser }>;
+  issueManagedUserSetup(input: { userId: string }): Promise<WorkspaceManagedUserSetupResult>;
   setManagedProjectMembership(input: {
     userId: string;
     projectId: string;
@@ -382,6 +386,18 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
         loading: false,
       }));
     },
+    async completeUserSetup(input) {
+      const result = await runMutation(set, async () => {
+        await client.completeUserSetup(input);
+        return loadHydratedState();
+      });
+      set((state) => ({
+        snapshot: mergeIncomingSnapshot(state.snapshot, result.snapshot),
+        globalConfig: result.globalConfig ? shareIncomingValue(state.globalConfig, result.globalConfig) : state.globalConfig,
+        auth: result.auth,
+        loading: false,
+      }));
+    },
     async logout() {
       await runMutation(set, () => client.logout());
       const { snapshot, globalConfig, auth } = await runMutation(set, () => client.getState());
@@ -417,11 +433,15 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
     },
     async createManagedUser(input) {
       const result = await runMutation(set, () => client.createManagedUser(input));
-      return result.user;
+      return result;
     },
     async updateManagedUser(input) {
       const result = await runMutation(set, () => client.updateManagedUser(input));
       return result.user;
+    },
+    async issueManagedUserSetup(input) {
+      const result = await runMutation(set, () => client.issueManagedUserSetup(input));
+      return result;
     },
     async setManagedProjectMembership(input) {
       const result = await runMutation(set, () => client.setManagedProjectMembership(input));

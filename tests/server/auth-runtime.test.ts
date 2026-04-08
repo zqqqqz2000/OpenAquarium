@@ -10,10 +10,6 @@ import { WorkspacePersistence } from "@/server/persistence";
 import { ForbiddenRuntimeError, WorkspaceRuntime, createEmptyRuntimeSnapshot } from "@/server/runtime";
 import type { ExecutionRequest, ExecutorCallbacks, MemberExecutor, MemberExecutorFactory } from "@/server/executor";
 
-const ORIGINAL_BOOTSTRAP_ADMIN_HANDLE = process.env.OA_BOOTSTRAP_ADMIN_HANDLE;
-const ORIGINAL_BOOTSTRAP_ADMIN_PASSWORD = process.env.OA_BOOTSTRAP_ADMIN_PASSWORD;
-const ORIGINAL_BOOTSTRAP_ADMIN_DISPLAY_NAME = process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME;
-
 class CompletingExecutor implements MemberExecutor {
   async execute(_request: ExecutionRequest, callbacks: ExecutorCallbacks): Promise<void> {
     await callbacks.onComplete("ok", "end_turn");
@@ -32,19 +28,12 @@ function createRuntime(
   workspaceRoot: string,
   executorFactory: MemberExecutorFactory = () => new CompletingExecutor(),
 ): WorkspaceRuntime {
-
   return new WorkspaceRuntime({
     initialSnapshot: createEmptyRuntimeSnapshot(),
     persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
     workspaceRoot,
     executorFactory,
   });
-}
-
-function configureBootstrapAdmin(args: { handle: string; password: string; displayName: string }): void {
-  process.env.OA_BOOTSTRAP_ADMIN_HANDLE = args.handle;
-  process.env.OA_BOOTSTRAP_ADMIN_PASSWORD = args.password;
-  process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME = args.displayName;
 }
 
 async function flushMicrotasks(iterations = 8): Promise<void> {
@@ -84,25 +73,9 @@ describe("workspace runtime auth", () => {
     }
     runtimes.length = 0;
     vi.useRealTimers();
-    if (ORIGINAL_BOOTSTRAP_ADMIN_HANDLE === undefined) {
-      delete process.env.OA_BOOTSTRAP_ADMIN_HANDLE;
-    } else {
-      process.env.OA_BOOTSTRAP_ADMIN_HANDLE = ORIGINAL_BOOTSTRAP_ADMIN_HANDLE;
-    }
-    if (ORIGINAL_BOOTSTRAP_ADMIN_PASSWORD === undefined) {
-      delete process.env.OA_BOOTSTRAP_ADMIN_PASSWORD;
-    } else {
-      process.env.OA_BOOTSTRAP_ADMIN_PASSWORD = ORIGINAL_BOOTSTRAP_ADMIN_PASSWORD;
-    }
-    if (ORIGINAL_BOOTSTRAP_ADMIN_DISPLAY_NAME === undefined) {
-      delete process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME;
-    } else {
-      process.env.OA_BOOTSTRAP_ADMIN_DISPLAY_NAME = ORIGINAL_BOOTSTRAP_ADMIN_DISPLAY_NAME;
-    }
   });
 
-  it("persists login sessions, bootstraps legacy memberships, and projects the user into room humans", async () => {
-    configureBootstrapAdmin({ handle: "alice", password: "secret-pass", displayName: "Alice" });
+  it("allows first-user registration, makes that user a workspace admin, and flips back to login after logout", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-auth-runtime-"));
     const runtime = createRuntime(workspaceRoot);
     runtimes.push(runtime);
@@ -112,6 +85,13 @@ describe("workspace runtime auth", () => {
       templateId: "template-product-pod",
     });
 
+    const initialClientState = await runtime.getClientState();
+    expect(initialClientState.auth).toEqual(expect.objectContaining({
+      required: true,
+      authenticated: false,
+      canRegister: true,
+    }));
+
     const login = await runtime.login({
       handle: "alice",
       password: "secret-pass",
@@ -120,6 +100,11 @@ describe("workspace runtime auth", () => {
 
     expect(login.authenticated).toBe(true);
     expect(login.createdUser).toBe(true);
+    expect(login.user).toEqual(expect.objectContaining({
+      handle: "alice",
+      displayName: "Alice",
+      isAdmin: true,
+    }));
     expect(login.memberships).toEqual([
       expect.objectContaining({
         projectId: created.projectId,
@@ -169,10 +154,18 @@ describe("workspace runtime auth", () => {
 
     const restored = await resumedRuntime.restoreSession({ sessionToken: login.sessionToken });
     expect(restored).toEqual(expect.objectContaining({ authenticated: true }));
+
+    await resumedRuntime.logout({ sessionToken: login.sessionToken });
+
+    const loggedOutState = await resumedRuntime.getClientState();
+    expect(loggedOutState.auth).toEqual(expect.objectContaining({
+      required: true,
+      authenticated: false,
+      canRegister: false,
+    }));
   });
 
   it("requires auth for client workspace state and only reveals projects after login", async () => {
-    configureBootstrapAdmin({ handle: "alice", password: "secret-pass", displayName: "Alice" });
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-auth-runtime-client-state-"));
     const runtime = createRuntime(workspaceRoot);
     runtimes.push(runtime);
@@ -199,8 +192,7 @@ describe("workspace runtime auth", () => {
     expect(authenticated.snapshot.roomOrderByProject[created.projectId]).toEqual([created.roomId]);
   });
 
-  it("rejects project mutations when the logged-in user is not a project member", async () => {
-    configureBootstrapAdmin({ handle: "owner", password: "owner-pass", displayName: "Owner" });
+  it("requires invited users to self-set a password before project access is evaluated", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-auth-runtime-gate-"));
     const runtime = createRuntime(workspaceRoot);
     runtimes.push(runtime);
@@ -216,18 +208,22 @@ describe("workspace runtime auth", () => {
     });
     expect(owner.memberships[0]?.projectId).toBe(created.projectId);
 
-    await runtime.createManagedUser({
+    const invite = await runtime.createManagedUser({
       sessionToken: owner.sessionToken,
       handle: "outsider",
       displayName: "Outsider",
-      password: "outsider-pass",
     });
+    expect(invite.setup.path).toContain("/?setup=");
+    expect(invite.user.setupPending).toBe(true);
 
-    const outsider = await runtime.login({
-      handle: "outsider",
+    const outsider = await runtime.completeUserSetup({
+      token: invite.setup.token,
       password: "outsider-pass",
-      displayName: "Outsider",
     });
+    expect(outsider.user).toEqual(expect.objectContaining({
+      handle: "outsider",
+      isAdmin: false,
+    }));
     expect(outsider.memberships).toHaveLength(0);
 
     await expect(runtime.createRoom(
@@ -241,7 +237,6 @@ describe("workspace runtime auth", () => {
 
   it("keeps runtime online after logout when background watchers are pending or scheduled", async () => {
     vi.useFakeTimers();
-    configureBootstrapAdmin({ handle: "alice", password: "secret-pass", displayName: "Alice" });
 
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-auth-runtime-logout-watchers-"));
     let holdScribe = false;

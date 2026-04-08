@@ -249,16 +249,6 @@ function normalizeWorkspaceSnapshot(
     ],
   ).filter((userId) => Boolean(normalizedUsers[userId]));
 
-  if (normalizedUserOrder.length > 0 && !Object.values(normalizedUsers).some((user) => user.isAdmin === true)) {
-    const bootstrapUserId = normalizedUserOrder[0];
-    if (bootstrapUserId && normalizedUsers[bootstrapUserId]) {
-      normalizedUsers[bootstrapUserId] = {
-        ...normalizedUsers[bootstrapUserId],
-        isAdmin: true,
-      };
-    }
-  }
-
   const normalizedAuthSessions = Object.fromEntries(
     Object.entries(snapshot.authSessions ?? {}).flatMap(([sessionId, session]) => {
       const tokenHash = session.tokenHash?.trim() || "";
@@ -292,6 +282,41 @@ function normalizeWorkspaceSnapshot(
       ...(snapshot.authSessionOrder?.length ? snapshot.authSessionOrder : Object.keys(normalizedAuthSessions)),
     ],
   ).filter((sessionId) => Boolean(normalizedAuthSessions[sessionId]));
+
+  const normalizedUserSetupTokens = Object.fromEntries(
+    Object.entries(snapshot.userSetupTokens ?? {}).flatMap(([tokenId, token]) => {
+      const tokenHash = token.tokenHash?.trim() || "";
+      const createdAt = token.createdAt?.trim() || "";
+      const expiresAt = token.expiresAt?.trim() || "";
+      const expiresAtMs = Date.parse(expiresAt);
+
+      if (
+        token.usedAt
+        || !normalizedUsers[token.userId]
+        || !tokenHash
+        || !createdAt
+        || !Number.isFinite(expiresAtMs)
+        || expiresAtMs <= nowMs
+      ) {
+        return [];
+      }
+
+      return [[tokenId, {
+        ...token,
+        tokenHash,
+        createdAt,
+        expiresAt,
+        createdByUserId: normalizedUsers[token.createdByUserId ?? ""] ? token.createdByUserId : undefined,
+        usedAt: undefined,
+      }]];
+    }),
+  );
+
+  const normalizedUserSetupTokenOrder = dedupeIds(
+    [
+      ...(snapshot.userSetupTokenOrder?.length ? snapshot.userSetupTokenOrder : Object.keys(normalizedUserSetupTokens)),
+    ],
+  ).filter((tokenId) => Boolean(normalizedUserSetupTokens[tokenId]));
 
   const normalizedProjectMemberships = Object.fromEntries(
     Object.entries(snapshot.projectMemberships ?? {}).flatMap(([membershipId, membership]) => {
@@ -401,6 +426,8 @@ function normalizeWorkspaceSnapshot(
     userOrder: normalizedUserOrder,
     authSessions: normalizedAuthSessions,
     authSessionOrder: normalizedAuthSessionOrder,
+    userSetupTokens: normalizedUserSetupTokens,
+    userSetupTokenOrder: normalizedUserSetupTokenOrder,
     projectMemberships: normalizedProjectMemberships,
     humans: normalizedHumans,
     humanOrderByRoom: normalizedHumanOrderByRoom,
@@ -498,6 +525,8 @@ function normalizeWorkspaceSnapshot(
     userOrder: normalizedUserOrder,
     authSessions: normalizedAuthSessions,
     authSessionOrder: normalizedAuthSessionOrder,
+    userSetupTokens: normalizedUserSetupTokens,
+    userSetupTokenOrder: normalizedUserSetupTokenOrder,
     projectMemberships: normalizedProjectMemberships,
     humans: normalizedHumans,
     humanOrderByRoom: normalizedHumanOrderByRoom,

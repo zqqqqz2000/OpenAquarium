@@ -65,7 +65,7 @@ describe("MessageMarkdown", () => {
 
     const inlineImage = screen.getByRole("img", { name: "流程图" });
     expect(inlineImage.getAttribute("src")).toContain(
-      "http://127.0.0.1:4301/api/rooms/room-rich/assets?path=",
+      "http://localhost:4301/api/rooms/room-rich/assets?path=",
     );
     expect(decodeURIComponent(inlineImage.getAttribute("src") ?? "")).toContain(
       "./artifacts/plan.png",

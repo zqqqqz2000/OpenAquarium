@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WorkspaceAuthGate, WorkspaceAuthProfileControl } from "@/components/auth/workspace-auth-controls";
 import { RECOMMENDED_DEV_RUNTIME_COMMAND } from "@/lib/runtime-dev";
@@ -46,11 +46,15 @@ const availableProjects = [
 ];
 
 describe("workspace auth controls", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+  });
+
   it("submits login credentials and clears the password after success", async () => {
     const user = userEvent.setup();
     const onLogin = vi.fn(async () => undefined);
 
-    render(<WorkspaceAuthGate connected error={undefined} onLogin={onLogin} />);
+    render(<WorkspaceAuthGate connected error={undefined} onLogin={onLogin} onCompleteSetup={vi.fn(async () => undefined)} />);
 
     await user.type(screen.getByLabelText("Handle"), "alice");
     await user.type(screen.getByLabelText("Password"), "hunter2");
@@ -65,8 +69,74 @@ describe("workspace auth controls", () => {
     expect(screen.getByLabelText("Password")).toHaveValue("");
   });
 
+  it("shows register when first-user onboarding is enabled", async () => {
+    const user = userEvent.setup();
+    const onLogin = vi.fn(async () => undefined);
+
+    render(
+      <WorkspaceAuthGate
+        canRegister
+        connected
+        error={undefined}
+        onLogin={onLogin}
+        onCompleteSetup={vi.fn(async () => undefined)}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Register" })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Display name"), "Alice");
+    await user.type(screen.getByLabelText("Handle"), "alice");
+    await user.type(screen.getByLabelText("Password"), "hunter2");
+    await user.click(screen.getByRole("button", { name: "Register" }));
+
+    await waitFor(() =>
+      expect(onLogin).toHaveBeenCalledWith({
+        displayName: "Alice",
+        handle: "alice",
+        password: "hunter2",
+      }),
+    );
+  });
+
+  it("submits setup tokens and returns to login mode after success", async () => {
+    const user = userEvent.setup();
+    const onCompleteSetup = vi.fn(async () => undefined);
+    window.history.replaceState({}, "", "/?setup=invite-token");
+
+    render(
+      <WorkspaceAuthGate
+        connected
+        error={undefined}
+        onLogin={vi.fn(async () => undefined)}
+        onCompleteSetup={onCompleteSetup}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Set password" })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Password"), "setup-pass");
+    await user.click(screen.getByRole("button", { name: "Set password" }));
+
+    await waitFor(() =>
+      expect(onCompleteSetup).toHaveBeenCalledWith({
+        token: "invite-token",
+        password: "setup-pass",
+      }),
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Login" })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Back to Login" })).not.toBeInTheDocument();
+  });
+
   it("keeps login disabled while runtime is offline", () => {
-    render(<WorkspaceAuthGate connected={false} error={undefined} onLogin={vi.fn()} />);
+    render(
+      <WorkspaceAuthGate
+        connected={false}
+        error={undefined}
+        onLogin={vi.fn()}
+        onCompleteSetup={vi.fn(async () => undefined)}
+      />,
+    );
 
     expect(screen.getByRole("button", { name: "Login" })).toBeDisabled();
     expect(screen.getByText(`Start the runtime first with \`${RECOMMENDED_DEV_RUNTIME_COMMAND}\`.`)).toBeInTheDocument();
@@ -129,16 +199,43 @@ describe("workspace auth controls", () => {
     await waitFor(() => expect(onLogout).toHaveBeenCalledTimes(1));
   });
 
-  it("lets admins create managed users from the users tab", async () => {
+  it("hides admin-only user management for non-admin sessions", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <WorkspaceAuthProfileControl
+        auth={createAuth()}
+        error={undefined}
+        availableProjects={availableProjects}
+        onLogout={vi.fn(async () => undefined)}
+        onUpdateMe={vi.fn(async () => undefined)}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Alice @alice/i }));
+
+    expect(await screen.findByRole("dialog", { name: "Account" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Users/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("Latest setup link")).not.toBeInTheDocument();
+  });
+
+  it("lets admins create managed invites from the users tab", async () => {
     const user = userEvent.setup();
     const onListManagedUsers = vi.fn(async () => []);
     const onCreateManagedUser = vi.fn(async () => ({
-      id: "user_2",
-      handle: "bob",
-      displayName: "Bob",
-      isAdmin: false,
-      createdAt: "2026-01-02T00:00:00.000Z",
-      memberships: [],
+      user: {
+        id: "user_2",
+        handle: "bob",
+        displayName: "Bob",
+        isAdmin: false,
+        createdAt: "2026-01-02T00:00:00.000Z",
+        setupPending: true,
+        memberships: [],
+      },
+      setup: {
+        path: "/?setup=setup-token",
+        token: "setup-token",
+      },
     }));
 
     render(
@@ -164,16 +261,17 @@ describe("workspace auth controls", () => {
 
     await user.type(screen.getByLabelText("Managed user display name"), "Bob");
     await user.type(screen.getByLabelText("Managed user handle"), "bob");
-    await user.type(screen.getByLabelText("Managed user password"), "bob-pass");
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    expect(screen.queryByLabelText("Managed user password")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Create invite" }));
 
     await waitFor(() =>
       expect(onCreateManagedUser).toHaveBeenCalledWith({
         handle: "bob",
         displayName: "Bob",
-        password: "bob-pass",
         isAdmin: false,
       }),
     );
+    await waitFor(() => expect(screen.getByLabelText("Latest setup path")).toHaveValue("/?setup=setup-token"));
+    expect(screen.getByLabelText("Latest setup token")).toHaveValue("setup-token");
   });
 });

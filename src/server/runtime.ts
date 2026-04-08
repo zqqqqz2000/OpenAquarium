@@ -157,11 +157,8 @@ const DEFAULT_TASK_EXECUTION_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TASK_EXECUTION_MAX_RETRIES = 5;
 const RUNNING_TASK_REAPER_MAX_INTERVAL_MS = 60 * 1000;
 const AUTH_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const USER_SETUP_TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const USER_PROJECTION_ACCOUNT_PREFIX = "account_user_";
-const DEFAULT_BOOTSTRAP_ADMIN_HANDLE = "admin";
-const BOOTSTRAP_ADMIN_HANDLE_ENV_KEY = "OA_BOOTSTRAP_ADMIN_HANDLE";
-const BOOTSTRAP_ADMIN_PASSWORD_ENV_KEY = "OA_BOOTSTRAP_ADMIN_PASSWORD";
-const BOOTSTRAP_ADMIN_DISPLAY_NAME_ENV_KEY = "OA_BOOTSTRAP_ADMIN_DISPLAY_NAME";
 
 interface AuthenticatedSession {
   session: AuthSession;
@@ -171,6 +168,7 @@ interface AuthenticatedSession {
 interface AuthStatePayload {
   required: boolean;
   authenticated: false;
+  canRegister?: boolean;
 }
 
 interface ProjectMemberView {
@@ -191,6 +189,7 @@ interface ManagedUserView {
   isAdmin: boolean;
   createdAt: string;
   updatedAt?: string;
+  setupPending: boolean;
   memberships: Array<{
     id: string;
     projectId: string;
@@ -200,6 +199,11 @@ interface ManagedUserView {
     createdAt: string;
     updatedAt?: string;
   }>;
+}
+
+interface UserSetupLinkPayload {
+  token: string;
+  path: string;
 }
 
 function normalizeUserHandle(value: string): string {
@@ -219,59 +223,11 @@ function countWorkspaceAdmins(snapshot: WorkspaceSnapshot): number {
   return Object.values(snapshot.users ?? {}).filter((user) => !user.archivedAt && user.isAdmin === true).length;
 }
 
-function ensureWorkspaceAdminPresence(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
-  const activeUsers = Object.values(snapshot.users ?? {}).filter((user) => !user.archivedAt);
-  if (activeUsers.length === 0 || activeUsers.some((user) => user.isAdmin === true)) {
-    return snapshot;
-  }
-
-  const preferredUserId =
-    (snapshot.userOrder ?? []).find((userId) => {
-      const candidate = snapshot.users?.[userId];
-      return Boolean(candidate && !candidate.archivedAt);
-    })
-    ?? activeUsers
-      .slice()
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))[0]?.id;
-  if (!preferredUserId || !snapshot.users?.[preferredUserId]) {
-    return snapshot;
-  }
-
-  return {
-    ...snapshot,
-    users: {
-      ...snapshot.users,
-      [preferredUserId]: {
-        ...snapshot.users[preferredUserId],
-        isAdmin: true,
-      },
-    },
-  };
-}
-
-function readBootstrapAdminConfig(): {
-  handle: string;
-  password: string;
-  displayName: string;
-} | undefined {
-  const password = process.env[BOOTSTRAP_ADMIN_PASSWORD_ENV_KEY]?.trim();
-  if (!password) {
-    return undefined;
-  }
-
-  const handle = normalizeUserHandle(process.env[BOOTSTRAP_ADMIN_HANDLE_ENV_KEY] ?? DEFAULT_BOOTSTRAP_ADMIN_HANDLE);
-  if (!handle) {
-    return undefined;
-  }
-
-  return {
-    handle,
-    password,
-    displayName: normalizeUserDisplayName(process.env[BOOTSTRAP_ADMIN_DISPLAY_NAME_ENV_KEY], handle),
-  };
-}
-
 function hashAuthToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function hashUserSetupToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -290,8 +246,20 @@ function createAuthSessionToken(): string {
   return `${randomUUID().replace(/-/gu, "")}${randomBytes(16).toString("hex")}`;
 }
 
+function createUserSetupToken(): string {
+  return `${randomUUID().replace(/-/gu, "")}${randomBytes(16).toString("hex")}`;
+}
+
 function buildAuthSessionExpiry(createdAt: string): string {
   return new Date(Date.parse(createdAt) + AUTH_SESSION_MAX_AGE_MS).toISOString();
+}
+
+function buildUserSetupExpiry(createdAt: string): string {
+  return new Date(Date.parse(createdAt) + USER_SETUP_TOKEN_MAX_AGE_MS).toISOString();
+}
+
+function buildUserSetupPath(token: string): string {
+  return `/?setup=${encodeURIComponent(token)}`;
 }
 
 function getProjectMembershipId(projectId: string, userId: string): string {
@@ -322,6 +290,8 @@ function cloneAuthCollections(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
     userOrder: [...(snapshot.userOrder ?? [])],
     authSessions: snapshot.authSessions ? { ...snapshot.authSessions } : {},
     authSessionOrder: [...(snapshot.authSessionOrder ?? [])],
+    userSetupTokens: snapshot.userSetupTokens ? { ...snapshot.userSetupTokens } : {},
+    userSetupTokenOrder: [...(snapshot.userSetupTokenOrder ?? [])],
     projectMemberships: snapshot.projectMemberships ? { ...snapshot.projectMemberships } : {},
     humans: snapshot.humans ? { ...snapshot.humans } : {},
     humanOrderByRoom: snapshot.humanOrderByRoom
@@ -720,7 +690,7 @@ export class WorkspaceRuntime {
     context?: MutationContext;
     logger?: DiagnosticsLogger;
   }) {
-    this.snapshot = ensureWorkspaceAdminPresence(args.initialSnapshot);
+    this.snapshot = args.initialSnapshot;
     Object.values(args.initialSnapshot.rooms).forEach((room) => {
       if (room.watchersSuspended === true) {
         this.suspendedWatcherRoomIds.add(room.id);
@@ -1256,6 +1226,7 @@ export class WorkspaceRuntime {
         : {
             required: authRequired,
             authenticated: false,
+            canRegister: !this.hasEffectiveUsers(),
           },
     };
   }
@@ -1341,7 +1312,92 @@ export class WorkspaceRuntime {
   private buildManagedUserView(user: User): ManagedUserView {
     return {
       ...this.buildUserView(user),
+      setupPending: this.hasActiveUserSetupToken(user.id),
       memberships: this.buildMembershipViews(user.id),
+    };
+  }
+
+  private hasEffectiveUsers(snapshot: WorkspaceSnapshot = this.snapshot): boolean {
+    return Object.values(snapshot.users ?? {}).some((user) => !user.archivedAt);
+  }
+
+  private listActiveUserSetupTokens(snapshot: WorkspaceSnapshot = this.snapshot, userId?: string) {
+    const nowMs = Date.parse(this.context.now());
+    return Object.values(snapshot.userSetupTokens ?? {})
+      .filter((token) => !token.usedAt)
+      .filter((token) => (!userId || token.userId === userId))
+      .filter((token) => Boolean(snapshot.users?.[token.userId] && !snapshot.users?.[token.userId]?.archivedAt))
+      .filter((token) => {
+        const expiresAtMs = Date.parse(token.expiresAt);
+        return Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+      });
+  }
+
+  private hasActiveUserSetupToken(userId: string, snapshot: WorkspaceSnapshot = this.snapshot): boolean {
+    return this.listActiveUserSetupTokens(snapshot, userId).length > 0;
+  }
+
+  private revokeUserSetupTokens(snapshot: WorkspaceSnapshot, userId: string): void {
+    Object.entries(snapshot.userSetupTokens ?? {}).forEach(([tokenId, token]) => {
+      if (token.userId === userId) {
+        delete snapshot.userSetupTokens?.[tokenId];
+      }
+    });
+
+    if (snapshot.userSetupTokenOrder) {
+      snapshot.userSetupTokenOrder = snapshot.userSetupTokenOrder.filter((tokenId) => Boolean(snapshot.userSetupTokens?.[tokenId]));
+    }
+  }
+
+  private issueUserSetupToken(
+    snapshot: WorkspaceSnapshot,
+    args: { userId: string; createdByUserId?: string; now: string },
+  ): UserSetupLinkPayload {
+    const { userId, createdByUserId, now } = args;
+    const token = createUserSetupToken();
+    const tokenId = this.context.createId("setup");
+
+    this.revokeUserSetupTokens(snapshot, userId);
+    snapshot.userSetupTokens ??= {};
+    snapshot.userSetupTokenOrder ??= [];
+    snapshot.userSetupTokens[tokenId] = {
+      id: tokenId,
+      userId,
+      tokenHash: hashUserSetupToken(token),
+      createdAt: now,
+      expiresAt: buildUserSetupExpiry(now),
+      createdByUserId,
+    };
+    snapshot.userSetupTokenOrder = [...snapshot.userSetupTokenOrder, tokenId];
+
+    return {
+      token,
+      path: buildUserSetupPath(token),
+    };
+  }
+
+  private createAuthenticatedSession(
+    snapshot: WorkspaceSnapshot,
+    user: User,
+    now: string,
+  ): { sessionId: string; sessionToken: string } {
+    const sessionToken = createAuthSessionToken();
+    const sessionId = this.context.createId("session");
+    snapshot.authSessions ??= {};
+    snapshot.authSessionOrder ??= [];
+    snapshot.authSessions[sessionId] = {
+      id: sessionId,
+      userId: user.id,
+      tokenHash: hashAuthToken(sessionToken),
+      createdAt: now,
+      lastSeenAt: now,
+      expiresAt: buildAuthSessionExpiry(now),
+    };
+    snapshot.authSessionOrder = [...snapshot.authSessionOrder, sessionId];
+
+    return {
+      sessionId,
+      sessionToken,
     };
   }
 
@@ -1672,26 +1728,15 @@ export class WorkspaceRuntime {
       }
       user = existingUser;
     } else {
-      const activeUserCount = Object.values(next.users ?? {}).filter((candidate) => !candidate.archivedAt).length;
-      const bootstrapAdmin = readBootstrapAdminConfig();
-      if (activeUserCount > 0) {
+      if (this.hasEffectiveUsers(next)) {
         throw new UnauthorizedRuntimeError("Invalid handle or password.");
       }
-      if (!bootstrapAdmin) {
-        throw new UnauthorizedRuntimeError(
-          `No users are provisioned. Configure ${BOOTSTRAP_ADMIN_PASSWORD_ENV_KEY} to initialize the first admin account.`,
-        );
-      }
-      if (handle !== bootstrapAdmin.handle || password !== bootstrapAdmin.password) {
-        throw new UnauthorizedRuntimeError(`Use the configured bootstrap admin account @${bootstrapAdmin.handle} to initialize access.`);
-      }
-
       const userId = this.context.createId("user");
       const passwordSalt = randomBytes(16).toString("hex");
       user = {
         id: userId,
         handle,
-        displayName: normalizeUserDisplayName(input.displayName, bootstrapAdmin.displayName),
+        displayName: normalizeUserDisplayName(input.displayName, handle),
         isAdmin: true,
         passwordSalt,
         passwordHash: createPasswordHash(password, passwordSalt),
@@ -1706,17 +1751,7 @@ export class WorkspaceRuntime {
     this.maybeBootstrapLegacyProjectOwnership(next, user.id, now);
     this.syncUserProjection(next, user);
 
-    const sessionToken = createAuthSessionToken();
-    const sessionId = this.context.createId("session");
-    next.authSessions![sessionId] = {
-      id: sessionId,
-      userId: user.id,
-      tokenHash: hashAuthToken(sessionToken),
-      createdAt: now,
-      lastSeenAt: now,
-      expiresAt: buildAuthSessionExpiry(now),
-    };
-    next.authSessionOrder = [...(next.authSessionOrder ?? []), sessionId];
+    const { sessionId, sessionToken } = this.createAuthenticatedSession(next, user, now);
 
     await this.applySnapshot(previous, next);
 
@@ -1727,6 +1762,66 @@ export class WorkspaceRuntime {
       },
       sessionToken,
       createdUser,
+    );
+  }
+
+  async completeUserSetup(args: {
+    token: string;
+    password: string;
+  }): Promise<ReturnType<WorkspaceRuntime["buildAuthResponse"]>> {
+    const token = args.token.trim();
+    const password = args.password.trim();
+
+    if (!token) {
+      throw new Error("Setup token is required.");
+    }
+    if (!password) {
+      throw new Error("Password is required.");
+    }
+
+    const previous = this.snapshot;
+    const next = cloneAuthCollections(previous);
+    const setupToken = Object.values(next.userSetupTokens ?? {})
+      .find((candidate) => !candidate.usedAt && candidate.tokenHash === hashUserSetupToken(token));
+    if (!setupToken) {
+      throw new UnauthorizedRuntimeError("Setup link is invalid or has expired.");
+    }
+
+    const expiresAtMs = Date.parse(setupToken.expiresAt);
+    const nowMs = Date.parse(this.context.now());
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
+      delete next.userSetupTokens?.[setupToken.id];
+      throw new UnauthorizedRuntimeError("Setup link is invalid or has expired.");
+    }
+
+    const existingUser = next.users?.[setupToken.userId];
+    if (!existingUser || existingUser.archivedAt) {
+      delete next.userSetupTokens?.[setupToken.id];
+      throw new UnauthorizedRuntimeError("Setup link is invalid or has expired.");
+    }
+
+    const now = this.context.now();
+    const passwordSalt = randomBytes(16).toString("hex");
+    const updatedUser: User = {
+      ...existingUser,
+      passwordSalt,
+      passwordHash: createPasswordHash(password, passwordSalt),
+      updatedAt: now,
+    };
+
+    next.users![updatedUser.id] = updatedUser;
+    this.syncUserProjection(next, updatedUser);
+    this.revokeUserSetupTokens(next, updatedUser.id);
+    const { sessionId, sessionToken } = this.createAuthenticatedSession(next, updatedUser, now);
+
+    await this.applySnapshot(previous, next);
+
+    return this.buildAuthResponse(
+      {
+        session: this.snapshot.authSessions![sessionId],
+        user: this.snapshot.users![updatedUser.id],
+      },
+      sessionToken,
     );
   }
 
@@ -1835,19 +1930,14 @@ export class WorkspaceRuntime {
     sessionToken?: string;
     handle: string;
     displayName: string;
-    password: string;
     isAdmin?: boolean;
-  }): Promise<{ user: ManagedUserView }> {
-    await this.requireWorkspaceAdmin(args.sessionToken);
+  }): Promise<{ user: ManagedUserView; setup: UserSetupLinkPayload }> {
+    const admin = await this.requireWorkspaceAdmin(args.sessionToken);
     const handle = normalizeUserHandle(args.handle);
-    const password = args.password.trim();
     const displayName = normalizeUserDisplayName(args.displayName, handle);
 
     if (!handle) {
       throw new Error("Handle is required.");
-    }
-    if (!password) {
-      throw new Error("Password is required.");
     }
     if (!displayName.trim()) {
       throw new Error("Display name is required.");
@@ -1864,6 +1954,7 @@ export class WorkspaceRuntime {
     const now = this.context.now();
     const userId = this.context.createId("user");
     const passwordSalt = randomBytes(16).toString("hex");
+    const placeholderPassword = randomUUID();
 
     next.users![userId] = {
       id: userId,
@@ -1871,16 +1962,18 @@ export class WorkspaceRuntime {
       displayName,
       isAdmin: args.isAdmin === true,
       passwordSalt,
-      passwordHash: createPasswordHash(password, passwordSalt),
+      passwordHash: createPasswordHash(placeholderPassword, passwordSalt),
       createdAt: now,
       updatedAt: now,
     };
     next.userOrder = [...(next.userOrder ?? []), userId];
+    const setup = this.issueUserSetupToken(next, { userId, createdByUserId: admin.user.id, now });
 
     await this.applySnapshot(previous, next);
 
     return {
       user: this.buildManagedUserView(this.snapshot.users![userId]),
+      setup,
     };
   }
 
@@ -1889,7 +1982,6 @@ export class WorkspaceRuntime {
     userId: string;
     handle?: string;
     displayName?: string;
-    password?: string;
     isAdmin?: boolean;
   }): Promise<{ user: ManagedUserView }> {
     await this.requireWorkspaceAdmin(args.sessionToken);
@@ -1903,7 +1995,6 @@ export class WorkspaceRuntime {
       ? existingUser.displayName
       : normalizeUserDisplayName(args.displayName, nextHandle);
     const nextIsAdmin = args.isAdmin === undefined ? existingUser.isAdmin === true : args.isAdmin === true;
-    const nextPassword = args.password?.trim();
 
     if (!nextHandle) {
       throw new Error("Handle is required.");
@@ -1930,11 +2021,6 @@ export class WorkspaceRuntime {
       isAdmin: nextIsAdmin,
       updatedAt: this.context.now(),
     };
-    if (nextPassword) {
-      const passwordSalt = randomBytes(16).toString("hex");
-      updatedUser.passwordSalt = passwordSalt;
-      updatedUser.passwordHash = createPasswordHash(nextPassword, passwordSalt);
-    }
 
     next.users![updatedUser.id] = updatedUser;
     this.syncUserProjection(next, updatedUser);
@@ -1942,6 +2028,33 @@ export class WorkspaceRuntime {
 
     return {
       user: this.buildManagedUserView(this.snapshot.users![updatedUser.id]),
+    };
+  }
+
+  async issueManagedUserSetup(args: {
+    sessionToken?: string;
+    userId: string;
+  }): Promise<{ user: ManagedUserView; setup: UserSetupLinkPayload }> {
+    const admin = await this.requireWorkspaceAdmin(args.sessionToken);
+    const existingUser = this.snapshot.users?.[args.userId];
+    if (!existingUser || existingUser.archivedAt) {
+      throw new Error(`Unknown user "${args.userId}"`);
+    }
+
+    const previous = this.snapshot;
+    const next = cloneAuthCollections(previous);
+    const now = this.context.now();
+    const setup = this.issueUserSetupToken(next, {
+      userId: existingUser.id,
+      createdByUserId: admin.user.id,
+      now,
+    });
+
+    await this.applySnapshot(previous, next);
+
+    return {
+      user: this.buildManagedUserView(this.snapshot.users![existingUser.id]),
+      setup,
     };
   }
 

@@ -252,7 +252,7 @@ function buildDefaultTodoTreeXml(args: {
     "      <note>Put pending work here.</note>",
     "    </node>",
     `    <node id="doing" title="In Progress" status="todo"${ownerAttribute}>`,
-    "      <note>Move active items here and attach evidence with <code> or <image>.</note>",
+    "      <note>Move active items here and attach evidence with &lt;code&gt; or &lt;image&gt;.</note>",
     "    </node>",
     '    <node id="done" title="Done" status="done">',
     "      <note>Move completed work here.</note>",

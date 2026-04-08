@@ -15,6 +15,7 @@ export type ProviderModelProfileId = string;
 export type AccountId = string;
 export type UserId = string;
 export type AuthSessionId = string;
+export type UserSetupTokenId = string;
 export type ProjectMembershipId = string;
 export type ProjectRole = "owner" | "admin" | "member";
 
@@ -384,6 +385,16 @@ export interface AuthSession {
   expiresAt: string;
 }
 
+export interface UserSetupToken {
+  id: UserSetupTokenId;
+  userId: UserId;
+  tokenHash: string;
+  createdAt: string;
+  expiresAt: string;
+  createdByUserId?: UserId;
+  usedAt?: string;
+}
+
 export interface ProjectMembership {
   id: ProjectMembershipId;
   projectId: ProjectId;
@@ -416,6 +427,8 @@ export interface WorkspaceSnapshot {
   userOrder?: UserId[];
   authSessions?: Record<AuthSessionId, AuthSession>;
   authSessionOrder?: AuthSessionId[];
+  userSetupTokens?: Record<UserSetupTokenId, UserSetupToken>;
+  userSetupTokenOrder?: UserSetupTokenId[];
   projectMemberships?: Record<ProjectMembershipId, ProjectMembership>;
   selection: WorkspaceSelection;
   currentUserName: string;

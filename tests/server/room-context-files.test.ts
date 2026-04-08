@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { createSeedWorkspace } from "@/lib/sample-data/workspace";
+import { parseAqTodoXml } from "@/lib/aqtodo";
 import {
   browseProjectDirectories,
   getDefaultRoomTodoTreeFilePath,
@@ -75,6 +76,12 @@ describe("room context files", () => {
     expect(todoTreeXml).toContain('id="root" title="');
     expect(todoTreeXml).toContain('status="todo"');
     expect(todoTreeXml).toContain('title="In Progress"');
+    expect(todoTreeXml).toContain("&lt;code&gt; or &lt;image&gt;");
+
+    const parsedTodoTree = parseAqTodoXml(todoTreeXml);
+    expect(parsedTodoTree.root.children[1]?.note).toBe(
+      "Move active items here and attach evidence with <code> or <image>.",
+    );
   });
 
   it("inspects an existing project directory and reports reusable room context", async () => {
