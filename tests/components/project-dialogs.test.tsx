@@ -14,10 +14,11 @@ const { navigateMock, workspaceStoreState } = vi.hoisted(() => ({
   navigateMock: vi.fn(),
   workspaceStoreState: {
     browseProjectDirectory: vi.fn(),
+    createProjectDirectory: vi.fn(),
     createProject: vi.fn(),
     createRoom: vi.fn(),
     inspectProjectPath: vi.fn(),
-  } satisfies Pick<WorkspaceRemoteStoreState, "browseProjectDirectory" | "createProject" | "createRoom" | "inspectProjectPath">,
+  } satisfies Pick<WorkspaceRemoteStoreState, "browseProjectDirectory" | "createProjectDirectory" | "createProject" | "createRoom" | "inspectProjectPath">,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -26,7 +27,7 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("@/store/workspace-store-context", () => ({
   useWorkspaceStore: <T,>(
-    selector: (state: Pick<WorkspaceRemoteStoreState, "browseProjectDirectory" | "createProject" | "createRoom" | "inspectProjectPath">) => T,
+    selector: (state: Pick<WorkspaceRemoteStoreState, "browseProjectDirectory" | "createProjectDirectory" | "createProject" | "createRoom" | "inspectProjectPath">) => T,
   ) => selector(workspaceStoreState),
 }));
 
@@ -68,6 +69,7 @@ function createBrowsePayload(args: {
   entries?: ProjectDirectoryBrowsePayload["entries"];
   inspection?: ProjectPathInspectionPayload;
   isWorkspaceRoot?: boolean;
+  isWithinWorkspaceRoot?: boolean;
   parentPath?: string;
   path?: string;
 } = {}): ProjectDirectoryBrowsePayload {
@@ -77,6 +79,7 @@ function createBrowsePayload(args: {
     path,
     parentPath: args.parentPath,
     isWorkspaceRoot: args.isWorkspaceRoot ?? path === DEFAULT_WORKSPACE_ROOT,
+    isWithinWorkspaceRoot: args.isWithinWorkspaceRoot ?? (path === DEFAULT_WORKSPACE_ROOT || path.startsWith(`${DEFAULT_WORKSPACE_ROOT}/`)),
     entries: args.entries ?? [],
     inspection: args.inspection ?? createInspection(path),
   };
@@ -86,6 +89,7 @@ afterEach(() => {
   vi.clearAllMocks();
   navigateMock.mockReset();
   workspaceStoreState.browseProjectDirectory.mockReset();
+  workspaceStoreState.createProjectDirectory.mockReset();
   workspaceStoreState.createProject.mockReset();
   workspaceStoreState.createRoom.mockReset();
   workspaceStoreState.inspectProjectPath.mockReset();
@@ -95,6 +99,15 @@ afterEach(() => {
       path,
       parentPath: path === DEFAULT_WORKSPACE_ROOT ? "/tmp" : DEFAULT_WORKSPACE_ROOT,
       isWorkspaceRoot: path === DEFAULT_WORKSPACE_ROOT,
+    });
+  });
+  workspaceStoreState.createProjectDirectory.mockImplementation(({ path, name }: { path: string; name: string }) => {
+    const nextPath = `${path}/${name}`;
+    return createBrowsePayload({
+      path: nextPath,
+      parentPath: path,
+      isWorkspaceRoot: false,
+      inspection: createInspection(nextPath),
     });
   });
   workspaceStoreState.inspectProjectPath.mockImplementation(({ path }: { path: string }) => createInspection(path));
@@ -251,6 +264,83 @@ describe("project dialogs", () => {
       templateId: snapshot.templateOrder[0],
       path: childPath,
     });
+  });
+
+  it("creates a new child folder from the right-side action and uses it as the selected project root", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+    const createdPath = `${DEFAULT_WORKSPACE_ROOT}/new-project`;
+
+    workspaceStoreState.createProjectDirectory.mockResolvedValue(
+      createBrowsePayload({
+        path: createdPath,
+        parentPath: DEFAULT_WORKSPACE_ROOT,
+        isWorkspaceRoot: false,
+        inspection: createInspection(createdPath),
+      }),
+    );
+    workspaceStoreState.inspectProjectPath.mockResolvedValue(createInspection(createdPath));
+    workspaceStoreState.createProject.mockResolvedValue({
+      projectId: "project-new-folder",
+      roomId: "room-new-folder",
+    });
+
+    render(<CreateProjectDialog templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])} />);
+
+    await user.click(screen.getByRole("button", { name: "New project" }));
+    await user.click(screen.getByRole("button", { name: "New directory" }));
+    await user.type(screen.getByRole("textbox", { name: "Directory name" }), "new-project");
+    await user.click(screen.getByRole("button", { name: "Create directory" }));
+
+    expect(workspaceStoreState.createProjectDirectory).toHaveBeenCalledWith({
+      path: DEFAULT_WORKSPACE_ROOT,
+      name: "new-project",
+    });
+    expect((await screen.findAllByText(createdPath)).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Current folder selected" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+
+    expect(workspaceStoreState.inspectProjectPath).toHaveBeenCalledWith({ path: createdPath });
+    expect(workspaceStoreState.createProject).toHaveBeenCalledWith({
+      projectName: "Untitled Project",
+      templateId: snapshot.templateOrder[0],
+      path: createdPath,
+    });
+  });
+
+  it("disables directory creation after leaving the workspace root", async () => {
+    const user = userEvent.setup();
+    const snapshot = createSeedWorkspace();
+
+    workspaceStoreState.browseProjectDirectory.mockImplementation((input?: { path?: string }) => {
+      if (input?.path === "/tmp") {
+        return createBrowsePayload({
+          path: "/tmp",
+          parentPath: "/",
+          isWorkspaceRoot: false,
+          isWithinWorkspaceRoot: false,
+          entries: [{ name: "workspace-root", path: DEFAULT_WORKSPACE_ROOT }],
+          inspection: createInspection("/tmp"),
+        });
+      }
+
+      return createBrowsePayload({
+        path: DEFAULT_WORKSPACE_ROOT,
+        parentPath: "/tmp",
+        isWorkspaceRoot: true,
+        isWithinWorkspaceRoot: true,
+        inspection: createInspection(DEFAULT_WORKSPACE_ROOT),
+      });
+    });
+
+    render(<CreateProjectDialog templates={snapshot.templateOrder.map((templateId) => snapshot.templates[templateId])} />);
+
+    await user.click(screen.getByRole("button", { name: "New project" }));
+    await user.click(screen.getByRole("button", { name: "Parent folder" }));
+
+    expect(await screen.findByText("New directories can only be created inside the workspace root.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New directory" })).toBeDisabled();
   });
 
   it("shows project inspection errors for the selected folder", async () => {

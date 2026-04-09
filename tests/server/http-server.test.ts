@@ -1128,6 +1128,7 @@ describe("workspace http api routing", () => {
     expect(payload.path).toBe(workspaceRoot);
     expect(payload.parentPath).toBe(path.dirname(workspaceRoot));
     expect(payload.isWorkspaceRoot).toBe(true);
+    expect(payload.isWithinWorkspaceRoot).toBe(true);
 
     const entries = payload.entries;
     if (!Array.isArray(entries)) {
@@ -1146,6 +1147,39 @@ describe("workspace http api routing", () => {
     expect((inspection as Record<string, unknown>).projectName).toBe(path.basename(workspaceRoot));
     expect((inspection as Record<string, unknown>).canImport).toBe(false);
     expect((inspection as Record<string, unknown>).roomCount).toBe(0);
+  });
+
+  it("creates project directories through the JSON API", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oa-http-project-path-create-"));
+    const runtime = new WorkspaceRuntime({
+      initialSnapshot: createEmptyRuntimeSnapshot(),
+      persistence: new WorkspacePersistence(path.join(workspaceRoot, ".openaquarium", "state.json")),
+      workspaceRoot,
+      executorFactory: () => new EchoExecutor(),
+    });
+    runtimes.push(runtime);
+
+    const createdPath = path.join(workspaceRoot, "manual-project");
+    const result = await handleWorkspaceJsonApiRequest({
+      runtime,
+      method: "POST",
+      pathname: "/api/system/project-path/create-directory",
+      body: {
+        path: workspaceRoot,
+        name: "manual-project",
+      },
+    });
+
+    expect(result?.statusCode).toBe(200);
+    if (!result || typeof result.payload !== "object" || result.payload === null) {
+      throw new Error("Expected create-directory payload");
+    }
+
+    const payload = result.payload as Record<string, unknown>;
+    expect(payload.path).toBe(createdPath);
+    expect(payload.parentPath).toBe(workspaceRoot);
+    expect(payload.isWorkspaceRoot).toBe(false);
+    expect(payload.isWithinWorkspaceRoot).toBe(true);
   });
 
   it("returns cursor-paged room history through the JSON API", async () => {

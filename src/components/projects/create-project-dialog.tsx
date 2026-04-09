@@ -1,6 +1,6 @@
 import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 
-import { ChevronLeft, Folder, FolderOpen, Plus, RefreshCcw } from "lucide-react";
+import { ChevronLeft, Folder, FolderOpen, FolderPlus, Plus, RefreshCcw } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
 import type { TeamTemplate } from "@/domain/model";
@@ -55,6 +55,7 @@ export function CreateProjectDialog(props: {
   const navigate = useNavigate();
   const createProject = useWorkspaceStore((state) => state.createProject);
   const browseProjectDirectory = useWorkspaceStore((state) => state.browseProjectDirectory);
+  const createProjectDirectory = useWorkspaceStore((state) => state.createProjectDirectory);
   const inspectProjectPath = useWorkspaceStore((state) => state.inspectProjectPath);
   const [open, setOpen] = useState(false);
   const [projectName, setProjectName] = useState("Untitled Project");
@@ -64,9 +65,13 @@ export function CreateProjectDialog(props: {
   const [actionError, setActionError] = useState<string | undefined>();
   const [browsingDirectory, setBrowsingDirectory] = useState(false);
   const [inspectingSelection, setInspectingSelection] = useState(false);
+  const [showDirectoryCreator, setShowDirectoryCreator] = useState(false);
+  const [newDirectoryName, setNewDirectoryName] = useState("");
+  const [creatingDirectory, setCreatingDirectory] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const browseRequestIdRef = useRef(0);
   const inspectRequestIdRef = useRef(0);
+  const creatingDirectoryRef = useRef(false);
   const creatingProjectRef = useRef(false);
   const resolvedTemplateId = templates.some((template) => template.id === templateId) ? templateId : (templates[0]?.id ?? "");
   const selectedTemplate = templates.find((template) => template.id === resolvedTemplateId);
@@ -75,12 +80,43 @@ export function CreateProjectDialog(props: {
   const selectedProjectPath = selectedProjectDirectory?.path ?? "";
   const importingExistingProject = selectedProjectInspection?.canImport === true;
   const currentFolderSelected = Boolean(directoryBrowser && selectedProjectDirectory?.path === directoryBrowser.path);
+  const canCreateDirectoryInCurrentFolder = directoryBrowser?.isWithinWorkspaceRoot === true;
 
   const syncProjectNameFromInspection = useCallback((inspection: ProjectPathInspectionPayload): void => {
     if (shouldAdoptInspectionProjectName(inspection)) {
       setProjectName(inspection.projectName.trim());
     }
   }, []);
+
+  const syncSelectedDirectoryFromBrowser = useCallback((
+    nextDirectory: ProjectDirectoryBrowsePayload,
+    replaceSelection: boolean,
+  ): void => {
+    if (replaceSelection) {
+      const nextSelection: SelectedProjectDirectory = {
+        path: nextDirectory.path,
+        usesWorkspaceRoot: nextDirectory.isWorkspaceRoot,
+        inspection: nextDirectory.inspection,
+      };
+      setSelectedProjectDirectory(nextSelection);
+      syncProjectNameFromInspection(nextDirectory.inspection);
+      return;
+    }
+
+    setSelectedProjectDirectory((current) => {
+      if (current) {
+        return current;
+      }
+
+      const nextSelection: SelectedProjectDirectory = {
+        path: nextDirectory.path,
+        usesWorkspaceRoot: nextDirectory.isWorkspaceRoot,
+        inspection: nextDirectory.inspection,
+      };
+      syncProjectNameFromInspection(nextDirectory.inspection);
+      return nextSelection;
+    });
+  }, [syncProjectNameFromInspection]);
 
   const loadDirectory = useCallback(async (
     pathValue?: string,
@@ -98,29 +134,7 @@ export function CreateProjectDialog(props: {
       }
 
       setDirectoryBrowser(nextDirectory);
-      if (replaceSelection) {
-        const nextSelection: SelectedProjectDirectory = {
-          path: nextDirectory.path,
-          usesWorkspaceRoot: nextDirectory.isWorkspaceRoot,
-          inspection: nextDirectory.inspection,
-        };
-        setSelectedProjectDirectory(nextSelection);
-        syncProjectNameFromInspection(nextDirectory.inspection);
-      } else {
-        setSelectedProjectDirectory((current) => {
-          if (current) {
-            return current;
-          }
-
-          const nextSelection: SelectedProjectDirectory = {
-            path: nextDirectory.path,
-            usesWorkspaceRoot: nextDirectory.isWorkspaceRoot,
-            inspection: nextDirectory.inspection,
-          };
-          syncProjectNameFromInspection(nextDirectory.inspection);
-          return nextSelection;
-        });
-      }
+      syncSelectedDirectoryFromBrowser(nextDirectory, replaceSelection);
       return nextDirectory;
     } catch (error) {
       if (browseRequestIdRef.current === requestId) {
@@ -132,7 +146,7 @@ export function CreateProjectDialog(props: {
         setBrowsingDirectory(false);
       }
     }
-  }, [browseProjectDirectory, syncProjectNameFromInspection]);
+  }, [browseProjectDirectory, syncSelectedDirectoryFromBrowser]);
 
   const refreshSelectedProjectInspection = async (
     selection: SelectedProjectDirectory | undefined,
@@ -257,11 +271,52 @@ export function CreateProjectDialog(props: {
     })();
   };
 
+  const handleCreateDirectory = (): void => {
+    if (creatingDirectoryRef.current || disabled || !directoryBrowser) {
+      return;
+    }
+
+    const normalizedDirectoryName = newDirectoryName.trim();
+    if (normalizedDirectoryName.length === 0) {
+      setActionError("Directory name is required.");
+      return;
+    }
+
+    if (!canCreateDirectoryInCurrentFolder) {
+      setActionError("New directories can only be created inside the workspace root.");
+      return;
+    }
+
+    creatingDirectoryRef.current = true;
+    setCreatingDirectory(true);
+    void (async () => {
+      try {
+        setActionError(undefined);
+        const nextDirectory = await createProjectDirectory({
+          path: directoryBrowser.path,
+          name: normalizedDirectoryName,
+        });
+        setDirectoryBrowser(nextDirectory);
+        syncSelectedDirectoryFromBrowser(nextDirectory, true);
+        setShowDirectoryCreator(false);
+        setNewDirectoryName("");
+      } catch (error) {
+        setActionError(getErrorMessage(error));
+      } finally {
+        creatingDirectoryRef.current = false;
+        setCreatingDirectory(false);
+      }
+    })();
+  };
+
   useEffect(() => {
     if (!open) {
       setActionError(undefined);
       setDirectoryBrowser(undefined);
       setSelectedProjectDirectory(undefined);
+      setShowDirectoryCreator(false);
+      setNewDirectoryName("");
+      setCreatingDirectory(false);
       setBrowsingDirectory(false);
       setInspectingSelection(false);
       return;
@@ -321,53 +376,112 @@ export function CreateProjectDialog(props: {
               </div>
 
               <div className="rounded-2xl border border-border/70 bg-muted/35 p-4">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        if (directoryBrowser?.parentPath) {
+                          void loadDirectory(directoryBrowser.parentPath, false);
+                        }
+                      }}
+                      disabled={disabled || browsingDirectory || creatingDirectory || creatingProject || !directoryBrowser?.parentPath}
+                    >
+                      <ChevronLeft size={16} />
+                      Parent folder
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        void loadDirectory(undefined, false);
+                      }}
+                      disabled={disabled || browsingDirectory || creatingDirectory || creatingProject}
+                    >
+                      <FolderOpen size={16} />
+                      Workspace root
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        if (directoryBrowser?.path) {
+                          void loadDirectory(directoryBrowser.path, false);
+                        }
+                      }}
+                      disabled={disabled || browsingDirectory || creatingDirectory || creatingProject || !directoryBrowser?.path}
+                    >
+                      <RefreshCcw size={16} />
+                      Refresh
+                    </Button>
+                  </div>
+
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => {
-                      if (directoryBrowser?.parentPath) {
-                        void loadDirectory(directoryBrowser.parentPath, false);
-                      }
+                      setActionError(undefined);
+                      setShowDirectoryCreator((current) => !current);
                     }}
-                    disabled={disabled || browsingDirectory || creatingProject || !directoryBrowser?.parentPath}
+                    disabled={disabled || browsingDirectory || creatingDirectory || creatingProject || !canCreateDirectoryInCurrentFolder}
                   >
-                    <ChevronLeft size={16} />
-                    Parent folder
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => {
-                      void loadDirectory(undefined, false);
-                    }}
-                    disabled={disabled || browsingDirectory || creatingProject}
-                  >
-                    <FolderOpen size={16} />
-                    Workspace root
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => {
-                      if (directoryBrowser?.path) {
-                        void loadDirectory(directoryBrowser.path, false);
-                      }
-                    }}
-                    disabled={disabled || browsingDirectory || creatingProject || !directoryBrowser?.path}
-                  >
-                    <RefreshCcw size={16} />
-                    Refresh
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={handleSelectCurrentDirectory}
-                    disabled={disabled || browsingDirectory || creatingProject || !directoryBrowser || currentFolderSelected}
-                  >
-                    <Folder size={16} />
-                    {currentFolderSelected ? "Current folder selected" : "Select current folder"}
+                    <FolderPlus size={16} />
+                    New directory
                   </Button>
                 </div>
+
+                {!canCreateDirectoryInCurrentFolder && directoryBrowser ? (
+                  <p className="mt-3 mb-0 text-xs leading-5 text-muted-foreground">
+                    New directories can only be created inside the workspace root.
+                  </p>
+                ) : null}
+
+                {showDirectoryCreator ? (
+                  <form
+                    className="mt-3 flex flex-col gap-3 rounded-xl border border-border/60 bg-background/80 p-3"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      handleCreateDirectory();
+                    }}
+                  >
+                    <label className="flex flex-col gap-2">
+                      <span className="text-sm font-medium">Directory name</span>
+                      <Input
+                        aria-label="Directory name"
+                        value={newDirectoryName}
+                        onChange={(event) => setNewDirectoryName(event.currentTarget.value)}
+                        placeholder="new-project"
+                        autoFocus
+                        disabled={disabled || browsingDirectory || creatingDirectory || creatingProject}
+                      />
+                    </label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="m-0 text-xs leading-5 text-muted-foreground">
+                        Creates one child folder under the current directory.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => {
+                            setShowDirectoryCreator(false);
+                            setNewDirectoryName("");
+                          }}
+                          disabled={creatingDirectory}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          type="submit"
+                          disabled={disabled || browsingDirectory || creatingDirectory || creatingProject || newDirectoryName.trim().length === 0}
+                        >
+                          {creatingDirectory ? "Creating directory…" : "Create directory"}
+                        </Button>
+                      </div>
+                    </div>
+                  </form>
+                ) : null}
 
                 <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.9fr)]">
                   <div className="min-w-0 rounded-xl border border-border/60 bg-background/80 p-3">
@@ -385,7 +499,7 @@ export function CreateProjectDialog(props: {
                               onClick={() => {
                                 void loadDirectory(entry.path, false);
                               }}
-                              disabled={disabled || browsingDirectory || creatingProject}
+                              disabled={disabled || browsingDirectory || creatingDirectory || creatingProject}
                             >
                               <Folder size={16} className="shrink-0" />
                               <span className="min-w-0 truncate">{entry.name}</span>
@@ -403,7 +517,15 @@ export function CreateProjectDialog(props: {
                   <div className="min-w-0 rounded-xl border border-border/60 bg-background/80 p-3">
                     <p className="m-0 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Selected folder</p>
                     <p className="mt-2 mb-0 break-all font-mono text-xs leading-6">{selectedProjectPath || "Select a folder to continue."}</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        onClick={handleSelectCurrentDirectory}
+                        disabled={disabled || browsingDirectory || creatingDirectory || creatingProject || !directoryBrowser || currentFolderSelected}
+                      >
+                        <Folder size={16} />
+                        {currentFolderSelected ? "Current folder selected" : "Select current folder"}
+                      </Button>
                       {selectedProjectDirectory?.usesWorkspaceRoot ? (
                         <Badge variant="outline">OA workspace root</Badge>
                       ) : null}
@@ -515,6 +637,7 @@ export function CreateProjectDialog(props: {
                 disabled={
                   disabled
                   || browsingDirectory
+                  || creatingDirectory
                   || inspectingSelection
                   || creatingProject
                   || projectName.trim().length === 0

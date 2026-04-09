@@ -11,7 +11,7 @@ import type {
   WatchSubscription,
   WorkspaceSnapshot,
 } from "@/domain/model";
-import { resolveProjectWorkingDirectory } from "@/server/project-paths";
+import { isPathInsideRoot, resolveProjectWorkingDirectory } from "@/server/project-paths";
 
 const ROOMS_DIRECTORY_NAME = "rooms";
 const INTERACTIVE_DIRECTORY_NAME = "interactive";
@@ -95,6 +95,7 @@ export interface ProjectDirectoryBrowseResult {
   path: string;
   parentPath?: string;
   isWorkspaceRoot: boolean;
+  isWithinWorkspaceRoot: boolean;
   entries: ProjectDirectoryBrowseEntryResult[];
   inspection: ProjectPathInspectionResult;
 }
@@ -540,6 +541,23 @@ async function assertProjectDirectoryExists(projectRoot: string): Promise<void> 
   }
 }
 
+function normalizeProjectDirectoryName(rawName: string): string {
+  const trimmedName = rawName.trim();
+  if (trimmedName.length === 0) {
+    throw new Error("Directory name is required.");
+  }
+
+  if (trimmedName === "." || trimmedName === "..") {
+    throw new Error("Directory name must not be . or ..");
+  }
+
+  if (trimmedName.includes("/") || trimmedName.includes("\\")) {
+    throw new Error("Only single-level directory names are supported.");
+  }
+
+  return trimmedName;
+}
+
 export async function inspectProjectRoomContext(projectRoot: string): Promise<ProjectPathInspectionResult> {
   const normalizedProjectRoot = path.normalize(projectRoot);
   await assertProjectDirectoryExists(normalizedProjectRoot);
@@ -580,6 +598,7 @@ export async function browseProjectDirectories(args: {
     path: normalizedDirectoryPath,
     parentPath: parentPath === normalizedDirectoryPath ? undefined : parentPath,
     isWorkspaceRoot: path.normalize(args.workspaceRoot) === normalizedDirectoryPath,
+    isWithinWorkspaceRoot: isPathInsideRoot(path.normalize(args.workspaceRoot), normalizedDirectoryPath),
     entries: entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => ({
@@ -589,4 +608,32 @@ export async function browseProjectDirectories(args: {
       .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" })),
     inspection: await inspectProjectRoomContext(normalizedDirectoryPath),
   };
+}
+
+export async function createProjectDirectory(args: {
+  directoryPath: string;
+  name: string;
+  workspaceRoot: string;
+}): Promise<ProjectDirectoryBrowseResult> {
+  const normalizedDirectoryPath = path.normalize(args.directoryPath);
+  const normalizedWorkspaceRoot = path.normalize(args.workspaceRoot);
+  await assertProjectDirectoryExists(normalizedDirectoryPath);
+
+  if (!isPathInsideRoot(normalizedWorkspaceRoot, normalizedDirectoryPath)) {
+    throw new Error("New directories can only be created inside the workspace root.");
+  }
+
+  const normalizedName = normalizeProjectDirectoryName(args.name);
+  const nextDirectoryPath = path.join(normalizedDirectoryPath, normalizedName);
+  const existingEntry = await stat(nextDirectoryPath).catch(() => undefined);
+  if (existingEntry) {
+    throw new Error(existingEntry.isDirectory() ? "Directory already exists." : "A file with that name already exists.");
+  }
+
+  await mkdir(nextDirectoryPath);
+
+  return browseProjectDirectories({
+    directoryPath: nextDirectoryPath,
+    workspaceRoot: normalizedWorkspaceRoot,
+  });
 }

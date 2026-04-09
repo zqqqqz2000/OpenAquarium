@@ -85,6 +85,7 @@ import { loadRoomMessageHistoryPage, syncRoomMessageHistoryFiles } from "./room-
 import { normalizeProjectPath, resolveProjectWorkingDirectory } from "./project-paths";
 import {
   browseProjectDirectories,
+  createProjectDirectory,
   getProjectInteractiveDirectoryPath,
   type ProjectDirectoryBrowseResult,
   type ProjectPathInspectionResult,
@@ -1269,7 +1270,7 @@ export class WorkspaceRuntime {
           || left.createdAt.localeCompare(right.createdAt);
       })
       .map((membership) => {
-        const project = this.snapshot.projects[membership.projectId]!;
+        const project = this.snapshot.projects[membership.projectId];
         return {
           id: membership.id,
           projectId: membership.projectId,
@@ -2193,6 +2194,29 @@ export class WorkspaceRuntime {
 
     return browseProjectDirectories({
       directoryPath: normalizedPath,
+      workspaceRoot: this.workspaceRoot,
+    });
+  }
+
+  async createProjectDirectory(
+    input: {
+      path: string;
+      name: string;
+    },
+    auth: { sessionToken?: string } = {},
+  ): Promise<ProjectDirectoryBrowseResult> {
+    if (this.isAuthenticationEnabled(this.snapshot)) {
+      await this.requireWorkspaceAdmin(auth.sessionToken);
+    }
+
+    const normalizedPath = normalizeProjectPath(this.workspaceRoot, input.path);
+    if (!normalizedPath) {
+      throw new Error("Project path is required");
+    }
+
+    return createProjectDirectory({
+      directoryPath: normalizedPath,
+      name: input.name,
       workspaceRoot: this.workspaceRoot,
     });
   }

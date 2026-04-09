@@ -12,6 +12,7 @@ function createClient(snapshot: WorkspaceSnapshot, auth: WorkspaceAuthState = { 
     getState: vi.fn(() => Promise.resolve({ snapshot, globalConfig: createDefaultGlobalWorkspaceConfig(), auth })),
     getSessionToken: vi.fn(() => (auth.authenticated ? auth.sessionToken : undefined)),
     login: vi.fn(() => Promise.reject(new Error("not implemented"))),
+    completeUserSetup: vi.fn(() => Promise.reject(new Error("not implemented"))),
     logout: vi.fn(() => Promise.reject(new Error("not implemented"))),
     restoreSession: vi.fn(() => Promise.resolve(auth)),
     getMe: vi.fn(() => Promise.resolve(auth)),
@@ -20,8 +21,10 @@ function createClient(snapshot: WorkspaceSnapshot, auth: WorkspaceAuthState = { 
     listManagedUsers: vi.fn(() => Promise.resolve({ users: [] })),
     createManagedUser: vi.fn(() => Promise.reject(new Error("not implemented"))),
     updateManagedUser: vi.fn(() => Promise.reject(new Error("not implemented"))),
+    issueManagedUserSetup: vi.fn(() => Promise.reject(new Error("not implemented"))),
     setManagedProjectMembership: vi.fn(() => Promise.reject(new Error("not implemented"))),
     browseProjectDirectory: () => Promise.reject(new Error("not implemented")),
+    createProjectDirectory: () => Promise.reject(new Error("not implemented")),
     inspectProjectPath: () => Promise.reject(new Error("not implemented")),
     createProject: () => Promise.reject(new Error("not implemented")),
     createRoom: () => Promise.reject(new Error("not implemented")),
@@ -62,6 +65,10 @@ describe("workspace remote store", () => {
 
   it("rehydrates authenticated state through session, me, and memberships", async () => {
     const snapshot = createSeedWorkspace();
+    const firstProjectId = snapshot.projectOrder[0];
+    if (!firstProjectId) {
+      throw new Error("Expected project id");
+    }
     const auth = {
       required: true,
       authenticated: true as const,
@@ -71,8 +78,8 @@ describe("workspace remote store", () => {
       user: { id: "user_1", handle: "alice", displayName: "Alice", isAdmin: false, createdAt: "2026-01-01T00:00:00.000Z" },
       memberships: [{
         id: "membership_1",
-        projectId: snapshot.projectOrder[0]!,
-        projectName: snapshot.projects[snapshot.projectOrder[0]!]!.name,
+        projectId: firstProjectId,
+        projectName: snapshot.projects[firstProjectId].name,
         role: "owner" as const,
         createdAt: "2026-01-01T00:00:00.000Z",
       }],
@@ -201,6 +208,7 @@ describe("workspace remote store", () => {
       path: input?.path ?? "/tmp/workspace-root",
       parentPath: "/tmp",
       isWorkspaceRoot: !input?.path,
+      isWithinWorkspaceRoot: true,
       entries: [],
       inspection: {
         path: input?.path ?? "/tmp/workspace-root",
@@ -219,6 +227,34 @@ describe("workspace remote store", () => {
       parentPath: "/tmp",
     });
     expect(client.browseProjectDirectory).toHaveBeenCalledWith({ path: "/tmp/workspace-root" });
+  });
+
+  it("delegates project directory creation to the runtime client", async () => {
+    const snapshot = createSeedWorkspace();
+    const client = createClient(snapshot);
+    client.createProjectDirectory = vi.fn((input: { path: string; name: string }) => Promise.resolve({
+      path: `${input.path}/${input.name}`,
+      parentPath: input.path,
+      isWorkspaceRoot: false,
+      isWithinWorkspaceRoot: true,
+      entries: [],
+      inspection: {
+        path: `${input.path}/${input.name}`,
+        projectName: input.name,
+        projectInteractiveDirectory: `${input.path}/${input.name}/.openaquarium/interactive`,
+        hasOpenAquariumDirectory: false,
+        canImport: false,
+        roomCount: 0,
+        rooms: [],
+      },
+    }));
+    const store = createWorkspaceRemoteStore(client);
+
+    await expect(store.getState().createProjectDirectory({ path: "/tmp/workspace-root", name: "demo-project" })).resolves.toMatchObject({
+      path: "/tmp/workspace-root/demo-project",
+      parentPath: "/tmp/workspace-root",
+    });
+    expect(client.createProjectDirectory).toHaveBeenCalledWith({ path: "/tmp/workspace-root", name: "demo-project" });
   });
 
   it("delegates manual project path inspection to the runtime client", async () => {

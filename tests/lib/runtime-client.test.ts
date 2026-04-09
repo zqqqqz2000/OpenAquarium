@@ -104,6 +104,7 @@ describe("WorkspaceRuntimeClient", () => {
           path: "/tmp/workspace-root",
           parentPath: "/tmp",
           isWorkspaceRoot: true,
+          isWithinWorkspaceRoot: true,
           entries: [
             {
               name: "demo-project",
@@ -142,6 +143,50 @@ describe("WorkspaceRuntimeClient", () => {
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("include");
     expect(init.body).toBe(JSON.stringify({ path: "/tmp/workspace-root" }));
+    expect(new Headers(init.headers).get("content-type")).toBe("application/json");
+  });
+
+  it("posts project directory creation requests to the web endpoint", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({
+          path: "/tmp/workspace-root/demo-project",
+          parentPath: "/tmp/workspace-root",
+          isWorkspaceRoot: false,
+          isWithinWorkspaceRoot: true,
+          entries: [],
+          inspection: {
+            path: "/tmp/workspace-root/demo-project",
+            projectName: "demo-project",
+            projectInteractiveDirectory: "/tmp/workspace-root/demo-project/.openaquarium/interactive",
+            hasOpenAquariumDirectory: false,
+            canImport: false,
+            roomCount: 0,
+            rooms: [],
+          },
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new WorkspaceRuntimeClient();
+
+    await expect(client.createProjectDirectory({ path: "/tmp/workspace-root", name: "demo-project" })).resolves.toMatchObject({
+      path: "/tmp/workspace-root/demo-project",
+      parentPath: "/tmp/workspace-root",
+    });
+    const createDirectoryCall = fetchMock.mock.calls[0];
+    expect(createDirectoryCall).toBeDefined();
+    const [createDirectoryUrl, init] = createDirectoryCall as unknown as [string, RequestInit];
+    expect(createDirectoryUrl).toBe(`${client.baseUrl}/api/system/project-path/create-directory`);
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("include");
+    expect(init.body).toBe(JSON.stringify({ path: "/tmp/workspace-root", name: "demo-project" }));
     expect(new Headers(init.headers).get("content-type")).toBe("application/json");
   });
 

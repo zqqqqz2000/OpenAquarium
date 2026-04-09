@@ -507,6 +507,13 @@ export async function handleWorkspaceJsonApiRequest(args: {
     };
   }
 
+  if (method === "POST" && pathname === "/api/system/project-path/create-directory") {
+    return {
+      statusCode: 200,
+      payload: await runtime.createProjectDirectory(body as { path: string; name: string }, { sessionToken }),
+    };
+  }
+
   if (method === "POST" && pathname === "/api/system/project-path/inspect") {
     return {
       statusCode: 200,
@@ -1301,6 +1308,12 @@ export async function startWorkspaceHttpServer(args: {
       if (request.method === "POST" && url.pathname === "/api/system/project-path/browse") {
         const body = await readJson<ProjectDirectoryBrowsePayload>(request);
         sendJson(response, 200, await args.runtime.browseProjectDirectory(body));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/system/project-path/create-directory") {
+        const body = await readJson<{ path: string; name: string }>(request);
+        sendJson(response, 200, await args.runtime.createProjectDirectory(body, { sessionToken }));
         return;
       }
 

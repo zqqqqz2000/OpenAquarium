@@ -68,6 +68,7 @@ export interface ProjectDirectoryBrowsePayload {
   path: string;
   parentPath?: string;
   isWorkspaceRoot: boolean;
+  isWithinWorkspaceRoot: boolean;
   entries: ProjectDirectoryBrowseEntryPayload[];
   inspection: ProjectPathInspectionPayload;
 }
@@ -78,6 +79,11 @@ export interface InspectProjectPathInput {
 
 export interface BrowseProjectDirectoryInput {
   path?: string;
+}
+
+export interface CreateProjectDirectoryInput {
+  path: string;
+  name: string;
 }
 
 export interface WorkspaceAuthUser {
@@ -430,6 +436,16 @@ export class WorkspaceRuntimeClient {
   async browseProjectDirectory(input: BrowseProjectDirectoryInput = {}): Promise<ProjectDirectoryBrowsePayload> {
     return parseJson(
       await this.request(`${this.baseUrl}/api/system/project-path/browse`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    );
+  }
+
+  async createProjectDirectory(input: CreateProjectDirectoryInput): Promise<ProjectDirectoryBrowsePayload> {
+    return parseJson(
+      await this.request(`${this.baseUrl}/api/system/project-path/create-directory`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(input),

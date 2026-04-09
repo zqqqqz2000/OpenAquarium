@@ -8,6 +8,7 @@ import { createSeedWorkspace } from "@/lib/sample-data/workspace";
 import { parseAqTodoXml } from "@/lib/aqtodo";
 import {
   browseProjectDirectories,
+  createProjectDirectory,
   getDefaultRoomTodoTreeFilePath,
   getRoomStateFilePath,
   inspectProjectRoomContext,
@@ -133,10 +134,28 @@ describe("room context files", () => {
 
     expect(result.path).toBe(workspaceRoot);
     expect(result.isWorkspaceRoot).toBe(true);
+    expect(result.isWithinWorkspaceRoot).toBe(true);
     expect(result.parentPath).toBe(path.dirname(workspaceRoot));
     expect(result.entries).toContainEqual({
       name: "child-project",
       path: childDirectory,
     });
+  });
+
+  it("creates a single child directory inside the workspace root for the web folder manager", async () => {
+    const workspaceRoot = await mkdtemp(
+      path.join(os.tmpdir(), "oa-room-context-create-workspace-"),
+    );
+
+    const result = await createProjectDirectory({
+      directoryPath: workspaceRoot,
+      name: "child-project",
+      workspaceRoot,
+    });
+
+    expect(result.path).toBe(path.join(workspaceRoot, "child-project"));
+    expect(result.parentPath).toBe(workspaceRoot);
+    expect(result.isWorkspaceRoot).toBe(false);
+    expect(result.isWithinWorkspaceRoot).toBe(true);
   });
 });

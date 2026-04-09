@@ -18,6 +18,7 @@ import { createDefaultGlobalWorkspaceConfig } from "@/lib/provider-model-profile
 import {
   WorkspaceRuntimeClient,
   type BrowseProjectDirectoryInput,
+  type CreateProjectDirectoryInput,
   type InspectProjectPathInput,
   type ProjectDirectoryBrowsePayload,
   type ProjectPathInspectionPayload,
@@ -196,6 +197,7 @@ export interface WorkspaceRemoteStoreState {
     remove?: boolean;
   }): Promise<WorkspaceManagedUser>;
   browseProjectDirectory(input?: BrowseProjectDirectoryInput): Promise<ProjectDirectoryBrowsePayload>;
+  createProjectDirectory(input: CreateProjectDirectoryInput): Promise<ProjectDirectoryBrowsePayload>;
   inspectProjectPath(input: InspectProjectPathInput): Promise<ProjectPathInspectionPayload>;
   createProject(input: { projectName: string; templateId?: string; path?: string }): Promise<{ projectId: string; roomId: string }>;
   createRoom(input: { projectId: string; templateId: string }): Promise<{ roomId: string }>;
@@ -255,6 +257,7 @@ export interface WorkspaceRemoteClient {
     remove?: boolean;
   }): Promise<{ user: WorkspaceManagedUser }>;
   browseProjectDirectory(input?: BrowseProjectDirectoryInput): Promise<ProjectDirectoryBrowsePayload>;
+  createProjectDirectory(input: CreateProjectDirectoryInput): Promise<ProjectDirectoryBrowsePayload>;
   inspectProjectPath(input: InspectProjectPathInput): Promise<ProjectPathInspectionPayload>;
   createProject(input: { projectName: string; templateId?: string; path?: string }): Promise<{
     snapshot: WorkspaceSnapshot;
@@ -449,6 +452,9 @@ export function createWorkspaceRemoteStore(client: WorkspaceRemoteClient = new W
     },
     async browseProjectDirectory(input = {}) {
       return runMutation(set, () => client.browseProjectDirectory(input));
+    },
+    async createProjectDirectory(input) {
+      return runMutation(set, () => client.createProjectDirectory(input));
     },
     async inspectProjectPath(input) {
       return runMutation(set, () => client.inspectProjectPath(input));
