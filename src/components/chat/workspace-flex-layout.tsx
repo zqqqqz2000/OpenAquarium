@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -220,25 +221,32 @@ export function WorkspaceFlexLayout(props: {
     rightPanelWidth = 372,
   } = props;
   const isMobile = useMediaQuery("(max-width: 1023px)");
-  const storedActivePanelId = workspaceActivePanelIdByKey.get(layoutKey) ?? "chat";
+  const initialActivePanelId = workspaceActivePanelIdByKey.get(layoutKey) ?? "chat";
+  const activePanelIdRef = useRef<WorkspacePanelId>(initialActivePanelId);
   const [activePanelId, setActivePanelId] = useState<WorkspacePanelId>(
-    storedActivePanelId,
+    initialActivePanelId,
   );
   const model = useMemo(
     () =>
     createWorkspaceDesktopModel({
-      activePanelId: storedActivePanelId,
+      activePanelId: workspaceActivePanelIdByKey.get(layoutKey) ?? activePanelIdRef.current,
       leftPanelWidth,
       modelJson: workspaceDesktopModelJsonByKey.get(layoutKey),
       primaryTabTitle: panels.chat.title,
       rightPanelWidth,
     }),
-    [layoutKey, leftPanelWidth, panels.chat.title, rightPanelWidth, storedActivePanelId],
+    [isMobile, layoutKey, leftPanelWidth, panels.chat.title, rightPanelWidth],
   );
 
   useEffect(() => {
-    workspaceActivePanelIdByKey.set(layoutKey, activePanelId);
-  }, [activePanelId, layoutKey]);
+    if (!isMobile) {
+      return;
+    }
+
+    const storedActivePanelId = workspaceActivePanelIdByKey.get(layoutKey) ?? activePanelIdRef.current;
+    activePanelIdRef.current = storedActivePanelId;
+    setActivePanelId(storedActivePanelId);
+  }, [isMobile, layoutKey]);
 
   const orderedMobilePanels = useMemo(
     () => (rightCollapsed ? (["chat"] satisfies WorkspacePanelId[]) : (["chat", ...workspaceFlexLayoutRightPanelOrder] satisfies WorkspacePanelId[])),
@@ -305,7 +313,11 @@ export function WorkspaceFlexLayout(props: {
     const component = (selectedNode as TabNode | undefined)?.getComponent();
 
     if (isWorkspacePanelId(component)) {
-      setActivePanelId(component);
+      workspaceActivePanelIdByKey.set(layoutKey, component);
+      activePanelIdRef.current = component;
+      if (isMobile) {
+        setActivePanelId(component);
+      }
     }
   };
 
@@ -332,7 +344,11 @@ export function WorkspaceFlexLayout(props: {
                     ? "bg-muted text-foreground"
                     : "bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                 )}
-                onClick={() => setActivePanelId(panelId)}
+                onClick={() => {
+                  workspaceActivePanelIdByKey.set(layoutKey, panelId);
+                  activePanelIdRef.current = panelId;
+                  setActivePanelId(panelId);
+                }}
               >
                 <Icon size={16} />
                 <span>{panel.title}</span>

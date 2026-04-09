@@ -1,5 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MessageSquare, Users, FolderKanban, BarChart3 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Model } from "flexlayout-react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -159,6 +162,100 @@ describe("WorkspaceFlexLayout", () => {
         expect(screen.getByText("members content")).toBeInTheDocument();
       });
     } finally {
+      getBoundingClientRectSpy.mockRestore();
+    }
+  });
+
+  it("does not rebuild the desktop model when the right utility tab changes and the parent rerenders", async () => {
+    const user = userEvent.setup();
+    const getBoundingClientRectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => createMockDomRect(1024, 768));
+    const modelFromJsonSpy = vi.spyOn(Model, "fromJson");
+    const chatMountSpy = vi.fn();
+
+    function ChatContent() {
+      useEffect(() => {
+        chatMountSpy();
+      }, []);
+
+      return <div>chat content</div>;
+    }
+
+    function Harness() {
+      const [membersBadgeCount, setMembersBadgeCount] = useState(4);
+
+      return (
+        <>
+          <button type="button" onClick={() => setMembersBadgeCount((current) => current + 1)}>
+            rerender layout
+          </button>
+          <WorkspaceFlexLayout
+            layoutKey="room-b"
+            leftCollapsed={false}
+            leftPanelWidth={304}
+            rightCollapsed={false}
+            rightPanelWidth={420}
+            panels={{
+              projects: {
+                id: "projects",
+                title: "Projects",
+                icon: FolderKanban,
+                content: <div>projects content</div>,
+              },
+              chat: {
+                id: "chat",
+                title: "Chat",
+                icon: MessageSquare,
+                content: <ChatContent />,
+              },
+              members: {
+                id: "members",
+                title: "Members",
+                icon: Users,
+                badge: <span>{membersBadgeCount}</span>,
+                content: <div>members content</div>,
+              },
+              todo: {
+                id: "todo",
+                title: "Todo",
+                icon: FolderKanban,
+                content: <div>todo content</div>,
+              },
+              dashboard: {
+                id: "dashboard",
+                title: "Dashboard",
+                icon: BarChart3,
+                content: <div>dashboard content</div>,
+              },
+            }}
+          />
+        </>
+      );
+    }
+
+    const { container } = render(<Harness />);
+
+    try {
+      await waitFor(() => {
+        expect(screen.getByText("chat content")).toBeInTheDocument();
+      });
+      expect(chatMountSpy).toHaveBeenCalledTimes(1);
+      expect(modelFromJsonSpy).toHaveBeenCalledTimes(1);
+
+      const todoTabButton = [...container.querySelectorAll(".flexlayout__tab_button")]
+        .find((element) => element.textContent?.includes("Todo"));
+      if (!(todoTabButton instanceof HTMLElement)) {
+        throw new Error("Expected a Todo tab button");
+      }
+
+      await user.click(todoTabButton);
+      await user.click(screen.getByRole("button", { name: "rerender layout" }));
+
+      expect(chatMountSpy).toHaveBeenCalledTimes(1);
+      expect(modelFromJsonSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      modelFromJsonSpy.mockRestore();
       getBoundingClientRectSpy.mockRestore();
     }
   });
