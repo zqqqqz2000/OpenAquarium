@@ -1,6 +1,3 @@
-import { hierarchy, tree } from "d3-hierarchy";
-import { Position, type Edge, type Node } from "@xyflow/react";
-
 export interface AqTodoCodeSnippet {
   content: string;
   language?: string;
@@ -32,22 +29,6 @@ export interface AqTodoDocument {
   roomName?: string;
   title?: string;
   version?: string;
-}
-
-export interface AqTodoNodeSize {
-  height: number;
-  width: number;
-}
-
-export interface AqTodoFlowNodeData extends Record<string, unknown> {
-  canCollapse: boolean;
-  collapsed: boolean;
-  depth: number;
-  node: AqTodoNodeModel;
-  onToggleCollapse?: (nodeId: string) => void;
-  roomId?: string;
-  size: AqTodoNodeSize;
-  zoomedOut: boolean;
 }
 
 export interface AqTodoNodeAggregate {
@@ -194,10 +175,6 @@ export function parseAqTodoXml(xml: string): AqTodoDocument {
   };
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
 export function inferAqTodoNodeProgress(node: AqTodoNodeModel): number {
   if (typeof node.progress === "number") {
     return Math.min(100, Math.max(0, node.progress));
@@ -277,172 +254,4 @@ export function buildAqTodoNodeAggregates(root: AqTodoNodeModel): Map<string, Aq
 
   visitNode(root, 0);
   return aggregates;
-}
-
-function estimateLineCount(value: string, charactersPerLine: number, maxLines: number): number {
-  const normalized = value.trim();
-  if (!normalized) {
-    return 0;
-  }
-
-  return Math.min(
-    maxLines,
-    normalized.split(/\r?\n/u).reduce(
-      (lineCount, line) => lineCount + Math.max(1, Math.ceil(line.length / charactersPerLine)),
-      0,
-    ),
-  );
-}
-
-export function estimateAqTodoNodeSize(
-  node: AqTodoNodeModel,
-  options?: {
-    collapsed?: boolean;
-    zoomedOut?: boolean;
-  },
-): AqTodoNodeSize {
-  const collapsed = options?.collapsed ?? false;
-  const zoomedOut = options?.zoomedOut ?? false;
-  const titleLines = estimateLineCount(node.title, 18, 3);
-  const noteLines = estimateLineCount(node.note ?? "", 26, 4);
-  const detailsLines = estimateLineCount(node.details ?? "", 28, 3);
-  const codeLines = node.codes.reduce(
-    (count, codeSnippet) => count + estimateLineCount(codeSnippet.content, 26, 4),
-    0,
-  );
-  if (collapsed) {
-    return {
-      width: clamp(zoomedOut ? 156 : 196, 140, 220),
-      height: clamp(zoomedOut ? 78 : 106, 76, 130),
-    };
-  }
-
-  if (zoomedOut) {
-    return {
-      width: clamp(170 + Math.min(90, node.title.length), 156, 260),
-      height: clamp(94 + titleLines * 18, 88, 150),
-    };
-  }
-
-  const width =
-    220
-    + Math.max(0, Math.min(120, (titleLines > 1 ? 40 : 0) + (node.images.length > 0 ? 36 : 0)))
-    + Math.max(0, Math.min(80, node.tags.join(" ").length));
-  let height = 84 + titleLines * 20;
-
-  if (node.member || node.priority || typeof node.progress === "number") {
-    height += 30;
-  }
-  if (node.children.length > 0) {
-    height += 66;
-  }
-  if (node.tags.length > 0) {
-    height += 28;
-  }
-  if (noteLines > 0) {
-    height += 16 + noteLines * 16;
-  }
-  if (detailsLines > 0) {
-    height += 14 + detailsLines * 15;
-  }
-  if (codeLines > 0) {
-    height += 18 + codeLines * 14;
-  }
-  if (node.images.length > 0) {
-    height += 88;
-  }
-
-  return {
-    width: clamp(width, 220, 360),
-    height: clamp(height, 92, 320),
-  };
-}
-
-function collectNodeSizes(
-  root: AqTodoNodeModel,
-  options?: {
-    collapsedNodeIds?: ReadonlySet<string>;
-    zoomedOut?: boolean;
-  },
-): Map<string, AqTodoNodeSize> {
-  const sizes = new Map<string, AqTodoNodeSize>();
-  const collapsedNodeIds = options?.collapsedNodeIds;
-  const zoomedOut = options?.zoomedOut ?? false;
-
-  const visitNode = (node: AqTodoNodeModel): void => {
-    const collapsed = collapsedNodeIds?.has(node.id) ?? false;
-    sizes.set(node.id, estimateAqTodoNodeSize(node, { collapsed, zoomedOut }));
-    if (!collapsed) {
-      node.children.forEach(visitNode);
-    }
-  };
-
-  visitNode(root);
-  return sizes;
-}
-
-export function buildAqTodoFlowGraph(args: {
-  collapsedNodeIds?: ReadonlySet<string>;
-  document: AqTodoDocument;
-  onToggleCollapse?: (nodeId: string) => void;
-  roomId?: string;
-  zoomedOut?: boolean;
-}): {
-  edges: Edge[];
-  nodes: Node<AqTodoFlowNodeData>[];
-} {
-  const sizes = collectNodeSizes(args.document.root, {
-    collapsedNodeIds: args.collapsedNodeIds,
-    zoomedOut: args.zoomedOut,
-  });
-  const sizeValues = [...sizes.values()];
-  const maxWidth = Math.max(...sizeValues.map((size) => size.width), 240);
-  const maxHeight = Math.max(...sizeValues.map((size) => size.height), 120);
-  const collapsedNodeIds = args.collapsedNodeIds;
-  const root = hierarchy(args.document.root, (node) =>
-    collapsedNodeIds?.has(node.id) ? [] : node.children,
-  );
-  const layout = tree<AqTodoNodeModel>().nodeSize([maxHeight + 40, maxWidth + 96]);
-  const positioned = layout(root);
-
-  return {
-    nodes: positioned.descendants().map((entry) => {
-      const size = sizes.get(entry.data.id) ?? estimateAqTodoNodeSize(entry.data);
-      const collapsed = collapsedNodeIds?.has(entry.data.id) ?? false;
-
-      return {
-        id: entry.data.id,
-        type: "aqtodo",
-        position: {
-          x: entry.y - size.width / 2,
-          y: entry.x - size.height / 2,
-        },
-        sourcePosition: Position.Right,
-        targetPosition: Position.Left,
-        data: {
-          canCollapse: entry.data.children.length > 0,
-          collapsed,
-          depth: entry.depth,
-          node: entry.data,
-          onToggleCollapse: args.onToggleCollapse,
-          roomId: args.roomId,
-          size,
-          zoomedOut: args.zoomedOut ?? false,
-        },
-        draggable: false,
-        selectable: false,
-        style: {
-          width: size.width,
-          height: size.height,
-        },
-      } satisfies Node<AqTodoFlowNodeData>;
-    }),
-    edges: positioned.links().map((link) => ({
-      id: `${link.source.data.id}->${link.target.data.id}`,
-      source: link.source.data.id,
-      target: link.target.data.id,
-      type: "smoothstep",
-      selectable: false,
-    })),
-  };
 }

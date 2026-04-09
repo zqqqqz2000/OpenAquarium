@@ -1,69 +1,6 @@
-import type { ReactNode } from "react";
-
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@xyflow/react", () => ({
-  Background: () => <div data-testid="rf-background" />,
-  Controls: () => <div data-testid="rf-controls" />,
-  Handle: () => null,
-  Position: {
-    Left: "left",
-    Right: "right",
-  },
-  ReactFlow: (props: {
-    children?: ReactNode;
-    className?: string;
-    nodeTypes?: Record<string, (props: Record<string, unknown>) => ReactNode>;
-    nodes?: Array<{
-      data: Record<string, unknown>;
-      id: string;
-      position: { x: number; y: number };
-      selected?: boolean;
-      type: string;
-    }>;
-    onMove?: (event: unknown, viewport: { zoom: number }) => void;
-  }) => {
-    const { children, className, nodeTypes = {}, nodes = [], onMove } = props;
-
-    return (
-      <div data-testid="reactflow" className={className}>
-        <button
-          type="button"
-          onClick={() => onMove?.(undefined, { zoom: 0.45 })}
-        >
-          Mock zoom out
-        </button>
-        <button
-          type="button"
-          onClick={() => onMove?.(undefined, { zoom: 1 })}
-        >
-          Mock zoom in
-        </button>
-        {children}
-        {nodes.map((node) => {
-          const NodeComponent = nodeTypes[node.type];
-
-          return NodeComponent ? (
-            <NodeComponent
-              key={node.id}
-              id={node.id}
-              data={node.data}
-              dragging={false}
-              isConnectable={false}
-              selected={Boolean(node.selected)}
-              type={node.type}
-              xPos={node.position.x}
-              yPos={node.position.y}
-              zIndex={0}
-            />
-          ) : null;
-        })}
-      </div>
-    );
-  },
-}));
 
 import { RoomTodoTreesPanel } from "@/components/todo/room-todo-trees-panel";
 import type { Room } from "@/domain/model";
@@ -147,7 +84,7 @@ describe("RoomTodoTreesPanel", () => {
     window.localStorage.clear();
   });
 
-  it("renders the split todo workspace with outline, graph, inspector, filters, and file switching", async () => {
+  it("renders the outline-only todo workspace with inspector, filters, and file switching", async () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const user = userEvent.setup();
@@ -199,23 +136,26 @@ describe("RoomTodoTreesPanel", () => {
     renderPanel(room);
 
     expect(await screen.findByText("Workspace Controls")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "split" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "graph" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "outline" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "split" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "graph" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "outline" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /compact/i })).not.toBeInTheDocument();
     expect(screen.getByText("Outline")).toBeInTheDocument();
-    expect(screen.getByText("Graph")).toBeInTheDocument();
     expect(screen.getByText("Inspector")).toBeInTheDocument();
+    const outlineHeader = screen.getByText("Outline").closest("div");
+    const outlineSection = screen.getByText("Outline").closest("section");
+    const inspectorHeader = screen.getByText("Inspector").closest("div");
+    const inspectorPane = screen.getByText("Inspector").closest("aside");
+    expect(outlineSection).toHaveClass("flex", "min-h-[14rem]", "overflow-hidden");
+    expect(outlineHeader?.nextElementSibling).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
+    expect(inspectorPane).toHaveClass("flex", "min-h-[14rem]", "overflow-hidden");
+    expect(inspectorHeader?.nextElementSibling).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
     expect(screen.getByRole("button", { name: /main\.aqtree\.xml/i })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /secondary\.aqtree\.xml/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /refresh todo trees/i })).toBeInTheDocument();
     expect(screen.getAllByText("Product track").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Ops track").length).toBeGreaterThan(0);
-
-    await user.click(screen.getByRole("button", { name: "outline" }));
-
-    expect(screen.getByRole("button", { name: "outline" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.queryByText("Graph")).not.toBeInTheDocument();
-    expect(screen.getByText(/Tree list shell with filter and density controls wired above\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Tree list with filter controls wired above\./i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /done/i }));
 
@@ -225,7 +165,6 @@ describe("RoomTodoTreesPanel", () => {
       expect(screen.queryByText("Room handoff")).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /compact/i }));
     await user.click(screen.getByRole("button", { name: /secondary\.aqtree\.xml/i }));
 
     await waitFor(() => {
@@ -270,7 +209,7 @@ describe("RoomTodoTreesPanel", () => {
     expect(panelShell).not.toHaveClass("rounded-[1.75rem]");
   });
 
-  it("keeps a completed tree visible in split view instead of collapsing into an empty panel", async () => {
+  it("keeps a completed tree visible in the outline workspace instead of collapsing into an empty panel", async () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
 
@@ -301,11 +240,8 @@ describe("RoomTodoTreesPanel", () => {
     expect(await screen.findByText("All items complete")).toBeInTheDocument();
     expect(screen.getByText("2 of 2 items done")).toBeInTheDocument();
     expect(screen.getByText(/There are no unfinished items right now/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "split" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("Outline")).toBeInTheDocument();
-    expect(screen.getByText("Graph")).toBeInTheDocument();
     expect(screen.getByText("Inspector")).toBeInTheDocument();
-    expect(screen.getByTestId("reactflow")).toBeInTheDocument();
     expect(screen.getAllByText("Completed plan").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Ship UI").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Ship runtime").length).toBeGreaterThan(0);
@@ -353,17 +289,13 @@ describe("RoomTodoTreesPanel", () => {
 
     expect(await screen.findByText("Workspace Controls")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "outline" }));
     await user.click(screen.getByRole("button", { name: /done/i }));
-    await user.click(screen.getByRole("button", { name: /compact/i }));
     await user.click(screen.getByRole("button", { name: /secondary\.aqtree\.xml/i }));
 
     const storageKey = getRoomTodoTreesPanelStorageKey(room.id);
 
     await waitFor(() => {
-      expect(window.localStorage.getItem(storageKey)).toContain('"viewMode":"outline"');
       expect(window.localStorage.getItem(storageKey)).toContain('"statusFilter":"done"');
-      expect(window.localStorage.getItem(storageKey)).toContain('"density":"compact"');
       expect(window.localStorage.getItem(storageKey)).toContain("secondary.aqtree.xml");
     });
 
@@ -371,16 +303,17 @@ describe("RoomTodoTreesPanel", () => {
     renderPanel(room);
 
     expect(await screen.findByText("Workspace Controls")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "outline" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /done/i })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: /compact/i })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /secondary\.aqtree\.xml/i })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.queryByText("Graph")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "split" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "graph" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "outline" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /compact/i })).not.toBeInTheDocument();
     expect(screen.getAllByText("Secondary plan").length).toBeGreaterThan(0);
     expect(screen.getByText("QA sweep")).toBeInTheDocument();
   });
 
-  it("reloads the current tree when the room updates so the split workspace refreshes with new data", async () => {
+  it("reloads the current tree when the room updates so the outline workspace refreshes with new data", async () => {
     const snapshot = createSeedWorkspace();
     const room = snapshot.rooms[snapshot.selection.roomId!];
     const fetchMock = vi.fn()

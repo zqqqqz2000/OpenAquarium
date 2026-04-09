@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildAqTodoNodeAggregates,
-  buildAqTodoFlowGraph,
   deriveAqTodoDisplayStatus,
-  estimateAqTodoNodeSize,
   inferAqTodoNodeProgress,
   parseAqTodoXml,
 } from "@/lib/aqtodo";
@@ -68,39 +66,6 @@ describe("aqtodo helpers", () => {
       src: "./artifacts/proof.png",
     });
     expect(document.root.children[0]?.member).toBe("@builder");
-  });
-
-  it("keeps estimated node sizes within the supported bounds", () => {
-    const document = parseAqTodoXml(SAMPLE_TODO_XML);
-    const size = estimateAqTodoNodeSize(document.root);
-
-    expect(size.width).toBeGreaterThanOrEqual(220);
-    expect(size.width).toBeLessThanOrEqual(360);
-    expect(size.height).toBeGreaterThanOrEqual(92);
-    expect(size.height).toBeLessThanOrEqual(320);
-  });
-
-  it("builds a left-to-right flow graph for react flow", () => {
-    const document = parseAqTodoXml(SAMPLE_TODO_XML);
-    const graph = buildAqTodoFlowGraph({
-      document,
-      roomId: "room-a",
-    });
-    const rootNode = graph.nodes.find((node) => node.id === "root");
-    const childNode = graph.nodes.find((node) => node.id === "child");
-
-    expect(graph.nodes.length).toBe(2);
-    expect(graph.edges).toEqual([
-      expect.objectContaining({
-        id: "root->child",
-        source: "root",
-        target: "child",
-        type: "smoothstep",
-      }),
-    ]);
-    expect(rootNode?.sourcePosition).toBeDefined();
-    expect(childNode?.targetPosition).toBeDefined();
-    expect(childNode?.position.x).toBeGreaterThan(rootNode?.position.x ?? 0);
   });
 
   it("infers single-node progress from explicit progress or built-in status fallbacks", () => {
